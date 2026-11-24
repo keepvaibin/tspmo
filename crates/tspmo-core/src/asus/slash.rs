@@ -436,16 +436,17 @@ mod tests {
 
     #[test]
     fn records_read_back() {
-        let opt = record(&[
-            0x5e, 0xd2, 2, 1, 8, 0xab, 0xff, 1, 1, 6, 0xaa, 0xff, 3, 0, 0,
-        ]);
+        let opt = record(&[0x5e, 0xd2, 2, 1, 8, 0xab, 0xff, 1, 1, 6, 0xaa, 0xff, 3, 0, 0]);
         assert_eq!(parse_options(0x5e, &opt), Some((true, 0xaa, 3)));
         let off = record(&[0x5e, 0xd2, 2, 1, 8, 0xab, 0xff, 1, 0, 6, 0xff, 0xff, 0xff]);
         // An interval beyond what the firmware's apps offer reads as the longest one.
         assert_eq!(parse_options(0x5e, &off), Some((false, 0xff, MAX_INTERVAL)));
         // A region that is not there answers with zeros; a different region is not this one.
         assert_eq!(parse_options(0x5e, &record(&[0x5e, 0xd2, 2, 1, 8, 0xab])), None);
-        assert_eq!(parse_options(0x5e, &record(&[0x5e, 0xd2, 2, 1, 8, 0xac, 1, 1, 1, 1, 1, 1, 1])), None);
+        assert_eq!(
+            parse_options(0x5e, &record(&[0x5e, 0xd2, 2, 1, 8, 0xac, 1, 1, 1, 1, 1, 1, 1])),
+            None
+        );
 
         let boot = record(&[0x5e, 0xd2, 2, 1, 8, 0xa0, 4, 0xff, 1, 1, 0xff, 0, 0, 0x11]);
         assert_eq!(parse_flag(0x5e, When::Boot, &boot), Some(true));
@@ -462,7 +463,10 @@ mod tests {
         assert_eq!(parse_mode(0x5e, &m), Some(Mode::Slash));
         let w = mode_from_record(0x5e, &m, Mode::Flux).unwrap();
         assert_eq!(&w[..9], &[0x5e, 0xd3, 4, 0, 0x0c, 1, 0x25, 2, 0x19]);
-        assert_eq!(mode_from_record(0x5e, &record(&[0x5e, 0xd2, 3, 0, 0x0c, 0, 0x12]), Mode::Flux), None);
+        assert_eq!(
+            mode_from_record(0x5e, &record(&[0x5e, 0xd2, 3, 0, 0x0c, 0, 0x12]), Mode::Flux),
+            None
+        );
     }
 
     #[test]

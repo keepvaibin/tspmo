@@ -333,7 +333,11 @@ pub fn probe(root: &SysRoot, hid: &HidRaw) -> Option<AuraInfo> {
 /// keyboards take the brightness of the first colour from red alone; the flag byte is 1 for
 /// breathing and `ff` for "pick colours yourself" (black).
 pub fn effect_packet(e: &Effect, kind: Kind) -> [u8; 17] {
-    let colour = if e.mode.uses_colour() { e.colour } else { [255, 255, 255] };
+    let colour = if e.mode.uses_colour() {
+        e.colour
+    } else {
+        [255, 255, 255]
+    };
     let (c, c2) = if kind.has_colour() {
         (colour, e.colour2)
     } else {
@@ -465,13 +469,7 @@ pub fn detect(root: &SysRoot) -> Caps {
 
 /// Show an effect: effect, set, and (`keep`) apply, which also keeps it across power cycles.
 /// One open of the device.
-pub fn write_effect(
-    root: &SysRoot,
-    hid: &HidRaw,
-    kind: Kind,
-    e: &Effect,
-    keep: bool,
-) -> io::Result<()> {
+pub fn write_effect(root: &SysRoot, hid: &HidRaw, kind: Kind, e: &Effect, keep: bool) -> io::Result<()> {
     let mut packets = vec![effect_packet(e, kind).to_vec(), SET.to_vec()];
     if keep {
         packets.push(APPLY.to_vec());
@@ -486,13 +484,7 @@ pub fn write_power_states(root: &SysRoot, hid: &HidRaw, p: PowerStates) -> io::R
 
 /// Bring the controller to a known state: wake it, set when each power state lights the
 /// keyboard, show the effect. One open of the device.
-pub fn write_all(
-    root: &SysRoot,
-    hid: &HidRaw,
-    kind: Kind,
-    p: PowerStates,
-    e: &Effect,
-) -> io::Result<()> {
+pub fn write_all(root: &SysRoot, hid: &HidRaw, kind: Kind, p: PowerStates, e: &Effect) -> io::Result<()> {
     let packets: Vec<_> = [
         INIT.to_vec(),
         power_packet(p).to_vec(),
@@ -514,8 +506,8 @@ mod tests {
     fn gu605_answer() -> Vec<u8> {
         let mut r = vec![0u8; FEATURE_LEN];
         r[..18].copy_from_slice(&[
-            0x5d, 0x05, 0x20, 0x31, 0x00, 0x20, 0x01, 0, 0, 0x04, 0x23, 0x04, 0x01, 0x00, 0x46,
-            0x03, 0x0f, 0x04,
+            0x5d, 0x05, 0x20, 0x31, 0x00, 0x20, 0x01, 0, 0, 0x04, 0x23, 0x04, 0x01, 0x00, 0x46, 0x03, 0x0f,
+            0x04,
         ]);
         r
     }
@@ -540,7 +532,10 @@ mod tests {
         let mut r = gu605_answer();
         r[14] = 0x56; // "one zone red effect"
         assert_eq!(parse_info(&r).unwrap().kind(), Kind::White);
-        assert_eq!(Kind::White.modes(), vec![Mode::Static, Mode::Breathe, Mode::Pulse]);
+        assert_eq!(
+            Kind::White.modes(),
+            vec![Mode::Static, Mode::Breathe, Mode::Pulse]
+        );
         r[9] = 3;
         assert_eq!(parse_info(&r).unwrap().kind(), Kind::PerKey);
         assert_eq!(Kind::PerKey.modes().len(), 12);
@@ -563,13 +558,12 @@ mod tests {
         };
         assert_eq!(
             effect_packet(&e, Kind::SingleZone),
-            [0x5d, 0xb3, 0, 0, 0xff, 0x11, 0xdd, 0xeb, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+            [
+                0x5d, 0xb3, 0, 0, 0xff, 0x11, 0xdd, 0xeb, 0, 0, 0, 0, 0, 0, 0, 0, 0
+            ]
         );
         // A one-colour keyboard only has red.
-        assert_eq!(
-            &effect_packet(&e, Kind::White)[4..7],
-            &[0xff, 0, 0]
-        );
+        assert_eq!(&effect_packet(&e, Kind::White)[4..7], &[0xff, 0, 0]);
     }
 
     #[test]

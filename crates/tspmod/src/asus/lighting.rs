@@ -880,8 +880,17 @@ mod tests {
         let fx = Fix::new("light-lenient");
         hid(&fx);
         let l = light(&fx);
-        l.set_effect_row("", ("breathe".into(), (255, 0, 0), (0, 0, 255), "high".into(), "".into()))
-            .unwrap();
+        l.set_effect_row(
+            "",
+            (
+                "breathe".into(),
+                (255, 0, 0),
+                (0, 0, 255),
+                "high".into(),
+                "".into(),
+            ),
+        )
+        .unwrap();
         // Speed kept from the effect before.
         l.set_effect_row("", ("pulse".into(), (0, 255, 0), (0, 0, 0), "".into(), "".into()))
             .unwrap();
@@ -893,8 +902,11 @@ mod tests {
             .unwrap_err();
         assert!(err.contains("not available") && err.contains("static"), "{err}");
         assert!(
-            l.set_effect_row("", ("static".into(), (1, 1, 1), (0, 0, 0), "warp".into(), "".into()))
-                .is_err()
+            l.set_effect_row(
+                "",
+                ("static".into(), (1, 1, 1), (0, 0, 0), "warp".into(), "".into())
+            )
+            .is_err()
         );
     }
 
