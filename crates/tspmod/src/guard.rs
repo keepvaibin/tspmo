@@ -78,14 +78,33 @@ const NEVER: &[&str] = &[
 ];
 
 /// What a build is started from: the climb to the root of a job stops below these.
-const SHELLS: &[&str] = &["bash", "zsh", "fish", "sh", "dash", "nu", "xonsh", "tmux: server", "tmux", "screen", "sshd", "login", "su", "sudo"];
+const SHELLS: &[&str] = &[
+    "bash",
+    "zsh",
+    "fish",
+    "sh",
+    "dash",
+    "nu",
+    "xonsh",
+    "tmux: server",
+    "tmux",
+    "screen",
+    "sshd",
+    "login",
+    "su",
+    "sudo",
+];
 
 /// Indexers and updaters that sit in a graphical app's cgroup but are background work.
 const ALWAYS_BACKGROUND: &[&str] = &["baloo_file", "baloo_file_extr", "packagekitd", "tracker-miner-f"];
 
 /// Can processes of this cgroup (`/user.slice/.../app-konsole@x.scope`) be moved?
 pub fn movable(cgroup: &str) -> bool {
-    if cgroup.is_empty() || cgroup == "/" || cgroup.contains("/session.slice") || cgroup.contains("/init.scope") {
+    if cgroup.is_empty()
+        || cgroup == "/"
+        || cgroup.contains("/session.slice")
+        || cgroup.contains("/init.scope")
+    {
         return false;
     }
     if cgroup.contains(&format!("/{SLICE}")) {
@@ -144,7 +163,9 @@ pub fn parse_cpu(stat: &str) -> Option<(u64, u64)> {
 
 /// The cgroup of a process from `/proc/<pid>/cgroup` (`0::/path`).
 pub fn parse_cgroup(text: &str) -> Option<String> {
-    text.lines().find_map(|l| l.strip_prefix("0::")).map(str::to_owned)
+    text.lines()
+        .find_map(|l| l.strip_prefix("0::"))
+        .map(str::to_owned)
 }
 
 /// The top of a job: climb from a heavy process while the parent is ordinary work in a
@@ -174,7 +195,12 @@ fn subtree(root: u32, procs: &BTreeMap<u32, Proc>) -> Vec<u32> {
     let mut i = 0;
     while i < out.len() {
         let at = out[i];
-        out.extend(procs.values().filter(|p| p.ppid == at && p.pid != at).map(|p| p.pid));
+        out.extend(
+            procs
+                .values()
+                .filter(|p| p.ppid == at && p.pid != at)
+                .map(|p| p.pid),
+        );
         i += 1;
     }
     out
@@ -305,7 +331,11 @@ impl Guard {
         if from.is_empty() || from.contains(SLICE) || self.moved.contains_key(&pid) {
             return;
         }
-        if self.root.write(self.slice.join("cgroup.procs"), &pid.to_string()).is_ok() {
+        if self
+            .root
+            .write(self.slice.join("cgroup.procs"), &pid.to_string())
+            .is_ok()
+        {
             self.moved.insert(pid, from);
         }
     }
@@ -335,7 +365,7 @@ impl Guard {
             let dest = dest.unwrap_or_else(|| "/system.slice".to_owned());
             let mut dir = PathBuf::from(CGROUP).join(dest.trim_start_matches('/'));
             // A cgroup that is gone: the nearest one above it that still exists.
-            while dir != PathBuf::from(CGROUP) && !self.root.exists(&dir) {
+            while dir.as_path() != std::path::Path::new(CGROUP) && !self.root.exists(&dir) {
                 dir.pop();
             }
             let _ = self.root.write(dir.join("cgroup.procs"), &pid.to_string());
@@ -372,11 +402,7 @@ fn run(root: SysRoot, stop: &mpsc::Receiver<()>) {
     let mut period = QUIET;
     let mut cpu0 = g.root.read_opt("/proc/stat").and_then(|t| parse_cpu(&t));
     let mut t0 = Instant::now();
-    loop {
-        match stop.recv_timeout(period) {
-            Err(RecvTimeoutError::Timeout) => {}
-            _ => break,
-        }
+    while stop.recv_timeout(period) == Err(RecvTimeoutError::Timeout) {
         let dt = t0.elapsed().as_secs_f64();
         t0 = Instant::now();
         let cpu1 = g.root.read_opt("/proc/stat").and_then(|t| parse_cpu(&t));
@@ -446,15 +472,21 @@ mod tests {
 
     #[test]
     fn builds_in_terminals_and_services_can_move_the_desktop_cannot() {
-        assert!(movable(&format!("{USER}/app.slice/app-org.kde.konsole@3f2a.scope")));
+        assert!(movable(&format!(
+            "{USER}/app.slice/app-org.kde.konsole@3f2a.scope"
+        )));
         assert!(movable(&format!("{USER}/app.slice/app-kitty-4242.scope")));
         assert!(movable("/system.slice/cargo-build.service"));
         assert!(movable("/user.slice/user-1000.slice/session-3.scope"));
         assert!(movable("/tspmo-bench.slice/run-r1.service"));
         assert!(movable(&format!("{USER}/background.slice/backup.service")));
-        assert!(!movable(&format!("{USER}/session.slice/plasma-kwin_wayland.service")));
+        assert!(!movable(&format!(
+            "{USER}/session.slice/plasma-kwin_wayland.service"
+        )));
         assert!(!movable(&format!("{USER}/app.slice/app-firefox@abc.scope")));
-        assert!(!movable(&format!("{USER}/app.slice/app-org.kde.plasmashell@autostart.service")));
+        assert!(!movable(&format!(
+            "{USER}/app.slice/app-org.kde.plasmashell@autostart.service"
+        )));
         assert!(!movable("/init.scope"));
         assert!(!movable("/"));
         assert!(!movable(&format!("/{SLICE}")));
@@ -474,12 +506,26 @@ mod tests {
     fn busy_share_of_the_machine() {
         let (busy, total) = parse_cpu("cpu  100 0 50 800 40 0 10 0 0 0\ncpu0 1 2 3\n").unwrap();
         assert_eq!((busy, total), (160, 1000));
-        assert_eq!(parse_cgroup("0::/system.slice/x.service\n").as_deref(), Some("/system.slice/x.service"));
+        assert_eq!(
+            parse_cgroup("0::/system.slice/x.service\n").as_deref(),
+            Some("/system.slice/x.service")
+        );
     }
 
     #[test]
     fn a_job_is_moved_from_its_root_not_from_the_shell() {
-        let p = |pid, comm: &str, ppid| (pid, Proc { pid, comm: comm.into(), ppid, ticks: 0, start: 1 });
+        let p = |pid, comm: &str, ppid| {
+            (
+                pid,
+                Proc {
+                    pid,
+                    comm: comm.into(),
+                    ppid,
+                    ticks: 0,
+                    start: 1,
+                },
+            )
+        };
         let procs: BTreeMap<u32, Proc> = [
             p(100, "konsole", 1),
             p(101, "fish", 100),

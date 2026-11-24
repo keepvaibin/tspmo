@@ -146,7 +146,7 @@ impl Asus {
                 // The USB keyboard may have re-enumerated while asleep.
                 hotkeys::rearm();
             }
-            Key(_) => {}
+            Key(_) | FanKey => {}
         }
     }
 }

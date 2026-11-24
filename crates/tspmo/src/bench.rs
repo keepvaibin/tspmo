@@ -501,7 +501,12 @@ fn start_background(n: usize, c: &Condition, topo: &topology::Topology) -> Optio
     let mut cmd = Command::new("systemd-run");
     // A service, not a scope: its parent is systemd, as for a build started from a terminal's
     // job, and unlike the bench's own foreground threads it is not mistaken for their child.
-    cmd.args(["--quiet", "--collect", "--slice=tspmo-bench.slice", "--unit=tspmo-bench-load"]);
+    cmd.args([
+        "--quiet",
+        "--collect",
+        "--slice=tspmo-bench.slice",
+        "--unit=tspmo-bench-load",
+    ]);
     for s in &c.settings {
         match s {
             Setting::BgWeight(w) => {

@@ -284,6 +284,17 @@ fn announce(before: Profile, after: Profile) {
     crate::session::osd("battery-profile-powersave", text, None);
 }
 
+/// The on-screen note for a mode chosen with a key.
+pub fn osd_mode(p: Profile) {
+    let (icon, text) = match p {
+        Profile::EcoPlus => ("battery-profile-powersave", "Eco+"),
+        Profile::PowerSaver => ("power-profile-power-saver-symbolic", "Power saver"),
+        Profile::Balanced => ("power-profile-balanced-symbolic", "Balanced"),
+        Profile::Performance => ("power-profile-performance-symbolic", "Performance"),
+    };
+    crate::session::osd(icon, text, None);
+}
+
 pub struct Tspmo(pub Shared);
 
 #[zbus::interface(name = "org.tspmo.Daemon1")]

@@ -402,8 +402,26 @@ mod tests {
 
     #[test]
     fn eco_curve_is_off_while_cool_and_never_below_the_firmware_when_hot() {
-        let quiet_gpu = Curve([(54, 1), (58, 5), (62, 5), (65, 10), (68, 12), (71, 19), (74, 32), (74, 32)]);
-        let quiet_mid = Curve([(62, 1), (67, 8), (71, 19), (76, 19), (78, 34), (80, 49), (82, 56), (82, 56)]);
+        let quiet_gpu = Curve([
+            (54, 1),
+            (58, 5),
+            (62, 5),
+            (65, 10),
+            (68, 12),
+            (71, 19),
+            (74, 32),
+            (74, 32),
+        ]);
+        let quiet_mid = Curve([
+            (62, 1),
+            (67, 8),
+            (71, 19),
+            (76, 19),
+            (78, 34),
+            (80, 49),
+            (82, 56),
+            (82, 56),
+        ]);
         for f in [Some(&quiet_gpu), Some(&quiet_mid), Some(&factory()), None] {
             let c = eco_curve(f, 110);
             assert_eq!(validate(&c, f), Ok(()), "{c:?} against {f:?}");

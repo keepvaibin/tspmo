@@ -74,15 +74,9 @@ pub fn platform_profile(conn: Connection, shared: Shared) {
                 (d.platform_changed(&value), d.effective())
             };
             if changed {
-                // The thermal key (Fn+F5) is the one change that comes from the user's hands
-                // without any app involved: say what it chose.
-                let (icon, text) = match now {
-                    tspmo_core::power::Profile::EcoPlus => ("battery-profile-powersave", "Eco+"),
-                    tspmo_core::power::Profile::PowerSaver => ("power-profile-power-saver-symbolic", "Power saver"),
-                    tspmo_core::power::Profile::Balanced => ("power-profile-balanced-symbolic", "Balanced"),
-                    tspmo_core::power::Profile::Performance => ("power-profile-performance-symbolic", "Performance"),
-                };
-                crate::session::osd(icon, text, None);
+                // The thermal key (Fn+F5) is the one change from the user's hands with no app
+                // involved: say what it chose.
+                crate::dbus::osd_mode(now);
                 emit_changed_blocking(&conn, &shared);
             }
             let mut fds = [PollFd::new(&file, PollFlags::PRI | PollFlags::ERR)];

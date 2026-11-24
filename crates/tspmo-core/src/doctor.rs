@@ -289,7 +289,11 @@ fn nvidia_wakes(root: &SysRoot, m: &Machine, out: &mut Vec<Finding>) {
         let apps: Vec<String> = users
             .iter()
             .filter(|u| u.kind == crate::gpu::UseKind::Render)
-            .filter(|u| !crate::gpu::NVIDIA_SERVICES.iter().any(|(comm, _)| u.name == *comm))
+            .filter(|u| {
+                !crate::gpu::NVIDIA_SERVICES
+                    .iter()
+                    .any(|(comm, _)| u.name == *comm)
+            })
             .map(|u| format!("{} ({})", u.name, u.pid))
             .collect();
         let desktop_driver = users

@@ -116,6 +116,33 @@ fn run() -> zbus::Result<()> {
         });
     }
 
+    // Fn+F5 with Fn-lock on reaches the keyboard driver as a plain key that nothing cycles:
+    // if the kernel did not change the thermal mode, the daemon does.
+    {
+        let (c, s) = (conn.inner().clone(), Arc::clone(&shared));
+        events::subscribe(move |e| {
+            if let events::Event::FanKey = e {
+                let (c, s) = (c.clone(), Arc::clone(&s));
+                let before = SysRoot::from_env().read_opt(tspmo_core::power::PLATFORM_PROFILE);
+                let _ = std::thread::Builder::new().name("fan-key".into()).spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(400));
+                    let root = SysRoot::from_env();
+                    if root.read_opt(tspmo_core::power::PLATFORM_PROFILE) != before {
+                        return; // the kernel cycled it; the watcher follows
+                    }
+                    let next = {
+                        let mut d = s.lock().unwrap_or_else(|p| p.into_inner());
+                        let next = d.chosen().next();
+                        d.choose(next);
+                        next
+                    };
+                    dbus::osd_mode(next);
+                    zbus::block_on(dbus::emit_changed(&c, &s));
+                });
+            }
+        });
+    }
+
     // All work happens on the D-Bus executor and the watcher threads.
     loop {
         std::thread::park();

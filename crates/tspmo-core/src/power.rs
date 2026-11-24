@@ -414,7 +414,11 @@ pub fn eco_writes(root: &SysRoot, eco: &EcoLimits) -> Vec<Write> {
             let min: u32 = root
                 .read_parse(p.replace("scaling_max_freq", "cpuinfo_min_freq"))
                 .unwrap_or(0);
-            out.push(w(p, (mhz * 1000).clamp(min, max).to_string(), "efficiency core clock"));
+            out.push(w(
+                p,
+                (mhz * 1000).clamp(min, max).to_string(),
+                "efficiency core clock",
+            ));
         }
     }
     if let Some(mhz) = eco.uncore_max_mhz {

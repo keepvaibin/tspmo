@@ -47,7 +47,7 @@ pub fn start(conn: &zbus::Connection, shared: &Shared) {
                 } => (Some(*on_battery), Some(*eco_plus)),
                 Event::PowerSource { on_battery } => (Some(*on_battery), None),
                 Event::Resumed => (None, None),
-                Event::Key(_) => return,
+                Event::Key(_) | Event::FanKey => return,
             };
             let (conn, shared) = (conn.clone(), Arc::clone(&shared));
             spawn("display-event", move || {
