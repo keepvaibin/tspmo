@@ -405,6 +405,12 @@ impl Thermal {
         // Back to firmware limits: only a reload of the thermal mode does that.
         let dirty = lock(&self.state).dirty_power;
         if wanted.is_empty() && dirty {
+            // The kernel only remembers what it last wrote: put its notion back to the
+            // defaults too (a curve is still active, so the firmware takes the writes), then
+            // let the firmware reload the mode.
+            for l in known.iter().filter(|l| l.current != l.default && l.adjustable()) {
+                let _ = limits::set(root, l.name, l.default);
+            }
             if let Some(fans) = &self.fans {
                 if let Err(e) = fans.reset_mode(root) {
                     eprintln!("tspmod: can't restore firmware limits: {e}");
@@ -650,6 +656,8 @@ mod tests {
         t.set_limit(Profile::Balanced, false, "ppt_pl1_spl", None)
             .unwrap();
         assert_eq!(fx.get(&format!("{HW}/pwm1_enable")), "2");
+        // The kernel's own notion of the limit is back at the default too.
+        assert_eq!(fx.get(&format!("{A}/ppt_pl1_spl/current_value")), "90");
     }
 
     #[test]
