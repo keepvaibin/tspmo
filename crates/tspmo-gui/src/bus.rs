@@ -176,10 +176,10 @@ async fn run(emit: &(impl Fn(Event) + Send + Sync + 'static)) -> zbus::Result<()
             .iter()
             .map(|(k, v)| (k.clone(), V::from_value(v)))
             .collect();
-        if !invalid.is_empty() {
-            if let Ok(all) = get_all(&conn, IFACES.iter().find(|n| **n == short).unwrap_or(&"")).await {
-                props = all;
-            }
+        if !invalid.is_empty()
+            && let Ok(all) = get_all(&conn, IFACES.iter().find(|n| **n == short).unwrap_or(&"")).await
+        {
+            props = all;
         }
         emit(Event::Props(short, props));
     }
@@ -240,10 +240,10 @@ pub fn parse_methods(xml: &str) -> HashMap<String, Vec<String>> {
             method.clear();
         } else if tag.starts_with("arg ") && !method.is_empty() {
             let dir = attr(tag, "direction").unwrap_or("in");
-            if dir == "in" {
-                if let (Some(sig), Some(v)) = (attr(tag, "type"), out.get_mut(&method)) {
-                    v.push(sig.to_owned());
-                }
+            if dir == "in"
+                && let (Some(sig), Some(v)) = (attr(tag, "type"), out.get_mut(&method))
+            {
+                v.push(sig.to_owned());
             }
         }
     }

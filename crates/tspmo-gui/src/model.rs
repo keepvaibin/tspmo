@@ -171,15 +171,14 @@ pub fn fan_setting(s: &Store, mode: &str, fan: u32) -> FanSetting {
     let (kind, mut pts) = found.map_or((String::from("auto"), Vec::new()), |e| {
         (e.at(2).str().to_owned(), points(e.at(3)))
     });
-    if pts.is_empty() {
-        if let Some(f) = s
+    if pts.is_empty()
+        && let Some(f) = s
             .get("Fans1", "Factory")
             .list()
             .iter()
             .find(|e| e.at(0).str() == mode && e.at(1).int() == i64::from(fan))
-        {
-            pts = points(f.at(2));
-        }
+    {
+        pts = points(f.at(2));
     }
     FanSetting { kind, points: pts }
 }

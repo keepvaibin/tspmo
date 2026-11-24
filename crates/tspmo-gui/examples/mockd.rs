@@ -31,7 +31,7 @@ fn tup(fields: Vec<Value<'static>>) -> Value<'static> {
 }
 fn arr(items: Vec<Value<'static>>) -> Value<'static> {
     let sig = items.first().map(Value::value_signature).cloned();
-    let mut a = zbus::zvariant::Array::new(&sig.unwrap_or_else(|| zbus::zvariant::Signature::Str));
+    let mut a = zbus::zvariant::Array::new(&sig.unwrap_or(zbus::zvariant::Signature::Str));
     for i in items {
         a.append(i).unwrap();
     }
@@ -402,7 +402,7 @@ fn main() -> zbus::Result<()> {
                         Ok(st) => st
                             .fields()
                             .iter()
-                            .map(|f| f.try_to_owned().map(|o| Value::from(o)).unwrap_or(Value::U8(0)))
+                            .map(|f| f.try_to_owned().map(Value::from).unwrap_or(Value::U8(0)))
                             .collect(),
                         Err(_) => body
                             .deserialize::<OwnedValue>()
@@ -420,23 +420,22 @@ fn main() -> zbus::Result<()> {
                         .into_iter()
                         .find(|(i, m, ..)| *i == short && *m == member)
                     {
-                        if !prop.is_empty() {
-                            if let Some(v) = args.get(arg) {
-                                let v = match (prop, v) {
-                                    ("FlickerSetting", Value::Str(x)) => {
-                                        state
-                                            .get_mut(&short)
-                                            .unwrap()
-                                            .insert("FlickerFree".into(), Value::Bool(x.as_str() != "off"));
-                                        changed
-                                            .insert("FlickerFree".into(), Value::Bool(x.as_str() != "off"));
-                                        v.clone()
-                                    }
-                                    _ => v.clone(),
-                                };
-                                state.get_mut(&short).unwrap().insert(prop.to_owned(), v.clone());
-                                changed.insert(prop.to_owned(), v);
-                            }
+                        if !prop.is_empty()
+                            && let Some(v) = args.get(arg)
+                        {
+                            let v = match (prop, v) {
+                                ("FlickerSetting", Value::Str(x)) => {
+                                    state
+                                        .get_mut(&short)
+                                        .unwrap()
+                                        .insert("FlickerFree".into(), Value::Bool(x.as_str() != "off"));
+                                    changed.insert("FlickerFree".into(), Value::Bool(x.as_str() != "off"));
+                                    v.clone()
+                                }
+                                _ => v.clone(),
+                            };
+                            state.get_mut(&short).unwrap().insert(prop.to_owned(), v.clone());
+                            changed.insert(prop.to_owned(), v);
                         }
                         if short == "Hardware1" && member == "Set" {
                             // Rebuild Items with the new value.

@@ -116,10 +116,10 @@ fn emit(ev: Event) {
 
 fn with_app(f: impl FnOnce(&mut App)) {
     APP.with(|cell| {
-        if let Ok(mut g) = cell.try_borrow_mut() {
-            if let Some(a) = g.as_mut() {
-                f(a);
-            }
+        if let Ok(mut g) = cell.try_borrow_mut()
+            && let Some(a) = g.as_mut()
+        {
+            f(a);
         }
     });
 }
