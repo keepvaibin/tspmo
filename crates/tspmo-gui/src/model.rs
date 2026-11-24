@@ -726,11 +726,21 @@ mod tests {
             cur,
             custom: false,
         };
-        let ls = [l("ppt_pl1_spl", 28, 90, 60), l("ppt_pl2_sppt", 28, 135, 80), l("nv_tgp", 5, 20, 10)];
+        let ls = [
+            l("ppt_pl1_spl", 28, 90, 60),
+            l("ppt_pl2_sppt", 28, 135, 80),
+            l("nv_tgp", 5, 20, 10),
+        ];
         // Sustained above boost drags boost along.
-        assert_eq!(limit_fixes(&ls, "ppt_pl1_spl", 100), vec![("ppt_pl2_sppt".to_owned(), 100)]);
+        assert_eq!(
+            limit_fixes(&ls, "ppt_pl1_spl", 100),
+            vec![("ppt_pl2_sppt".to_owned(), 100)]
+        );
         // Boost below sustained drags sustained down.
-        assert_eq!(limit_fixes(&ls, "ppt_pl2_sppt", 40), vec![("ppt_pl1_spl".to_owned(), 40)]);
+        assert_eq!(
+            limit_fixes(&ls, "ppt_pl2_sppt", 40),
+            vec![("ppt_pl1_spl".to_owned(), 40)]
+        );
         assert!(limit_fixes(&ls, "ppt_pl1_spl", 70).is_empty());
         assert!(limit_fixes(&ls, "nv_tgp", 15).is_empty());
     }

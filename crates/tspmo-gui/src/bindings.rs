@@ -36,7 +36,11 @@ pub fn current_hz(s: &Store) -> f64 {
         return hz;
     }
     // No live rate: the highest known rate is the best guess for "Max".
-    s.get(IFACE, REFRESH_RATES).list().iter().map(V::float).fold(0.0, f64::max)
+    s.get(IFACE, REFRESH_RATES)
+        .list()
+        .iter()
+        .map(V::float)
+        .fold(0.0, f64::max)
 }
 
 pub fn flicker_on(s: &Store) -> bool {
@@ -82,7 +86,10 @@ mod tests {
     fn refresh_falls_back_to_the_highest_rate() {
         let s = store(vec![(REFRESH_RATES, V::L(vec![V::I(60), V::I(240)]))]);
         assert_eq!(current_hz(&s), 240.0);
-        let s = store(vec![(REFRESH_NOW, V::F(60.0)), (REFRESH_RATES, V::L(vec![V::I(240)]))]);
+        let s = store(vec![
+            (REFRESH_NOW, V::F(60.0)),
+            (REFRESH_RATES, V::L(vec![V::I(240)])),
+        ]);
         assert_eq!(current_hz(&s), 60.0);
     }
 }

@@ -668,9 +668,17 @@ impl App {
                 // Keep sustained <= boost <= fast boost: move the neighbours along.
                 let fixes = model::limit_fixes(&model::limits(s, mode, source), name, n);
                 for (other, v) in fixes {
-                    self.send("Power1", "SetLimit", &[Arg::s(mode), Arg::s(source), Arg::S(other), Arg::N(v)]);
+                    self.send(
+                        "Power1",
+                        "SetLimit",
+                        &[Arg::s(mode), Arg::s(source), Arg::S(other), Arg::N(v)],
+                    );
                 }
-                self.send("Power1", "SetLimit", &[Arg::s(mode), Arg::s(source), Arg::s(name), Arg::N(n)]);
+                self.send(
+                    "Power1",
+                    "SetLimit",
+                    &[Arg::s(mode), Arg::s(source), Arg::s(name), Arg::N(n)],
+                );
             }
             k if k.starts_with("hw-step:") => {
                 let name = &k["hw-step:".len()..];
@@ -904,7 +912,11 @@ impl App {
         };
         bk.set_bat_power(ss(&model::fmt_watts(watts)));
         bk.set_bat_line(ss(&model::battery_line(
-            if s.has_prop(b, "Percent") { s.get(b, "Percent").int() } else { -1 },
+            if s.has_prop(b, "Percent") {
+                s.get(b, "Percent").int()
+            } else {
+                -1
+            },
             s.get(b, "Status").str(),
             watts,
         )));
@@ -995,7 +1007,12 @@ impl App {
                 .position(|c| *c == ef.color)
                 .map_or(-1, |i| i as i32),
         );
-        bk.set_kb_speed(model::KB_SPEEDS.iter().position(|v| *v == ef.speed).map_or(-1, |i| i as i32));
+        bk.set_kb_speed(
+            model::KB_SPEEDS
+                .iter()
+                .position(|v| *v == ef.speed)
+                .map_or(-1, |i| i as i32),
+        );
         sync(
             &self.m.kb_states,
             s.get(k, "PowerStates").list().iter().map(V::bool).collect(),
