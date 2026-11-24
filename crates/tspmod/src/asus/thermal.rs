@@ -33,6 +33,8 @@ pub fn source_name(on_battery: bool) -> &'static str {
 #[derive(Debug)]
 pub struct State {
     pub mode: Profile,
+    /// Eco+ is active (the thermal mode is power-saver's): fans follow [`fans::eco_curve`].
+    pub eco: bool,
     pub on_battery: bool,
     /// `(mode, fan)` → what the fan does there. Missing means Auto.
     pub settings: BTreeMap<(usize, u32), Setting>,
@@ -81,6 +83,7 @@ impl Thermal {
             apply_lock: Mutex::new(()),
             state: Mutex::new(State {
                 mode,
+                eco: false,
                 on_battery: power_supply::on_ac(&root) == Some(false),
                 settings: BTreeMap::new(),
                 factory: BTreeMap::new(),
@@ -314,6 +317,11 @@ impl Thermal {
 
     // --- events --------------------------------------------------------------------------------
 
+    /// Eco+ starts or ends; the next [`Thermal::on_profile`] writes what it needs.
+    pub fn set_eco(&self, eco: bool) {
+        lock(&self.state).eco = eco;
+    }
+
     /// The thermal mode or power source changed: the EC dropped our settings; write them again.
     pub fn on_profile(&self, mode: Profile, on_battery: bool) {
         {
@@ -350,7 +358,7 @@ impl Thermal {
     /// Write what the active mode wants. `force` rewrites curves even if they look in force.
     pub fn apply(&self, force: bool) {
         let _serial = lock(&self.apply_lock);
-        let (mode, on_battery, settings, mut factory, wanted) = {
+        let (mode, on_battery, mut settings, mut factory, wanted, eco) = {
             let st = lock(&self.state);
             let m = mode_index(st.mode);
             let settings: BTreeMap<u32, Setting> = st
@@ -371,7 +379,7 @@ impl Thermal {
                 .filter(|((mi, bat, _), _)| *mi == m && *bat == st.on_battery)
                 .map(|((_, _, n), v)| (n.clone(), *v))
                 .collect();
-            (st.mode, st.on_battery, settings, factory, wanted)
+            (st.mode, st.on_battery, settings, factory, wanted, st.eco)
         };
         let root = &self.root;
 
@@ -388,6 +396,14 @@ impl Thermal {
                         }
                         Err(e) => eprintln!("tspmod: fan {} curve unreadable: {e}", f.label),
                     }
+                }
+            }
+            // Eco+ owns the fans: stopped while cool, derived from the firmware's quiet curve.
+            if eco {
+                let tjmax = fans::tjmax(root);
+                for f in &fans.fans {
+                    let c = fans::eco_curve(factory.get(&f.index), tjmax);
+                    settings.insert(f.index, Setting::Custom(c));
                 }
             }
         }

@@ -1,0 +1,9 @@
+[Unit]
+Description=tspmo Eco+ background work (efficiency cores, lowest CPU weight)
+Documentation=https://github.com/keepvaibin/tspmo
+
+# Started by tspmod while Eco+ is active: it moves heavy background jobs here. The CPU list
+# (AllowedCPUs) is set at start from the machine's efficiency cores.
+[Slice]
+CPUWeight=10
+IOWeight=10

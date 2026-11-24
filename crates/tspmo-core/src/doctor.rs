@@ -40,6 +40,7 @@ pub fn run(root: &SysRoot, m: &Machine) -> Vec<Finding> {
         usb_hid_autosuspend,
         numlock_led,
         nvidia_runtime_pm,
+        nvidia_wakes,
         gtk_renderer,
         conflicting_daemons,
         tspmod_running,
@@ -253,17 +254,6 @@ fn nvidia_runtime_pm(root: &SysRoot, m: &Machine, out: &mut Vec<Finding>) {
         let dpm_ok = matches!(dpm, Some(2 | 3));
         let control_ok = gpu.pm_control.as_deref() == Some("auto");
         if dpm_ok && control_ok {
-            if !gpu.is_asleep() && !gpu.boot_vga {
-                out.push(Finding {
-                    id: "nvidia-awake",
-                    severity: Severity::Info,
-                    title: format!("The NVIDIA GPU ({}) is awake", gpu.address),
-                    detail: "Something is using it right now. tspmo's dGPU view (milestone 4) \
-                             lists the processes holding it."
-                        .into(),
-                    fix: None,
-                });
-            }
             continue;
         }
         out.push(Finding {
@@ -285,6 +275,72 @@ fn nvidia_runtime_pm(root: &SysRoot, m: &Machine, out: &mut Vec<Finding>) {
                 needs_reboot: true,
             }),
         });
+    }
+}
+
+/// Why an NVIDIA GPU that should be asleep is awake: the apps holding it, a desktop that
+/// loaded its driver, or the firmware's own periodic notification. Names the culprit.
+fn nvidia_wakes(root: &SysRoot, m: &Machine, out: &mut Vec<Finding>) {
+    for gpu in m.gpus.iter().filter(|g| g.vendor == pci::VENDOR_NVIDIA) {
+        if gpu.driver.as_deref() != Some("nvidia") || gpu.pm_control.as_deref() != Some("auto") {
+            continue;
+        }
+        let users = crate::gpu::users(root, Some(&gpu.address));
+        let apps: Vec<String> = users
+            .iter()
+            .filter(|u| u.kind == crate::gpu::UseKind::Render)
+            .filter(|u| !crate::gpu::NVIDIA_SERVICES.iter().any(|(comm, _)| u.name == *comm))
+            .map(|u| format!("{} ({})", u.name, u.pid))
+            .collect();
+        let desktop_driver = users
+            .iter()
+            .find(|u| u.kind == crate::gpu::UseKind::Display && u.driver_handles);
+        if !apps.is_empty() && !gpu.is_asleep() {
+            out.push(Finding {
+                id: "nvidia-held",
+                severity: Severity::Warn,
+                title: format!("NVIDIA GPU held awake by {}", apps.join(", ")),
+                detail: "Apps started with the NVIDIA GPU keep it awake while they run. Close them, \
+                         or start them on the iGPU."
+                    .into(),
+                fix: None,
+            });
+        }
+        if let Some(d) = desktop_driver {
+            out.push(Finding {
+                id: "compositor-nvidia",
+                severity: Severity::Info,
+                title: format!("{} loaded the NVIDIA driver", d.name),
+                detail: "The desktop started before tspmo's compositor setting existed, so Eco can't \
+                         unload the driver. Log out and in once."
+                    .into(),
+                fix: None,
+            });
+        }
+        // Nothing holds it, yet it is awake much of the time: the platform wakes it.
+        if apps.is_empty() && gpu.awake_share().is_some_and(|s| s > 0.15) {
+            let acpi = root.exists("/sys/bus/acpi/devices/NVDA0820:00");
+            let pct = (gpu.awake_share().unwrap_or(0.0) * 100.0).round();
+            out.push(Finding {
+                id: "nvidia-nvpcf",
+                severity: Severity::Warn,
+                title: format!("NVIDIA GPU awake {pct}% of the time with nothing using it"),
+                detail: if acpi {
+                    "The firmware's NVPCF device (ACPI NVDA0820) notifies the driver about every 22 s; \
+                     each time the driver resumes the GPU for about 25 s. No app or tspmo causes it. \
+                     Eco turns the GPU off."
+                        .into()
+                } else {
+                    "Something wakes it about every 22 s and no process holds it. Eco turns the GPU off."
+                        .into()
+                },
+                fix: Some(Fix {
+                    summary: "Turn the NVIDIA GPU off (Eco)".into(),
+                    commands: vec!["tspmo gpu eco".into()],
+                    needs_reboot: false,
+                }),
+            });
+        }
     }
 }
 

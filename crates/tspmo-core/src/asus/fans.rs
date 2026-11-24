@@ -124,6 +124,62 @@ pub fn min_speed(factory: Option<&Curve>, temp: u8) -> u8 {
     }
 }
 
+/// The CPU's throttle temperature, °C (coretemp's critical limit; 100 when unknown).
+pub fn tjmax(root: &SysRoot) -> u8 {
+    hwmon::find(root, "coretemp")
+        .and_then(|h| root.read_parse::<u32>(format!("{}/temp1_crit", h.dir)))
+        .map_or(100, |m| (m / 1000).clamp(80, 110) as u8)
+}
+
+/// The Eco+ curve for one fan: stopped while it is safe to be, then a steep ramp.
+///
+/// * Off up to `off` °C: four degrees past where the firmware's quiet curve starts its first
+///   step (`factory`), kept within 58-66 °C. At the 5 W Eco+ draws, an idle laptop settles
+///   around 57 °C with the fans stopped.
+/// * Above it the fan runs at once (the EC's lowest non-zero speed is already about 1800 rpm)
+///   and climbs faster than the firmware: 100 % from `tjmax - 20` °C, and never below the
+///   firmware's own speed from 75 °C ([`validate`] enforces that).
+pub fn eco_curve(factory: Option<&Curve>, tjmax: u8) -> Curve {
+    let off = factory.map_or(62, |f| f.0[0].0 + 4).clamp(58, 66);
+    let top = tjmax.saturating_sub(20).clamp(75, 95);
+    let mut p = [
+        (TEMP_MIN, 0),
+        (off, 0),
+        (off + 3, 12),
+        (off + 7, 28),
+        (72.max(off + 8), 40),
+        (76.max(off + 12), 55),
+        (82.max(off + 16), 75),
+        (top.max(off + 24).min(TEMP_MAX), 100),
+    ];
+    // Never falling along the curve, and never slower than the firmware from `HOT` up.
+    if let Some(f) = factory {
+        for (t, s) in p.iter_mut().filter(|(t, _)| *t >= HOT) {
+            *s = (*s).max(f.at(*t).ceil() as u8);
+        }
+    }
+    for i in 1..POINTS {
+        p[i].0 = p[i].0.max(p[i - 1].0);
+        p[i].1 = p[i].1.max(p[i - 1].1);
+    }
+    // Straight pieces between points can still dip under a kinked firmware curve: lift the
+    // next point until none does.
+    for _ in 0..POINTS {
+        let c = Curve(p);
+        let Some(t) = (HOT..=TEMP_MAX).find(|t| c.at(*t).round() < f32::from(min_speed(factory, *t))) else {
+            break;
+        };
+        let Some(i) = p.iter().position(|(pt, _)| *pt >= t) else {
+            break;
+        };
+        p[i].1 = p[i].1.max(min_speed(factory, t)).max(min_speed(factory, p[i].0));
+        for j in i + 1..POINTS {
+            p[j].1 = p[j].1.max(p[j - 1].1);
+        }
+    }
+    Curve(p)
+}
+
 /// Check a curve: temperatures within range and non-decreasing, speeds within 0-100 and
 /// non-decreasing, and never slower than the firmware at high temperature.
 pub fn validate(curve: &Curve, factory: Option<&Curve>) -> Result<(), CurveError> {
@@ -342,6 +398,25 @@ mod tests {
         let mut c = factory();
         c.0[7].1 = 101;
         assert_eq!(validate(&c, Some(&f)), Err(CurveError::Speed));
+    }
+
+    #[test]
+    fn eco_curve_is_off_while_cool_and_never_below_the_firmware_when_hot() {
+        let quiet_gpu = Curve([(54, 1), (58, 5), (62, 5), (65, 10), (68, 12), (71, 19), (74, 32), (74, 32)]);
+        let quiet_mid = Curve([(62, 1), (67, 8), (71, 19), (76, 19), (78, 34), (80, 49), (82, 56), (82, 56)]);
+        for f in [Some(&quiet_gpu), Some(&quiet_mid), Some(&factory()), None] {
+            let c = eco_curve(f, 110);
+            assert_eq!(validate(&c, f), Ok(()), "{c:?} against {f:?}");
+            assert_eq!(c.at(20), 0.0);
+            assert_eq!(c.at(55), 0.0, "{f:?}");
+            assert!(c.at(90) >= 100.0 - f32::EPSILON, "{c:?}");
+            assert!(c.at(70) > 0.0);
+        }
+        // The off range follows the firmware's first step, within bounds.
+        assert_eq!(eco_curve(Some(&quiet_gpu), 110).0[1].0, 58);
+        assert_eq!(eco_curve(Some(&quiet_mid), 110).0[1].0, 66);
+        // A lower Tjmax brings 100 % in sooner.
+        assert!(eco_curve(None, 95).at(80) >= eco_curve(None, 110).at(80));
     }
 
     #[test]

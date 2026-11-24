@@ -330,14 +330,27 @@ impl Daemon {
             self.gpu_policy = p;
         }
         let t = &mut self.tunables;
-        if let Some(pair) = kv.get("eco_pkg_w").and_then(|v| parse_pair(v)) {
-            t.eco.pkg_w = pair;
-        }
-        if let Some(pair) = kv.get("eco_psys_w").and_then(|v| parse_pair(v)) {
-            t.eco.psys_w = pair;
-        }
-        if let Some(v) = kv.get("eco_uncore_mhz") {
-            t.eco.uncore_max_mhz = v.parse().ok();
+        // Eco+ was redesigned (version 2): the values an older daemon saved (a flat 5/7 W cap)
+        // are not read back.
+        if kv.get("eco_version") == Some(&"2") {
+            if let Some(pair) = kv.get("eco_pkg_w").and_then(|v| parse_pair(v)) {
+                t.eco.pkg_w = pair;
+            }
+            if let Some(v) = kv.get("eco_pkg_window_ms") {
+                t.eco.pkg_window_ms = v.parse().ok();
+            }
+            if let Some(pair) = kv.get("eco_psys_w").and_then(|v| parse_pair(v)) {
+                t.eco.psys_w = pair;
+            }
+            if let Some(v) = kv.get("eco_uncore_mhz") {
+                t.eco.uncore_max_mhz = v.parse().ok();
+            }
+            if let Some(v) = kv.get("eco_ecap_mhz") {
+                t.eco.ecap_mhz = v.parse().ok();
+            }
+            if let Some(v) = kv.get("eco_epp").and_then(|v| v.parse().ok()) {
+                t.eco.epp = v;
+            }
         }
         if let Some(b) = get_b("saver_no_turbo_on_battery") {
             t.saver_no_turbo_on_battery = b;
@@ -360,7 +373,8 @@ impl Daemon {
              profile_ac={}\nprofile_battery={}\ngpu_policy={}\n\
              saver_no_turbo_on_battery={}\naspm_on_battery={}\n\
              audio_power_save_on_battery={}\nlazy_writeback_on_battery={}\n\
-             eco_pkg_w={}\neco_psys_w={}\neco_uncore_mhz={}\n",
+             eco_version=2\neco_pkg_w={}\neco_pkg_window_ms={}\neco_psys_w={}\neco_uncore_mhz={}\n\
+             eco_ecap_mhz={}\neco_epp={}\n",
             self.profile_ac.as_str(),
             self.profile_battery.as_str(),
             self.gpu_policy.as_str(),
@@ -369,10 +383,11 @@ impl Daemon {
             t.audio_power_save_on_battery,
             t.lazy_writeback_on_battery,
             fmt_pair(t.eco.pkg_w),
+            fmt_opt(t.eco.pkg_window_ms),
             fmt_pair(t.eco.psys_w),
-            t.eco
-                .uncore_max_mhz
-                .map_or(String::from("off"), |m| m.to_string()),
+            fmt_opt(t.eco.uncore_max_mhz),
+            fmt_opt(t.eco.ecap_mhz),
+            t.eco.epp,
         );
         if let Some(dir) = self.state_file.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -405,6 +420,10 @@ fn parse_pair(v: &str) -> Option<Option<(u32, u32)>> {
     }
     let (a, b) = v.split_once(',')?;
     Some(Some((a.trim().parse().ok()?, b.trim().parse().ok()?)))
+}
+
+fn fmt_opt(v: Option<u32>) -> String {
+    v.map_or_else(|| "off".into(), |m| m.to_string())
 }
 
 fn fmt_pair(p: Option<(u32, u32)>) -> String {

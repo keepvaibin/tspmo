@@ -31,7 +31,12 @@ struct State {
     idle: u32,
     /// The level to restore when input resumes, while the idle timeout has darkened the keyboard.
     dimmed_from: Option<u8>,
+    /// Eco+ is active: the backlight goes dark after [`ECO_IDLE`] seconds at most.
+    eco: bool,
 }
+
+/// Idle time after which Eco+ darkens the keyboard, seconds.
+pub const ECO_IDLE: u32 = 10;
 
 pub struct Lighting {
     root: SysRoot,
@@ -80,6 +85,7 @@ impl Lighting {
                 power: None,
                 idle: 0,
                 dimmed_from: None,
+                eco: false,
             }),
             caps,
             root,
@@ -376,7 +382,21 @@ impl Lighting {
     /// Whether the idle timer should run: enabled and the keyboard is lit and not yet dimmed.
     pub fn idle_armed(&self) -> Option<u32> {
         let st = lock(&self.st);
-        (st.idle > 0 && st.brightness > 0 && st.dimmed_from.is_none()).then_some(st.idle)
+        let secs = match (st.idle, st.eco) {
+            (0, true) => ECO_IDLE,
+            (n, true) => n.min(ECO_IDLE),
+            (n, false) => n,
+        };
+        (secs > 0 && st.brightness > 0 && st.dimmed_from.is_none()).then_some(secs)
+    }
+
+    /// Eco+ starts or ends. Ending it brings back a keyboard that Eco+ darkened (unless the
+    /// user's own idle timeout has also run out, which `idle_armed` will say).
+    pub fn set_eco(&self, eco: bool) {
+        let was = std::mem::replace(&mut lock(&self.st).eco, eco);
+        if was && !eco {
+            self.idle_wake();
+        }
     }
 
     /// Path of the `brightness_hw_changed` attribute, which signals key presses.

@@ -9,6 +9,7 @@ mod dbus;
 mod display;
 mod events;
 mod gpu;
+mod guard;
 mod polkit;
 mod session;
 mod state;
@@ -21,7 +22,9 @@ fn main() {
     // `tspmod --restore-limits`, run by systemd when the daemon stops: Eco+'s power caps must
     // not outlive the daemon that set them.
     if std::env::args().nth(1).as_deref() == Some("--restore-limits") {
-        state::restore_saved(&SysRoot::from_env());
+        let root = SysRoot::from_env();
+        state::restore_saved(&root);
+        guard::shutdown(&root);
         return;
     }
     if let Err(e) = run() {
@@ -36,6 +39,12 @@ fn run() -> zbus::Result<()> {
     let mut daemon = state::Daemon::new(root);
     // Tune the machine before anyone can ask: the profile, then the GPU policy.
     daemon.apply(true);
+    // Background jobs a previous daemon moved aside: back, unless Eco+ keeps them there.
+    if daemon.effective().is_eco_plus() {
+        guard::set_active(&daemon.root, true);
+    } else {
+        guard::shutdown(&daemon.root);
+    }
     let n = tspmo_core::usbpm::apply(&daemon.root);
     if n > 0 {
         eprintln!("tspmod: internal USB devices allowed to sleep: {n}");
@@ -97,6 +106,7 @@ fn run() -> zbus::Result<()> {
                 let mut l = last.lock().unwrap_or_else(|p| p.into_inner());
                 if *l != *eco_plus {
                     *l = *eco_plus;
+                    guard::set_active(&SysRoot::from_env(), *eco_plus);
                     let (c, s) = (c.clone(), Arc::clone(&s));
                     let _ = std::thread::Builder::new()
                         .name("eco-plus-gpu".into())

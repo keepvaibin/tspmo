@@ -21,6 +21,10 @@ pub struct Gpu {
     /// `power/control`: `auto` lets the device runtime-suspend.
     pub pm_control: Option<String>,
     pub boot_vga: bool,
+    /// `power/runtime_active_time` and `power/runtime_suspended_time`, milliseconds since boot
+    /// (kernel counters; reading them never wakes the device).
+    pub runtime_active_ms: Option<u64>,
+    pub runtime_suspended_ms: Option<u64>,
 }
 
 impl Gpu {
@@ -35,6 +39,12 @@ impl Gpu {
 
     pub fn is_asleep(&self) -> bool {
         self.runtime_status.as_deref() == Some("suspended")
+    }
+
+    /// Share of the runtime-PM time (since boot) the device spent awake, 0 to 1.
+    pub fn awake_share(&self) -> Option<f64> {
+        let (a, s) = (self.runtime_active_ms? as f64, self.runtime_suspended_ms? as f64);
+        (a + s > 0.0).then(|| a / (a + s))
     }
 }
 
@@ -60,6 +70,8 @@ pub fn gpus(root: &SysRoot) -> Vec<Gpu> {
                 power_state: root.read_opt(format!("{dir}/power_state")),
                 pm_control: root.read_opt(format!("{dir}/power/control")),
                 boot_vga: root.read_parse::<u8>(format!("{dir}/boot_vga")) == Some(1),
+                runtime_active_ms: root.read_parse(format!("{dir}/power/runtime_active_time")),
+                runtime_suspended_ms: root.read_parse(format!("{dir}/power/runtime_suspended_time")),
                 address: addr,
             })
         })
@@ -72,7 +84,8 @@ pub fn gpus(root: &SysRoot) -> Vec<Gpu> {
 // connector status or EDID, /proc/driver/nvidia) makes the driver runtime-resume the GPU. A wake
 // that coincides with a power event has crashed its firmware (Xid 119/154) until reboot. So
 // nothing outside this module's own `gpus()` list (vendor, class, device, boot_vga,
-// power/runtime_status, power/control, power_state) is ever read from such a device. These
+// power/runtime_status, power/runtime_active_time, power/runtime_suspended_time, power/control,
+// power_state) is ever read from such a device. These
 // helpers decide, from names and symlink targets only, whether a sysfs class entry is one.
 
 /// PCI addresses of the NVIDIA display devices (from attributes that never wake them).

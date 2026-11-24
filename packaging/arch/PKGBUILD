@@ -49,6 +49,7 @@ package_tspmo-git() {
   cp -r "$r/data/plasma/org.tspmo.power" "$pkgdir/usr/share/plasma/plasmoids/"
 
   install -Dm644 "$r/data/systemd/tspmod.service" "$pkgdir/usr/lib/systemd/system/tspmod.service"
+  install -Dm644 "$r/data/systemd/tspmo-bg.slice" "$pkgdir/usr/lib/systemd/system/tspmo-bg.slice"
   install -Dm644 "$r/data/systemd/plymouth-quit-timeout.conf" \
     "$pkgdir/usr/lib/systemd/system/plymouth-quit.service.d/50-tspmo.conf"
 
