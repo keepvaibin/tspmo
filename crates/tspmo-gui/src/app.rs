@@ -685,7 +685,7 @@ impl App {
                     self.send("Lid1", "SetSlashMode", &[Arg::s(m)]);
                 }
             }
-            "slash-interval" => self.send("Lid1", "SetSlashInterval", &[Arg::N(n.clamp(0, 255))]),
+            "slash-interval" => self.send("Lid1", "SetSlashInterval", &[Arg::N(n.clamp(0, 5))]),
             "slash-level" => self.send("Lid1", "SetSlashBrightness", &[Arg::N(n)]),
             "slash-mode-step" => {
                 let modes = slash_modes(s);
@@ -1164,6 +1164,16 @@ impl App {
                 .position(|c| *c == ef.color)
                 .map_or(-1, |i| i as i32),
         );
+        // Which controls the effect takes; an old daemon without ModeParams shows them all.
+        let params = s.get(k, "ModeParams").list();
+        let takes = |i: usize| {
+            params
+                .iter()
+                .find(|p| p.at(0).str() == ef.mode)
+                .is_none_or(|p| p.at(i).bool())
+        };
+        bk.set_kb_uses_color(takes(1));
+        bk.set_kb_uses_speed(takes(3));
         bk.set_kb_speed(
             model::KB_SPEEDS
                 .iter()

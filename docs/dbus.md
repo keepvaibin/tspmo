@@ -193,28 +193,42 @@ start and after resume. Stored in `/var/lib/tspmo/hardware`.
 ### `org.tspmo.Lighting1` (polkit `org.tspmo.set-lighting`)
 
 Present with a keyboard backlight (`asus::kbd_backlight`). Effects need the Aura USB
-controller.
+controller (`0b05:19b6` and friends, hidraw report `0x5d`).
+
+What is offered is what the controller says it is: at start the daemon asks it (wake-up
+string, capability query `5d 05 20 31 00 20`, feature report back) and `Kind` and `Modes`
+follow from the answer. Nothing is sent that the board does not support. No property or
+argument carries an empty string except where noted.
 
 | Property | Type | |
 |---|---|---|
-| `MaxBrightness`, `Brightness` | `y` | |
-| `Modes` | `as` | effects this keyboard has (empty: brightness only) |
-| `Effect` | `(s(yyy)(yyy)ss)` | `(mode, colour, colour2, speed, direction)` showing |
-| `Source` | `s` | |
-| `Profiles` | `a(si(s(yyy)(yyy)ss))` | per source: brightness (-1: untouched) and effect (empty mode: untouched) |
-| `PowerStates` | `(bbbb)` | lit in boot, awake, sleep, shutdown |
+| `MaxBrightness`, `Brightness` | `y` | LED class levels (0-3 on the GU605MI) |
+| `Kind` | `s` | `single-zone-rgb` (GU605MI), `single-zone-white`, `multi-zone-rgb`, `per-key-rgb`, `unknown` (the controller did not answer: only static, breathe, pulse), `brightness-only` (no Aura controller) |
+| `Modes` | `as` | effects this keyboard has, e.g. `static breathe rainbow-cycle pulse` (empty: brightness only) |
+| `ModeParams` | `a(sbbbb)` | per effect: `(mode, colour, colour2, speed, direction)`, whether the field matters. A rainbow has no colour, static no speed, a one-colour keyboard no colour at all |
+| `Speeds` | `as` | `low med high` |
+| `Effect` | `(s(yyy)(yyy)ss)` | `(mode, colour, colour2, speed, direction)` last sent; the factory's steady white (`static`, `ffffff`, `med`, `right`) until one is chosen |
+| `Source` | `s` | `ac` or `battery` |
+| `Profiles` | `a(sy(s(yyy)(yyy)ss))` | per source: the brightness and effect that apply when it is in use (the current ones when none was chosen for it) |
+| `PowerStates` | `(bbbb)` | lit in boot, awake, sleep, shutdown (all lit by default) |
 | `IdleTimeout` | `u` | seconds without input before the backlight goes dark; 0 never |
 
 | Method | |
 |---|---|
 | `SetBrightness(source s, level y)` | `source` empty: the one in use |
-| `SetEffect(source s, effect (s(yyy)(yyy)ss))` | speed `low` `med` `high`; direction `right` `left` `up` `down` |
+| `SetEffect(source s, effect (s(yyy)(yyy)ss))` | `mode` must be one of `Modes` (an error names them); speed `low` `med` `high` and direction `right` `left` `up` `down` may be empty to keep the current one. A colour effect needs a colour that is not black (lower the brightness to turn the light off) |
 | `SetPowerStates(boot b, awake b, sleep b, shutdown b)` | |
 | `SetIdleTimeout(seconds u)` | |
 | `CycleEffect(forward b) → s` | what the Aura key does |
 
 Brightness set with the keyboard's own keys becomes the level of the current source. The
-Aura controller is opened per write, never held. Stored in `/var/lib/tspmo/lighting`.
+Aura controller is opened per write, never held.
+
+At start, after resume and when the power source changes the daemon tells the keyboard
+everything again, in one open of the device: wake-up string (`5d "ASUS Tech.Inc."`), power
+states (`5d bd 01 <mask> 00 00 00 ff`), effect (`5d b3 ...`, `5d b5`, `5d b4`), then the
+brightness is written to the LED even if it already reads the same: the LED class reports
+the kernel's idea, which the controller may not share. Stored in `/var/lib/tspmo/lighting`.
 
 ### `org.tspmo.Lid1` (polkit `org.tspmo.set-lid`)
 
@@ -224,11 +238,13 @@ Present when the model has a Slash light bar or an AniMe Matrix. `Devices` lists
 | Property | Type | |
 |---|---|---|
 | `Devices` | `as` | `slash` |
-| `SlashEnabled` | `b` | |
+| `SlashEnabled` | `b` | what was asked for |
+| `SlashLit` | `b` | whether it is lighting now: enabled, and on AC or `battery` shown |
 | `SlashBrightness` | `y` | 0-255 |
-| `SlashInterval` | `y` | pause between animations, 0-255 |
-| `SlashMode`, `SlashModes` | `s`, `as` | |
-| `SlashShow` | `a(sb)` | `boot`, `sleep`, `shutdown`, `battery`, `lid`, `warning` |
+| `SlashBrightnessLevels` | `a(sy)` | the steps of the firmware's apps: `off 0`, `low 85`, `medium 170`, `high 255` |
+| `SlashInterval`, `SlashIntervalMax` | `y` | pause between animations in seconds, 0 (none) to 5 |
+| `SlashMode`, `SlashModes` | `s`, `as` | all 16 animations: `static bounce slash loading bitstream transmission flow flux phantom spectrum hazard interfacing ramp game-over start buzzer` |
+| `SlashShow` | `a(sb)` | `boot`, `sleep`, `shutdown`, `battery`, `lid`, `warning` (low battery) |
 | `AnimeEnabled` | `b` | |
 | `AnimeBrightness` | `y` | 0-3 |
 | `AnimeBuiltin` | `b` | the firmware's own animations |
@@ -238,13 +254,22 @@ Present when the model has a Slash light bar or an AniMe Matrix. `Devices` lists
 |---|---|
 | `SetSlashEnabled(on b)`, `SetSlashBrightness(level y)`, `SetSlashInterval(n y)` | |
 | `SetSlashMode(mode s)` | |
-| `SetSlashShow(what s, on b)` | `battery` defaults to off |
+| `SetSlashShow(what s, on b)` | `battery` defaults to off (the Slash is dark on battery; `SlashLit` says so) |
 | `SetAnimeEnabled(on b)`, `SetAnimeBrightness(level y)`, `SetAnimeBuiltin(on b)`, `SetAnimeBuiltinChoice(boot y, awake y, sleep y, shutdown y)` | |
 | `ShowAnimeText(text s)` | 5x7 font, upper case, about 5 characters |
 | `ShowAnimeImage(pgm ay)` | PGM (P2 or P5), scaled to the display |
 
 The AniMe Matrix is tested against packet layouts only (no such hardware here), and only
 the GA402 family's dot geometry is implemented; other models accept the settings but not images.
+
+The Slash is on its own USB device (`0b05:193b`, report `0x5e`, 127-byte reports). Settings
+are written as output reports; the animation and the boot/sleep/shutdown/low-battery flags
+are firmware records that are read first and written back with only the wanted byte changed
+(`5e d2 02 01 08 <region>` as a feature report asks for a record: `ab` display options,
+`a0` boot, `a1` sleep, `a2` low battery, `a4` shutdown; `5e d2 03 00 0c` the animation). A
+flag is 1 when set, the sleep one included. After applying everything at start the daemon
+reads the display options and animation back and logs a difference. On the first start,
+before `/var/lib/tspmo/lid` exists, the settings are taken from the firmware's records.
 
 Stored in `/var/lib/tspmo/lid`.
 

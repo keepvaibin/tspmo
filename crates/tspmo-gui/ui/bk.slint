@@ -107,6 +107,9 @@ export global Bk {
     in property <color> kb-color: #ffffff;
     in property <int> kb-color-idx;
     in property <int> kb-speed;
+    // What the current effect takes (from the daemon's ModeParams): a rainbow has no colour.
+    in property <bool> kb-uses-color: true;
+    in property <bool> kb-uses-speed: true;
     in property <[bool]> kb-states;
     in property <string> kb-idle;
 

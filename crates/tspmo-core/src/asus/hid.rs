@@ -116,6 +116,82 @@ pub fn find(root: &SysRoot, vendor: u16, product: u16, report_id: u8) -> Option<
         .find(|h| h.speaks(report_id))
 }
 
+/// A feature-report request: `HIDIOCSFEATURE` / `HIDIOCGFEATURE` with a buffer of `len` bytes.
+struct Feature<'a> {
+    nr: u8,
+    buf: &'a mut [u8],
+}
+
+// SAFETY: the opcode is `_IOC(READ|WRITE, 'H', nr, len)` with `len` the buffer's length, which is
+// what the hidraw driver expects for `HIDIOCSFEATURE(len)` (nr 6) and `HIDIOCGFEATURE(len)`
+// (nr 7); it reads/writes at most `len` bytes of the buffer, which outlives the call.
+#[allow(unsafe_code)]
+unsafe impl rustix::ioctl::Ioctl for Feature<'_> {
+    type Output = usize;
+    const IS_MUTATING: bool = true;
+
+    fn opcode(&self) -> rustix::ioctl::Opcode {
+        rustix::ioctl::opcode::from_components(
+            rustix::ioctl::Direction::ReadWrite,
+            b'H',
+            self.nr,
+            self.buf.len(),
+        )
+    }
+
+    fn as_ptr(&mut self) -> *mut core::ffi::c_void {
+        self.buf.as_mut_ptr().cast()
+    }
+
+    unsafe fn output_from_ptr(
+        out: rustix::ioctl::IoctlOutput,
+        _: *mut core::ffi::c_void,
+    ) -> rustix::io::Result<usize> {
+        Ok(out as usize)
+    }
+}
+
+#[allow(unsafe_code)]
+fn feature(fd: &std::fs::File, nr: u8, buf: &mut [u8]) -> io::Result<usize> {
+    // SAFETY: see `Feature`.
+    unsafe { rustix::ioctl::ioctl(fd, Feature { nr, buf }) }.map_err(io::Error::from)
+}
+
+/// An opened node, for the length of one exchange: dropped (closed) as soon as the caller is
+/// done, so the USB device is free to autosuspend again.
+pub struct Open(std::fs::File);
+
+impl Open {
+    /// Open read-write: questions need to read the answer back.
+    pub fn new(root: &SysRoot, hid: &HidRaw) -> io::Result<Self> {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(root.path(format!("/dev/{}", hid.node)))
+            .map(Self)
+    }
+
+    /// An output report, exactly as given (one `write(2)`).
+    pub fn write(&mut self, packet: &[u8]) -> io::Result<()> {
+        self.0.write_all(packet)
+    }
+
+    /// A feature report of `len` bytes (zero padded), id first.
+    pub fn set_feature(&mut self, packet: &[u8], len: usize) -> io::Result<()> {
+        let mut b = packet.to_vec();
+        b.resize(len.max(packet.len()), 0);
+        feature(&self.0, 6, &mut b).map(drop)
+    }
+
+    /// The feature report `report_id`, `len` bytes long (id included).
+    pub fn get_feature(&mut self, report_id: u8, len: usize) -> io::Result<Vec<u8>> {
+        let mut b = vec![0u8; len];
+        b[0] = report_id;
+        feature(&self.0, 7, &mut b)?;
+        Ok(b)
+    }
+}
+
 /// Open the node, write each packet with one `write(2)`, close it.
 pub fn write(root: &SysRoot, hid: &HidRaw, packets: &[Vec<u8>]) -> io::Result<()> {
     let mut f = std::fs::OpenOptions::new()

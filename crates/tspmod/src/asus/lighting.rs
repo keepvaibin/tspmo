@@ -1,6 +1,13 @@
 //! `org.tspmo.Lighting1`: keyboard brightness, effects, per-power-source profiles, power-state
 //! lighting and an idle timeout.
 //!
+//! What is offered follows what the keyboard's controller says it is (`Kind`): a one-colour
+//! backlight gets no colour choice, a single zone gets no waves. Nothing is sent that the
+//! board does not support, and the state shown is the state the keyboard was last told: at
+//! start-up and after resume the daemon tells the keyboard everything again (wake-up string,
+//! power states, effect, brightness), so the kernel's idea of the LED and the controller's
+//! cannot stay apart.
+//!
 //! The Aura controller is written to per change (open, write, close): holding the hidraw node
 //! open would keep the USB device awake.
 
@@ -25,8 +32,9 @@ struct State {
     on_battery: bool,
     /// What the keyboard shows now.
     brightness: u8,
-    effect: Option<Effect>,
-    power: Option<PowerStates>,
+    /// The effect the keyboard was last told (the factory's steady white until chosen).
+    effect: Effect,
+    power: PowerStates,
     /// Seconds without input before the backlight goes dark (0: never).
     idle: u32,
     /// The level to restore when input resumes, while the idle timeout has darkened the keyboard.
@@ -45,6 +53,7 @@ pub struct Lighting {
     st: Mutex<State>,
 }
 
+/// `(mode, colour, colour2, speed, direction)`: no field is ever empty.
 pub type Row = (String, (u8, u8, u8), (u8, u8, u8), String, String);
 
 fn src_index(on_battery: bool) -> usize {
@@ -75,14 +84,15 @@ impl Lighting {
         let caps = lighting::detect(&root);
         let bl = caps.backlight.clone()?;
         let brightness = bl.get(&root).unwrap_or(0);
+        let on_battery = power_supply::on_ac(&root) == Some(false);
         let l = Self {
             file: dir.join("lighting"),
             st: Mutex::new(State {
                 profiles: [Profile::default(); 2],
-                on_battery: power_supply::on_ac(&root) == Some(false),
+                on_battery,
                 brightness,
-                effect: None,
-                power: None,
+                effect: Effect::default(),
+                power: PowerStates::default(),
                 idle: 0,
                 dimmed_from: None,
                 eco: false,
@@ -91,6 +101,12 @@ impl Lighting {
             root,
         };
         l.load();
+        {
+            let mut st = lock(&l.st);
+            if let Some(e) = st.profiles[src_index(st.on_battery)].effect {
+                st.effect = e;
+            }
+        }
         Some(l)
     }
 
@@ -126,12 +142,12 @@ impl Lighting {
                     }
                 }
                 ["power", b, a, s, d] => {
-                    st.power = Some(PowerStates {
+                    st.power = PowerStates {
                         boot: b == "1",
                         awake: a == "1",
                         sleep: s == "1",
                         shutdown: d == "1",
-                    });
+                    };
                 }
                 ["idle", n] => st.idle = n.parse().unwrap_or(0),
                 _ => {}
@@ -157,15 +173,14 @@ impl Lighting {
                 ));
             }
         }
-        if let Some(p) = st.power {
-            t.push_str(&format!(
-                "power {} {} {} {}\n",
-                u8::from(p.boot),
-                u8::from(p.awake),
-                u8::from(p.sleep),
-                u8::from(p.shutdown)
-            ));
-        }
+        let p = st.power;
+        t.push_str(&format!(
+            "power {} {} {} {}\n",
+            u8::from(p.boot),
+            u8::from(p.awake),
+            u8::from(p.sleep),
+            u8::from(p.shutdown)
+        ));
         t.push_str(&format!("idle {}\n", st.idle));
         if let Some(dir) = self.file.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -192,7 +207,7 @@ impl Lighting {
 
     fn write_effect(&self, e: &Effect) {
         if let Some(hid) = &self.caps.aura {
-            if let Err(err) = lighting::write_effect(&self.root, hid, e) {
+            if let Err(err) = lighting::write_effect(&self.root, hid, self.caps.kind, e, true) {
                 eprintln!("tspmod: keyboard effect: {err}");
             }
         }
@@ -206,22 +221,23 @@ impl Lighting {
         }
     }
 
-    /// Bring the keyboard to the profile of the current power source (start-up, resume, plug).
+    /// Tell the keyboard everything: the profile of the current power source (start-up, resume,
+    /// plug). The controller gets its wake-up string, the power states and the effect; the LED
+    /// gets its level written even if it already reads the same.
     pub fn apply(&self) {
-        let (p, power) = {
+        let (p, power, effect) = {
             let mut st = lock(&self.st);
             st.dimmed_from = None;
-            (st.profiles[src_index(st.on_battery)], st.power)
+            let p = st.profiles[src_index(st.on_battery)];
+            if let Some(e) = p.effect {
+                st.effect = e;
+            }
+            (p, st.power, st.effect)
         };
-        if let Some(power) = power {
-            self.write_power(power);
-        }
-        if let Some(e) = p.effect {
-            self.write_effect(&e);
-            lock(&self.st).effect = Some(e);
-        }
-        if let Some(b) = p.brightness {
-            self.write_brightness(b);
+        if let Some(hid) = &self.caps.aura {
+            if let Err(err) = lighting::write_all(&self.root, hid, self.caps.kind, power, &effect) {
+                eprintln!("tspmod: keyboard: {err}");
+            }
         }
         let live = self
             .caps
@@ -229,7 +245,9 @@ impl Lighting {
             .as_ref()
             .and_then(|b| b.get(&self.root))
             .unwrap_or(0);
-        lock(&self.st).brightness = live;
+        let level = p.brightness.unwrap_or(live).min(self.max());
+        self.write_brightness(level);
+        lock(&self.st).brightness = level;
     }
 
     pub fn on_power_source(&self, on_battery: bool) {
@@ -281,21 +299,67 @@ impl Lighting {
         Ok(())
     }
 
+    fn modes_list(&self) -> String {
+        self.caps
+            .modes
+            .iter()
+            .map(|m| m.name())
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// Set an effect from its parts as a client gives them. An empty speed or direction keeps
+    /// the current one; the mode must be one this keyboard has, and a colour effect needs a
+    /// colour that is not black (to turn the light off, lower the brightness).
+    pub fn set_effect_row(&self, source: &str, row: Row) -> Result<(), String> {
+        let (mode, c1, c2, speed, dir) = row;
+        if self.caps.modes.is_empty() {
+            return Err("this keyboard has no lighting effects (brightness only)".into());
+        }
+        let cur = lock(&self.st).effect;
+        let m = Mode::parse(&mode)
+            .filter(|m| self.caps.modes.contains(m))
+            .ok_or_else(|| {
+                format!(
+                    "effect '{mode}' is not available on this keyboard (use {})",
+                    self.modes_list()
+                )
+            })?;
+        let speed = if speed.is_empty() {
+            cur.speed
+        } else {
+            Speed::parse(&speed).ok_or_else(|| format!("speed '{speed}' is not low, med or high"))?
+        };
+        let direction = if dir.is_empty() {
+            cur.direction
+        } else {
+            Direction::parse(&dir)
+                .ok_or_else(|| format!("direction '{dir}' is not right, left, up or down"))?
+        };
+        let e = Effect {
+            mode: m,
+            colour: [c1.0, c1.1, c1.2],
+            colour2: [c2.0, c2.1, c2.2],
+            speed,
+            direction,
+        };
+        self.set_effect(source, e)
+    }
+
     pub fn set_effect(&self, source: &str, e: Effect) -> Result<(), String> {
         if !self.caps.modes.contains(&e.mode) {
             return Err(if self.caps.modes.is_empty() {
-                "no lighting effects on this keyboard".into()
+                "this keyboard has no lighting effects (brightness only)".into()
             } else {
                 format!(
-                    "effect must be one of {}",
-                    self.caps
-                        .modes
-                        .iter()
-                        .map(|m| m.name())
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    "effect '{}' is not available on this keyboard (use {})",
+                    e.mode.name(),
+                    self.modes_list()
                 )
             });
+        }
+        if self.caps.kind.has_colour() && e.mode.uses_colour() && e.colour == [0, 0, 0] {
+            return Err("the colour is black; lower the brightness to turn the light off".into());
         }
         let live = {
             let mut st = lock(&self.st);
@@ -306,7 +370,7 @@ impl Lighting {
         };
         if live {
             self.write_effect(&e);
-            lock(&self.st).effect = Some(e);
+            lock(&self.st).effect = e;
         }
         Ok(())
     }
@@ -317,7 +381,7 @@ impl Lighting {
         }
         {
             let mut st = lock(&self.st);
-            st.power = Some(p);
+            st.power = p;
             self.save(&st);
         }
         self.write_power(p);
@@ -337,7 +401,7 @@ impl Lighting {
     /// Next or previous effect (the Aura keys). Returns its name.
     pub fn cycle_effect(&self, forward: bool) -> Result<&'static str, String> {
         let modes = &self.caps.modes;
-        let cur = lock(&self.st).effect.unwrap_or_default();
+        let cur = lock(&self.st).effect;
         let n = modes.len();
         let next = modes
             .iter()
@@ -420,10 +484,6 @@ impl Lighting {
 
 pub struct Lighting1(pub Arc<Lighting>);
 
-fn rgb(c: (u8, u8, u8)) -> Rgb {
-    [c.0, c.1, c.2]
-}
-
 #[zbus::interface(name = "org.tspmo.Lighting1")]
 impl Lighting1 {
     #[zbus(property)]
@@ -436,19 +496,58 @@ impl Lighting1 {
         lock(&self.0.st).brightness
     }
 
+    /// What the backlight is, from the controller's own answer: `single-zone-white`,
+    /// `single-zone-rgb`, `multi-zone-rgb`, `per-key-rgb`, `unknown` (controller silent), or
+    /// `brightness-only` (no Aura controller).
+    #[zbus(property)]
+    fn kind(&self) -> String {
+        if self.0.has_effects() {
+            self.0.caps.kind.name()
+        } else {
+            "brightness-only"
+        }
+        .to_owned()
+    }
+
     /// Effects the keyboard has (empty: brightness only).
     #[zbus(property)]
     fn modes(&self) -> Vec<String> {
         self.0.caps.modes.iter().map(|m| m.name().to_owned()).collect()
     }
 
-    /// The effect showing: `(mode, colour, colour2, speed, direction)`; empty mode if never set.
+    /// What each effect takes, `(mode, colour, colour2, speed, direction)`: whether the field
+    /// has an effect on it. Rainbow effects bring their own colours, a one-colour keyboard has
+    /// no colour at all.
+    #[zbus(property)]
+    fn mode_params(&self) -> Vec<(String, bool, bool, bool, bool)> {
+        let colour = self.0.caps.kind.has_colour();
+        self.0
+            .caps
+            .modes
+            .iter()
+            .map(|m| {
+                (
+                    m.name().to_owned(),
+                    colour && m.uses_colour(),
+                    colour && m.uses_second_colour(),
+                    m.uses_speed(),
+                    m.uses_direction(),
+                )
+            })
+            .collect()
+    }
+
+    /// The speeds an effect can have.
+    #[zbus(property)]
+    fn speeds(&self) -> Vec<String> {
+        Speed::ALL.iter().map(|s| s.name().to_owned()).collect()
+    }
+
+    /// The effect showing: `(mode, colour, colour2, speed, direction)`. Before one is chosen,
+    /// the factory's: steady white.
     #[zbus(property)]
     fn effect(&self) -> Row {
-        lock(&self.0.st).effect.map_or(
-            (String::new(), (0, 0, 0), (0, 0, 0), String::new(), String::new()),
-            |e| Lighting::effect_row(&e),
-        )
+        Lighting::effect_row(&lock(&self.0.st).effect)
     }
 
     #[zbus(property)]
@@ -461,21 +560,21 @@ impl Lighting1 {
         .to_owned()
     }
 
-    /// `(source, brightness, effect...)` per power source; brightness -1 and an empty mode mean
-    /// "leave alone".
+    /// `(source, brightness, effect)` per power source: what applies when that source is in use
+    /// (the level and effect chosen for it, or what the keyboard shows now when none was).
     #[zbus(property)]
-    fn profiles(&self) -> Vec<(String, i32, Row)> {
+    fn profiles(&self) -> Vec<(String, u8, Row)> {
         let st = lock(&self.0.st);
         ["ac", "battery"]
             .iter()
             .enumerate()
             .map(|(i, name)| {
                 let p = &st.profiles[i];
-                let row = p.effect.map_or(
-                    (String::new(), (0, 0, 0), (0, 0, 0), String::new(), String::new()),
-                    |e| Lighting::effect_row(&e),
-                );
-                ((*name).to_owned(), p.brightness.map_or(-1, i32::from), row)
+                (
+                    (*name).to_owned(),
+                    p.brightness.unwrap_or(st.brightness),
+                    Lighting::effect_row(&p.effect.unwrap_or(st.effect)),
+                )
             })
             .collect()
     }
@@ -483,7 +582,7 @@ impl Lighting1 {
     /// Lit in `(boot, awake, sleep, shutdown)`.
     #[zbus(property)]
     fn power_states(&self) -> (bool, bool, bool, bool) {
-        let p = lock(&self.0.st).power.unwrap_or_default();
+        let p = lock(&self.0.st).power;
         (p.boot, p.awake, p.sleep, p.shutdown)
     }
 
@@ -509,7 +608,8 @@ impl Lighting1 {
         Ok(())
     }
 
-    /// `effect`: `(mode, colour, colour2, speed, direction)`.
+    /// `effect`: `(mode, colour, colour2, speed, direction)`. The mode must be one of `Modes`;
+    /// an empty speed or direction keeps the current one.
     async fn set_effect(
         &self,
         source: String,
@@ -518,17 +618,8 @@ impl Lighting1 {
         #[zbus(connection)] conn: &zbus::Connection,
     ) -> zbus::fdo::Result<()> {
         authorize(conn, &hdr, super::SET_LIGHTING).await?;
-        let (mode, colour, colour2, speed, direction) = effect;
-        let bad = |what: &str, v: &str| zbus::fdo::Error::InvalidArgs(format!("unknown {what} '{v}'"));
-        let e = Effect {
-            mode: Mode::parse(&mode).ok_or_else(|| bad("effect", &mode))?,
-            colour: rgb(colour),
-            colour2: rgb(colour2),
-            speed: Speed::parse(&speed).ok_or_else(|| bad("speed", &speed))?,
-            direction: Direction::parse(&direction).ok_or_else(|| bad("direction", &direction))?,
-        };
         self.0
-            .set_effect(&source, e)
+            .set_effect_row(&source, effect)
             .map_err(zbus::fdo::Error::InvalidArgs)?;
         changed(conn).await;
         Ok(())
@@ -747,7 +838,90 @@ mod tests {
             shutdown: false,
         })
         .unwrap();
-        assert_eq!(written(&fx)[..7], [0x5d, 0xbd, 0x01, 0b0000_1000, 0, 0, 0]);
+        assert_eq!(written(&fx)[..8], [0x5d, 0xbd, 0x01, 0b0000_1000, 0, 0, 0, 0xff]);
+    }
+
+    #[test]
+    fn apply_tells_the_keyboard_everything() {
+        let fx = Fix::new("light-apply");
+        hid(&fx);
+        fx.set(BR, "2\n");
+        let l = light(&fx);
+        l.apply();
+        let w = written(&fx);
+        // wake-up string, power states, effect, set: 4 reports of 63 bytes.
+        assert_eq!(w.len(), 4 * 63);
+        assert_eq!(&w[..5], &[0x5d, b'A', b'S', b'U', b'S']);
+        assert_eq!(&w[63..68], &[0x5d, 0xbd, 1, 0xaa, 0]);
+        // The factory's steady white until something else is chosen.
+        assert_eq!(&w[126..134], &[0x5d, 0xb3, 0, 0, 255, 255, 255, 0xeb]);
+        assert_eq!(&w[189..191], &[0x5d, 0xb5]);
+        assert_eq!(fx.get(BR), "2");
+    }
+
+    #[test]
+    fn the_effect_is_never_empty() {
+        let fx = Fix::new("light-never-empty");
+        let l = light(&fx);
+        let i = Lighting1(Arc::new(l));
+        let e = i.effect();
+        assert_eq!(e.0, "static");
+        assert!(!e.3.is_empty() && !e.4.is_empty());
+        assert!(i.modes().iter().all(|m| !m.is_empty()));
+        for (name, br, row) in i.profiles() {
+            assert!(!name.is_empty() && !row.0.is_empty(), "{br}");
+        }
+        assert!(i.speeds().iter().all(|s| !s.is_empty()));
+        assert!(!i.kind().is_empty());
+    }
+
+    #[test]
+    fn clients_may_leave_speed_and_direction_empty_but_not_the_mode() {
+        let fx = Fix::new("light-lenient");
+        hid(&fx);
+        let l = light(&fx);
+        l.set_effect_row("", ("breathe".into(), (255, 0, 0), (0, 0, 255), "high".into(), "".into()))
+            .unwrap();
+        // Speed kept from the effect before.
+        l.set_effect_row("", ("pulse".into(), (0, 255, 0), (0, 0, 0), "".into(), "".into()))
+            .unwrap();
+        let st = lock(&l.st);
+        assert_eq!((st.effect.mode, st.effect.speed), (Mode::Pulse, Speed::High));
+        drop(st);
+        let err = l
+            .set_effect_row("", ("".into(), (1, 1, 1), (0, 0, 0), "".into(), "".into()))
+            .unwrap_err();
+        assert!(err.contains("not available") && err.contains("static"), "{err}");
+        assert!(
+            l.set_effect_row("", ("static".into(), (1, 1, 1), (0, 0, 0), "warp".into(), "".into()))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn black_is_not_a_colour() {
+        let fx = Fix::new("light-black");
+        hid(&fx);
+        let l = light(&fx);
+        let before = written(&fx).len();
+        let e = Effect {
+            colour: [0, 0, 0],
+            ..Effect::default()
+        };
+        assert!(l.set_effect("", e).unwrap_err().contains("brightness"));
+        assert_eq!(written(&fx).len(), before, "nothing sent");
+    }
+
+    #[test]
+    fn brightness_is_written_even_when_it_reads_the_same() {
+        let fx = Fix::new("light-forced");
+        fx.set(BR, "3\n");
+        let l = light(&fx);
+        let path = fx.root().path(BR);
+        std::fs::remove_file(&path).unwrap();
+        // If the level is "already right" nothing may be skipped: the file comes back.
+        l.set_brightness("", 3).unwrap();
+        assert_eq!(fx.get(BR), "3");
     }
 
     #[test]

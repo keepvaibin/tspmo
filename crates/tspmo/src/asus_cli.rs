@@ -374,12 +374,26 @@ fn light(a: &[&str]) -> Result<(), String> {
                 return Ok(());
             }
             let e: Effect = l.get("Effect")?;
-            if !e.0.is_empty() {
-                println!(
-                    "effect     {} {:02x}{:02x}{:02x} {:02x}{:02x}{:02x} {} {}",
-                    e.0, e.1.0, e.1.1, e.1.2, e.2.0, e.2.1, e.2.2, e.3, e.4
-                );
+            let kind: String = l.get("Kind")?;
+            let params: Vec<(String, bool, bool, bool, bool)> = l.get("ModeParams")?;
+            // Only what the current effect takes: a rainbow has no colour, static no speed.
+            let mut shown = e.0.clone();
+            if let Some((_, c1, c2, speed, dir)) = params.iter().find(|p| p.0 == e.0) {
+                if *c1 {
+                    shown.push_str(&format!(" {:02x}{:02x}{:02x}", e.1.0, e.1.1, e.1.2));
+                }
+                if *c2 {
+                    shown.push_str(&format!(" {:02x}{:02x}{:02x}", e.2.0, e.2.1, e.2.2));
+                }
+                if *speed {
+                    shown.push_str(&format!(" {}", e.3));
+                }
+                if *dir {
+                    shown.push_str(&format!(" {}", e.4));
+                }
             }
+            println!("backlight  {kind}");
+            println!("effect     {shown}");
             println!("effects    {}", modes.join(" "));
             let (b, w, s, d): (bool, bool, bool, bool) = l.get("PowerStates")?;
             let f = |v: bool| if v { "on" } else { "off" };
@@ -460,10 +474,16 @@ fn lid(a: &[&str]) -> Result<(), String> {
             let interval: u8 = l.get("SlashInterval")?;
             let mode: String = l.get("SlashMode")?;
             let show: Vec<(String, bool)> = l.get("SlashShow")?;
+            let lit: bool = l.get("SlashLit")?;
+            let max: u8 = l.get("SlashIntervalMax")?;
+            let levels: Vec<(String, u8)> = l.get("SlashBrightnessLevels")?;
             println!(
-                "slash {}  brightness {brightness}  interval {interval}  mode {mode}",
-                if enabled { "on" } else { "off" }
+                "slash {}{}  brightness {brightness}  interval {interval} s (0-{max})  mode {mode}",
+                if enabled { "on" } else { "off" },
+                if enabled && !lit { " (dark on battery)" } else { "" }
             );
+            let steps: Vec<String> = levels.iter().map(|(n, v)| format!("{n}={v}")).collect();
+            println!("levels {}", steps.join(" "));
             let s: Vec<String> = show
                 .iter()
                 .map(|(n, on)| format!("{n} {}", if *on { "on" } else { "off" }))
@@ -475,13 +495,19 @@ fn lid(a: &[&str]) -> Result<(), String> {
         }
         ["on"] => l.call("SetSlashEnabled", &(true,)),
         ["off"] => l.call("SetSlashEnabled", &(false,)),
-        ["brightness", v] => l.call(
-            "SetSlashBrightness",
-            &(v.parse::<u8>().map_err(|_| format!("'{v}': 0-255"))?,),
-        ),
+        ["brightness", v] => {
+            let levels: Vec<(String, u8)> = l.get("SlashBrightnessLevels")?;
+            let n = levels
+                .iter()
+                .find(|(name, _)| name == v)
+                .map(|(_, n)| *n)
+                .or_else(|| v.parse::<u8>().ok())
+                .ok_or_else(|| format!("'{v}': 0-255 or off, low, medium, high"))?;
+            l.call("SetSlashBrightness", &(n,))
+        }
         ["interval", v] => l.call(
             "SetSlashInterval",
-            &(v.parse::<u8>().map_err(|_| format!("'{v}': 0-255"))?,),
+            &(v.parse::<u8>().map_err(|_| format!("'{v}': 0-5 seconds"))?,),
         ),
         ["mode", m] => l.call("SetSlashMode", &(*m,)),
         ["show", what, v] => l.call("SetSlashShow", &(*what, on_off(v)?)),
