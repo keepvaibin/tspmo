@@ -38,6 +38,20 @@ ENVIRONMENT:
 ";
 
 fn main() -> ExitCode {
+    // `tspmo status | head -1`: a closed pipe ends the program quietly, as other tools do.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let msg = info
+            .payload()
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| info.payload().downcast_ref::<&str>().copied())
+            .unwrap_or_default();
+        if msg.contains("Broken pipe") {
+            std::process::exit(0);
+        }
+        default_hook(info);
+    }));
     let args: Vec<String> = std::env::args().skip(1).collect();
     let root = SysRoot::from_env();
     match args.first().map(String::as_str) {
