@@ -3,6 +3,7 @@
 //! Runs as root under systemd. Owns the power-profiles D-Bus API (replacing
 //! power-profiles-daemon) and `org.tspmo.Daemon1`.
 
+mod asus;
 mod dbus;
 mod events;
 mod gpu;
@@ -23,6 +24,7 @@ fn main() {
 
 fn run() -> zbus::Result<()> {
     let root = SysRoot::from_env();
+    let asus = asus::init(&root);
     let mut daemon = state::Daemon::new(root);
     // Tune the machine before anyone can ask: the profile, then the GPU policy.
     daemon.apply(true);
@@ -39,10 +41,11 @@ fn run() -> zbus::Result<()> {
         Ok("session") => zbus::blocking::connection::Builder::session()?,
         _ => zbus::blocking::connection::Builder::system()?,
     };
-    let conn = builder
+    let builder = builder
         .serve_at(dbus::PPD_PATH, dbus::PowerProfiles(Arc::clone(&shared)))?
         .serve_at(dbus::HADESS_PATH, dbus::HadessPowerProfiles(Arc::clone(&shared)))?
-        .serve_at(dbus::TSPMO_PATH, dbus::Tspmo(Arc::clone(&shared)))?
+        .serve_at(dbus::TSPMO_PATH, dbus::Tspmo(Arc::clone(&shared)))?;
+    let conn = asus::register(builder, &asus)?
         .name(dbus::PPD_NAME)?
         .name(dbus::HADESS_NAME)?
         .name(dbus::TSPMO_NAME)?
@@ -52,6 +55,8 @@ fn run() -> zbus::Result<()> {
                 "{e} (is power-profiles-daemon or tuned-ppd still running? tspmod replaces them)"
             ))
         })?;
+
+    asus::start(&conn, &asus);
 
     {
         let d = shared.lock().unwrap_or_else(|p| p.into_inner());
