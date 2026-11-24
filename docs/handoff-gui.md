@@ -55,3 +55,25 @@ cargo fmt --all && cargo clippy --workspace --all-targets -- -D warnings && carg
   (`spectacle -a` captures the focused window, which may be their terminal).
 - `TSPMO_GUI_ID` isolates test instances from the real `@tspmo-gui-<uid>` socket.
 - Cargo.lock: slint pulled zbus 5.19 (was 5.13); other branches will need a lock merge.
+
+## Update after merge of master (8ef3a58)
+
+Done since: dGPU line now reads "dGPU off" (Eco) / "dGPU asleep" / "dGPU active" (unit-tested);
+Screen bindings already match `docs/dbus.md` Display1 (Rates, Refresh, RefreshPolicy,
+FlickerFree/FlickerSetting, Brightness, ColorMode(s), EyeCare); the four modes incl. Eco+ work.
+Nothing was run that needed restoring (no RAPL changes, no test processes left).
+
+Still open, in this order:
+1. Layer-shell platform (new `src/layer.rs`, add `smithay-client-toolkit = "0.19"` default
+   features). sctk 0.19.2 API checked: `LayerShell::bind`, `create_layer_surface(qh, surface,
+   Layer::Top, Some("tspmo"), None)`, `set_anchor(Anchor::BOTTOM | Anchor::RIGHT)`,
+   `set_margin(0, 12, 12, 0)`, `set_exclusive_zone(0)`, `set_keyboard_interactivity`,
+   `set_size`; keyboard repeat via `seat_state.get_keyboard_with_repeat(qh, &seat, None,
+   loop_handle, callback)` (needs `delegate_keyboard!(State)`); cursor via
+   `get_pointer_with_theme` (see sctk `examples/themed_window.rs`); fractional scale and
+   viewporter via `reexports::protocols::wp::{fractional_scale,viewporter}` with
+   `GlobalData` Dispatch impls. Render with `MinimalSoftwareWindow` and the `Px` TargetPixel in
+   `src/snapshot.rs`; use `slint::platform::set_platform` only when layer-shell binds, else winit.
+2. Re-verify input after the redesign (keys, wheel, drag, ROG key) only when the user is away
+   (`loginctl show-session` IdleHint); light theme and OSD via `--snapshot`/`--osd`.
+3. Binary size experiment, then Eco+-cap timing (read RAPL limits first, restore after).
