@@ -107,6 +107,50 @@ fn announce(root: &SysRoot, addr: &str, action: &str) {
     }
 }
 
+/// While the dGPU is added or removed, the firmware sends ACPI video "output changed"
+/// notifications, which the kernel turns into a display-switch key press (KEY_SWITCHVIDEOMODE):
+/// KDE then pops up its "which screens?" chooser. Mute only those events for the duration of a
+/// switch (plus a settle time for late notifications); brightness events are untouched.
+struct MuteDisplaySwitchKey {
+    root: SysRoot,
+}
+
+const VIDEO_KEY_EVENTS: &str = "/sys/module/video/parameters/report_key_events";
+
+/// Overlapping switches share one mute: the original value is saved by the first and restored
+/// by the last.
+static MUTE: std::sync::Mutex<(u32, Option<String>)> = std::sync::Mutex::new((0, None));
+
+impl MuteDisplaySwitchKey {
+    fn new(root: &SysRoot) -> Self {
+        let mut m = MUTE.lock().unwrap_or_else(|p| p.into_inner());
+        if m.0 == 0 {
+            m.1 = root.read_opt(VIDEO_KEY_EVENTS);
+            if let Some(prev) = &m.1 {
+                // Bit 0 = output-switch events, bit 1 = brightness events; -1 means "all".
+                let v: i32 = prev.trim().parse().unwrap_or(-1);
+                let all = if v < 0 { 3 } else { v };
+                let _ = root.write(VIDEO_KEY_EVENTS, &(all & !1).to_string());
+            }
+        }
+        m.0 += 1;
+        Self { root: root.clone() }
+    }
+}
+
+impl Drop for MuteDisplaySwitchKey {
+    fn drop(&mut self) {
+        std::thread::sleep(Duration::from_secs(3));
+        let mut m = MUTE.lock().unwrap_or_else(|p| p.into_inner());
+        m.0 = m.0.saturating_sub(1);
+        if m.0 == 0 {
+            if let Some(prev) = m.1.take() {
+                let _ = self.root.write(VIDEO_KEY_EVENTS, &prev);
+            }
+        }
+    }
+}
+
 /// Fast checks for problems the user can act on, before any slow work starts.
 pub fn precheck(root: &SysRoot, st: &Status, target: Mode) -> Result<(), String> {
     match st.switcher {
@@ -300,6 +344,7 @@ pub fn begin(
         .stack_size(256 * 1024)
         .spawn(move || {
             zbus::block_on(emit_changed(&worker_conn, &worker_shared));
+            let mute = MuteDisplaySwitchKey::new(&root);
             let result = switch(&root, &st, target);
             let boot_mux = lock(&worker_shared).boot_mux;
             let fresh = crate::state::Daemon::read_gpu_status(&root, boot_mux);
@@ -324,6 +369,7 @@ pub fn begin(
                 eprintln!("tspmod: gpu: {}", d.gpu_message);
             }
             zbus::block_on(emit_changed(&worker_conn, &worker_shared));
+            drop(mute); // restores after a settle time, off the critical path
             if automatic {
                 crate::watch::gpu_retry(&worker_conn, &worker_shared);
             }
