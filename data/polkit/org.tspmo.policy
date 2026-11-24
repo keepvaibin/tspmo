@@ -27,4 +27,40 @@
     <message>Authentication is required to change screen settings</message>
     <defaults><allow_any>auth_admin_keep</allow_any><allow_inactive>auth_admin_keep</allow_inactive><allow_active>yes</allow_active></defaults>
   </action>
+
+  <action id="org.tspmo.set-fans">
+    <description>Change fan curves</description>
+    <message>Authentication is required to change fan curves</message>
+    <defaults><allow_any>auth_admin_keep</allow_any><allow_inactive>auth_admin_keep</allow_inactive><allow_active>yes</allow_active></defaults>
+  </action>
+
+  <action id="org.tspmo.set-power">
+    <description>Change power limits</description>
+    <message>Authentication is required to change power limits</message>
+    <defaults><allow_any>auth_admin_keep</allow_any><allow_inactive>auth_admin_keep</allow_inactive><allow_active>yes</allow_active></defaults>
+  </action>
+
+  <action id="org.tspmo.set-battery">
+    <description>Change battery charging</description>
+    <message>Authentication is required to change battery charging</message>
+    <defaults><allow_any>auth_admin_keep</allow_any><allow_inactive>auth_admin_keep</allow_inactive><allow_active>yes</allow_active></defaults>
+  </action>
+
+  <action id="org.tspmo.set-hardware">
+    <description>Change firmware settings</description>
+    <message>Authentication is required to change firmware settings</message>
+    <defaults><allow_any>auth_admin_keep</allow_any><allow_inactive>auth_admin_keep</allow_inactive><allow_active>yes</allow_active></defaults>
+  </action>
+
+  <action id="org.tspmo.set-lighting">
+    <description>Change keyboard lighting</description>
+    <message>Authentication is required to change keyboard lighting</message>
+    <defaults><allow_any>auth_admin_keep</allow_any><allow_inactive>auth_admin_keep</allow_inactive><allow_active>yes</allow_active></defaults>
+  </action>
+
+  <action id="org.tspmo.set-lid">
+    <description>Change lid display</description>
+    <message>Authentication is required to change lid display</message>
+    <defaults><allow_any>auth_admin_keep</allow_any><allow_inactive>auth_admin_keep</allow_inactive><allow_active>yes</allow_active></defaults>
+  </action>
 </policyconfig>

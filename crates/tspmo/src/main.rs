@@ -1,5 +1,6 @@
 //! `tspmo` — Thermal & System Power Management Optimizer, command line.
 
+mod asus_cli;
 mod bench;
 mod client;
 mod display;
@@ -81,6 +82,7 @@ fn main() -> ExitCode {
         }
         Some("profile") => profile(args.get(1).map(String::as_str)),
         Some("gpu") => gpu(args.get(1).map(String::as_str)),
+        Some(c) if asus_cli::handles(c) => asus_cli::run(c, &args[1..]),
         Some("display") => display::run(&args[1..]),
         Some("bench") => bench::run(&args[1..]),
         Some("ping") => ping(args.get(1).and_then(|n| n.parse().ok()).unwrap_or(50)),
@@ -102,7 +104,7 @@ fn main() -> ExitCode {
             }
         },
         None | Some("help" | "-h" | "--help") => {
-            print!("{USAGE}");
+            print!("{USAGE}\n{}", asus_cli::USAGE);
             ExitCode::SUCCESS
         }
         Some("-V" | "--version") => {

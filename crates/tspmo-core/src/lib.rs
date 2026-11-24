@@ -1,6 +1,7 @@
 //! tspmo core: what this machine can do ([`machine`]), what is wrong with it ([`doctor`]),
 //! how each power profile tunes it ([`power`]) and its GPU modes ([`gpu`]).
 
+pub mod asus;
 pub mod display;
 pub mod doctor;
 pub mod gpu;
