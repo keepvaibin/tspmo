@@ -127,6 +127,11 @@ pub fn apply_profile(shared: &Shared) -> Result<(), String> {
         let s = lock(shared);
         let dim_pct = s.flicker_state.dimming_pct.round().clamp(1.0, 100.0) as u32;
         let mode = s.color.mode;
+        if !s.compositor {
+            drop(s);
+            lock(shared).color.dimmed = dim_pct < 100;
+            return Ok(());
+        }
         let connector = s.connector().map(str::to_owned).ok_or("no internal panel")?;
         let (path, bytes) = if mode == Mode::Native && dim_pct >= 100 {
             (None, Vec::new())

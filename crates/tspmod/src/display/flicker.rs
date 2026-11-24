@@ -15,8 +15,8 @@ use std::io::{Read, Seek, SeekFrom};
 use tspmo_core::display::dimming;
 use tspmo_sys::{SysRoot, backlight};
 
-/// The largest backlight move, in percent, read as a key step rather than a slider jump.
-const MAX_STEP_PCT: f64 = 10.0;
+/// How long the backlight must hold still before the daemon treats it as the user's choice.
+const SETTLE: std::time::Duration = std::time::Duration::from_millis(120);
 
 /// The daemon's view of brightness.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -98,20 +98,27 @@ fn apply_level(shared: &Shared, level: f64) -> Result<(), String> {
             dimming_pct: 100.0,
         }
     };
-    {
-        let mut s = lock(shared);
-        s.flicker_state = Runtime {
-            level: level.clamp(1.0, 100.0),
-            written_pct: split.backlight_pct,
-            dimming_pct: split.dimming_pct,
-        };
+    let before = lock(shared).flicker_state;
+    let record = |r: Runtime| lock(shared).flicker_state = r;
+    let next = Runtime {
+        level: level.clamp(1.0, 100.0),
+        written_pct: split.backlight_pct,
+        dimming_pct: split.dimming_pct,
+    };
+    // The dimming goes through the compositor; skip it when nothing is (or was) dimmed. It
+    // goes first: if the compositor refuses, the backlight must stay where it is, or the
+    // screen would be left brighter than asked with nothing to darken it.
+    record(next);
+    if before.level != next.level {
+        lock(shared).save();
+    }
+    if split.dimming_pct < 99.5 || lock(shared).color.dimmed {
+        if let Err(e) = color::apply_profile(shared) {
+            record(before);
+            return Err(e);
+        }
     }
     write_backlight(&root, &dev, split.backlight_pct)?;
-    // The dimming goes through the compositor; skip it when nothing is (or was) dimmed.
-    let needs_profile = split.dimming_pct < 99.5 || lock(shared).color.dimmed;
-    if needs_profile {
-        color::apply_profile(shared)?;
-    }
     Ok(())
 }
 
@@ -155,41 +162,45 @@ pub fn reapply(shared: &Shared) -> Result<(), String> {
         (s.root.clone(), s.connector().map(str::to_owned), s.flicker_state)
     };
     let dev = device(&root, connector.as_deref()).ok_or("no backlight")?;
-    let level = if known.dimming_pct < 99.5 || known.level != 100.0 {
+    // The backlight where the daemon left it: still the level it remembers. Anywhere else:
+    // somebody changed it meanwhile (KDE restoring its own value at login), and that wins.
+    let hw = backlight_pct(&dev);
+    let level = if (hw - known.written_pct).abs() < 0.5 {
         known.level
     } else {
-        backlight_pct(&dev)
+        hw
     };
     apply_level(shared, level)
 }
 
-/// Something else changed the backlight (KDE's slider or keys, power management): work out
-/// the new level. Returns it when it differs from what the daemon last wrote.
+/// Something else changed the backlight (KDE's slider or keys, power management): that is the
+/// new level. KDE keeps its own value rather than re-reading the backlight the daemon holds at
+/// the floor, so its next key step starts from the level, not from the floor.
 pub fn follow(shared: &Shared) -> Result<(), String> {
-    let (root, connector, k, floor, on) = {
+    let (root, connector, written, on) = {
         let s = lock(shared);
         (
             s.root.clone(),
             s.connector().map(str::to_owned),
-            s.flicker_state,
-            s.floor_pct,
+            s.flicker_state.written_pct,
             s.flicker_free(),
         )
     };
     let dev = device(&root, connector.as_deref()).ok_or("no backlight")?;
     let now = backlight_pct(&dev);
-    if (now - k.written_pct).abs() < 0.3 {
+    if (now - written).abs() < 0.3 {
         return Ok(()); // our own write
     }
-    // Normally the backlight is the level. While dimmed it sits at the floor, so KDE's next
-    // key step starts from the floor, not from the level: small moves are steps from the level.
-    let delta = now - k.written_pct;
-    let level = if on && k.level < f64::from(floor) && delta.abs() <= MAX_STEP_PCT {
-        (k.level + delta).clamp(dimming::MIN_LEVEL_PCT, 100.0)
-    } else {
-        now
+    if on {
+        return apply_level(shared, now);
+    }
+    // Plain backlight: just keep track.
+    lock(shared).flicker_state = Runtime {
+        level: now.clamp(1.0, 100.0),
+        written_pct: now,
+        dimming_pct: 100.0,
     };
-    apply_level(shared, level)
+    Ok(())
 }
 
 /// Block until the backlight changes, call [`follow`] each time. The kernel signals changes of
@@ -212,10 +223,25 @@ pub fn watch(conn: zbus::Connection, shared: Shared) {
         .spawn(move || {
             use rustix::event::{PollFd, PollFlags, poll};
             let mut buf = String::with_capacity(16);
-            loop {
+            let mut read = |file: &mut std::fs::File| -> Option<String> {
                 buf.clear();
-                if file.seek(SeekFrom::Start(0)).is_err() || file.read_to_string(&mut buf).is_err() {
+                file.seek(SeekFrom::Start(0)).ok()?;
+                file.read_to_string(&mut buf).ok()?;
+                Some(buf.clone())
+            };
+            loop {
+                // KDE eases the backlight in small steps: wait until it stops moving, so the
+                // last value (the one the user asked for) is the one we act on.
+                let Some(mut last) = read(&mut file) else {
                     return;
+                };
+                loop {
+                    std::thread::sleep(SETTLE);
+                    match read(&mut file) {
+                        Some(v) if v == last => break,
+                        Some(v) => last = v,
+                        None => return,
+                    }
                 }
                 if lock(&shared).flicker_free() {
                     let _g = super::events::COMPOSITOR
@@ -256,6 +282,7 @@ mod tests {
         let mut s = State::with_state_dir(SysRoot::new(&d), false, d.join("state"));
         s.flicker = Tri::On;
         s.floor_pct = 30;
+        s.compositor = false;
         (d, Arc::new(Mutex::new(s)))
     }
 
@@ -288,25 +315,47 @@ mod tests {
     }
 
     #[test]
-    fn below_the_floor_the_backlight_is_held_and_steps_accumulate() {
+    fn below_the_floor_the_backlight_is_held_at_the_floor() {
         let (d, s) = fixture("below");
-        // Sidestep the compositor: no desktop in tests, so profile loading fails after the
-        // backlight is already written and the state recorded, which is what is checked here.
         external(&d, 77); // KDE: 15%
-        let _ = follow(&s);
+        follow(&s).unwrap();
         let k = lock(&s).flicker_state;
         assert_eq!(k.level.round(), 15.0);
         assert_eq!(raw(&d), (0.30f64 * 512.0).round() as u32); // held at the floor
         assert!((k.dimming_pct - 50.0).abs() < 1.0);
-        // KDE reads the floor back and steps down by 5%: the level follows.
-        let floor_raw = raw(&d);
-        external(&d, floor_raw - 26);
-        let _ = follow(&s);
+        // Our own write coming back as an event changes nothing.
+        follow(&s).unwrap();
+        assert_eq!(lock(&s).flicker_state, k);
+        // KDE steps from its own value (15%), down to 10%: the level follows.
+        external(&d, 51);
+        follow(&s).unwrap();
         assert_eq!(lock(&s).flicker_state.level.round(), 10.0);
-        // And back up.
-        external(&d, raw(&d) + 26);
-        let _ = follow(&s);
-        assert_eq!(lock(&s).flicker_state.level.round(), 15.0);
+        // Back above the floor: no dimming, the backlight is the level.
+        external(&d, 256);
+        follow(&s).unwrap();
+        let k = lock(&s).flicker_state;
+        assert_eq!((k.level.round(), k.dimming_pct), (50.0, 100.0));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn level_survives_a_restart() {
+        let (d, s) = fixture("restart");
+        external(&d, 77);
+        follow(&s).unwrap();
+        lock(&s).save();
+        // A new daemon finds the backlight where the old one left it: the saved level stands.
+        let mut s2 = State::with_state_dir(SysRoot::new(&d), false, d.join("state"));
+        s2.compositor = false;
+        s2.flicker = Tri::On;
+        assert_eq!(s2.flicker_state.level.round(), 15.0);
+        let s2 = Arc::new(Mutex::new(s2));
+        reapply(&s2).unwrap();
+        assert_eq!(lock(&s2).flicker_state.level.round(), 15.0);
+        // Changed behind its back (KDE restoring 80% at login): that wins.
+        external(&d, 410);
+        reapply(&s2).unwrap();
+        assert_eq!(lock(&s2).flicker_state.level.round(), 80.0);
         let _ = std::fs::remove_dir_all(&d);
     }
 

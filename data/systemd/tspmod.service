@@ -24,7 +24,9 @@ RestartSec=1
 # Hardening. tspmod must write /sys and /proc/sys, load/unload the NVIDIA modules for GPU
 # switching and talk to systemd; everything else is locked down.
 ProtectSystem=strict
-ProtectHome=yes
+# read-only, not hidden: the daemon runs short commands as the desktop user (display, OSD),
+# which need the user's runtime directory (Wayland and D-Bus sockets).
+ProtectHome=read-only
 PrivateTmp=yes
 NoNewPrivileges=yes
 RestrictRealtime=yes

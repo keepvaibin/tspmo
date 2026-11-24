@@ -39,10 +39,12 @@ fn run() -> zbus::Result<()> {
     }
     daemon.write_compositor_env();
     gpu::enforce_at_boot(&mut daemon);
-    let on_battery = daemon.on_battery;
-    let root = daemon.root.clone();
+    // The screen starts from the power state the daemon just applied (its event fired before
+    // the display could listen).
+    let mut screen_state = display::State::new(daemon.root.clone(), daemon.on_battery);
+    screen_state.eco_plus = daemon.effective().is_eco_plus();
     let shared: dbus::Shared = Arc::new(Mutex::new(daemon));
-    let screen: display::Shared = Arc::new(Mutex::new(display::State::new(root, on_battery)));
+    let screen: display::Shared = Arc::new(Mutex::new(screen_state));
 
     // TSPMOD_BUS=session runs against the session bus (development, with TSPMO_SYSROOT).
     let builder = match std::env::var("TSPMOD_BUS").as_deref() {
@@ -75,8 +77,9 @@ fn run() -> zbus::Result<()> {
         );
     }
 
-    watch::all(&conn, &shared);
+    // The display listens before the watchers can publish anything.
     display::start(conn.inner(), &screen);
+    watch::all(&conn, &shared);
 
     // All work happens on the D-Bus executor and the watcher threads.
     loop {

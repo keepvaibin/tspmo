@@ -66,6 +66,8 @@ pub struct State {
     pub message: String,
     file: PathBuf,
     pub state_dir: PathBuf,
+    /// Talk to a compositor (off in tests, where there is no desktop).
+    pub compositor: bool,
 }
 
 impl State {
@@ -96,6 +98,7 @@ impl State {
             message: String::new(),
             file: dir.join("display"),
             state_dir: dir,
+            compositor: true,
         };
         s.load();
         s
@@ -123,20 +126,34 @@ impl State {
             match k.trim() {
                 "refresh" => self.policy = refresh::Policy::parse(v).unwrap_or(self.policy),
                 "flicker_free" => self.flicker = Tri::parse(v).unwrap_or(self.flicker),
+                "level" => {
+                    if let Ok(n) = v.parse::<f64>() {
+                        self.flicker_state.level = n.clamp(1.0, 100.0);
+                    }
+                }
                 "flicker_floor" => {
                     self.floor_pct = v.parse().map_or(self.floor_pct, |n: u32| n.clamp(1, 100));
                 }
                 _ => self.color.load(k.trim(), v),
             }
         }
+        // What the backlight and dimming were at that level, to recognise it after a restart.
+        let split = if self.flicker_free() {
+            display::dimming::split(self.flicker_state.level, self.floor_pct)
+        } else {
+            display::dimming::split(self.flicker_state.level, 1)
+        };
+        self.flicker_state.written_pct = split.backlight_pct;
+        self.flicker_state.dimming_pct = split.dimming_pct;
     }
 
     pub fn save(&self) {
         let text = format!(
-            "# tspmod display settings\nrefresh={}\nflicker_free={}\nflicker_floor={}\n{}",
+            "# tspmod display settings\nrefresh={}\nflicker_free={}\nflicker_floor={}\nlevel={:.1}\n{}",
             self.policy.as_str(),
             self.flicker.as_str(),
             self.floor_pct,
+            self.flicker_state.level,
             self.color.save(),
         );
         if let Some(dir) = self.file.parent() {
