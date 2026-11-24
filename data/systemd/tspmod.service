@@ -23,6 +23,8 @@ RestartSec=1
 # switching and talk to systemd; everything else is locked down.
 ProtectSystem=strict
 ProtectHome=yes
+# Fn-lock keymap (hwdb)
+ReadWritePaths=/etc/udev
 PrivateTmp=yes
 NoNewPrivileges=yes
 RestrictRealtime=yes
