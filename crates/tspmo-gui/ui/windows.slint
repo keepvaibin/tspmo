@@ -1,4 +1,4 @@
-import { Th } from "theme.slint";
+import { Th, Nav } from "theme.slint";
 import { Bk, Item } from "bk.slint";
 import { Btn, IconBtn, Seg, Check, Slide, SlideRow, Stepper, Row, Field, Cap, Mono, Rule } from "controls.slint";
 import { CurveEditor } from "curve.slint";
@@ -35,11 +35,12 @@ component Swatches inherits Rectangle {
     height: 1.8rem;
     fs := FocusScope {
         changed has-focus => {
-            if (self.has-focus) {
+            if (self.has-focus && Nav.keys) {
                 root.cur = max(root.index, 0);
             }
         }
         key-pressed(e) => {
+            Nav.keys = true;
             if (e.text == Key.LeftArrow) {
                 root.cur = max(root.cur - 1, 0);
                 return accept;
@@ -64,12 +65,13 @@ component Swatches inherits Rectangle {
             border-color: root.index == i ? Th.focus : Th.line;
             Rectangle {
                 border-radius: 2px;
-                border-width: fs.has-focus && i == root.cur ? 2px : 0;
+                border-width: fs.has-focus && Nav.keys && i == root.cur ? 2px : 0;
                 border-color: Th.bg;
             }
             TouchArea {
                 clicked => {
                     fs.focus();
+                    Nav.keys = false;
                     root.cur = i;
                     root.picked(i);
                 }
@@ -94,6 +96,7 @@ component WinFrame inherits Window {
     FocusScope {
         init => { self.focus(); }
         key-pressed(e) => {
+            Nav.keys = true;
             if (e.text == Key.Escape) {
                 Bk.close();
                 return accept;

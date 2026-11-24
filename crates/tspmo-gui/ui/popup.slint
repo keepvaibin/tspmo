@@ -1,4 +1,4 @@
-import { Th } from "theme.slint";
+import { Th, Nav } from "theme.slint";
 import { Bk, Opt } from "bk.slint";
 import { Btn, Seg, Field, SlideRow, Row, Cap, Mono } from "controls.slint";
 
@@ -136,6 +136,7 @@ export component Popup inherits Window {
     FocusScope {
         init => { self.focus(); }
         key-pressed(e) => {
+            Nav.keys = true;
             if (e.text == Key.Escape) { Bk.close(); return accept; }
             if (e.modifiers.control || e.modifiers.alt || e.modifiers.meta) { return reject; }
             if (e.text == "1") { Bk.act("mode", "eco-plus"); return accept; }

@@ -1,4 +1,4 @@
-import { Th, Ic } from "theme.slint";
+import { Th, Ic, Nav } from "theme.slint";
 import { Opt } from "bk.slint";
 
 export component Icon inherits Path {
@@ -92,10 +92,11 @@ export component Btn inherits Rectangle {
             overflow: elide;
         }
     }
-    Ring { on: fs.has-focus; }
+    Ring { on: fs.has-focus && Nav.keys; }
     fs := FocusScope {
         enabled: root.enabled;
         key-pressed(e) => {
+            Nav.keys = true;
             if (e.text == Key.Return || e.text == " ") {
                 root.clicked();
                 return accept;
@@ -107,6 +108,7 @@ export component Btn inherits Rectangle {
         enabled: root.enabled;
         clicked => {
             fs.focus();
+            Nav.keys = false;
             root.clicked();
         }
     }
@@ -125,10 +127,11 @@ export component IconBtn inherits Rectangle {
     background: ta.pressed ? Th.pressed : ta.has-hover ? Th.hover : Th.raised;
     animate background { duration: 100ms; }
     Icon { name: root.icon; size: 0.9rem; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; }
-    Ring { on: fs.has-focus; }
+    Ring { on: fs.has-focus && Nav.keys; }
     fs := FocusScope {
         enabled: root.enabled;
         key-pressed(e) => {
+            Nav.keys = true;
             if (e.text == Key.Return || e.text == " ") {
                 root.clicked();
                 return accept;
@@ -140,6 +143,7 @@ export component IconBtn inherits Rectangle {
         enabled: root.enabled;
         clicked => {
             fs.focus();
+            Nav.keys = false;
             root.clicked();
         }
     }
@@ -161,11 +165,12 @@ export component Seg inherits Rectangle {
     fs := FocusScope {
         enabled: root.enabled;
         changed has-focus => {
-            if (self.has-focus) {
+            if (self.has-focus && Nav.keys) {
                 root.cur = max(root.index, 0);
             }
         }
         key-pressed(e) => {
+            Nav.keys = true;
             if (e.text == Key.LeftArrow) {
                 root.cur = max(root.cur - 1, 0);
                 return accept;
@@ -211,12 +216,13 @@ export component Seg inherits Rectangle {
                 }
                 Rectangle {
                     border-radius: Th.radius;
-                    border-width: fs.has-focus && i == root.cur ? 2px : 0;
+                    border-width: fs.has-focus && Nav.keys && i == root.cur ? 2px : 0;
                     border-color: Th.focus;
                 }
                 ta := TouchArea {
                     clicked => {
                         fs.focus();
+                        Nav.keys = false;
                         root.cur = i;
                         root.picked(i);
                     }
@@ -255,13 +261,14 @@ export component Check inherits Rectangle {
             border-color: Th.dim;
             animate background { duration: 100ms; }
             if root.on: Icon { name: "check"; size: 0.9rem; tint: Th.on-accent; x: 0.1rem; y: 0.1rem; }
-            Ring { on: fs.has-focus; x: -2px; y: -2px; width: parent.width + 4px; height: parent.height + 4px; }
+            Ring { on: fs.has-focus && Nav.keys; x: -2px; y: -2px; width: parent.width + 4px; height: parent.height + 4px; }
         }
         Text { text: root.label; color: Th.text; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
     }
     fs := FocusScope {
         enabled: root.enabled;
         key-pressed(e) => {
+            Nav.keys = true;
             if (e.text == Key.Return || e.text == " ") {
                 root.toggled(!root.on);
                 return accept;
@@ -273,6 +280,7 @@ export component Check inherits Rectangle {
         enabled: root.enabled;
         clicked => {
             fs.focus();
+            Nav.keys = false;
             root.toggled(!root.on);
         }
     }
@@ -328,7 +336,7 @@ export component Slide inherits Rectangle {
         border-radius: 2px;
         background: ta.pressed ? root.tint : Th.text;
         animate x { duration: ta.pressed ? 0ms : 120ms; }
-        Ring { on: fs.has-focus; x: -3px; y: -3px; width: parent.width + 6px; height: parent.height + 6px; }
+        Ring { on: fs.has-focus && Nav.keys; x: -3px; y: -3px; width: parent.width + 6px; height: parent.height + 6px; }
     }
     settle := Timer {
         interval: 350ms;
@@ -341,6 +349,7 @@ export component Slide inherits Rectangle {
     fs := FocusScope {
         enabled: root.enabled;
         key-pressed(e) => {
+            Nav.keys = true;
             if (e.text == Key.LeftArrow || e.text == Key.DownArrow) {
                 root.nudge(e.modifiers.shift ? -5 : -1);
                 return accept;
@@ -366,6 +375,7 @@ export component Slide inherits Rectangle {
             if (e.button == PointerEventButton.left) {
                 if (e.kind == PointerEventKind.down) {
                     fs.focus();
+                    Nav.keys = false;
                     root.drag = root.at(self.mouse-x);
                     root.moved(root.drag);
                 } else if (e.kind == PointerEventKind.up) {

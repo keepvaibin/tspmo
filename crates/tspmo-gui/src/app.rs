@@ -532,11 +532,19 @@ impl App {
             "gpu" => self.send("Daemon1", "SetGpuMode", &[Arg::s(arg)]),
             "reboot" => bus::reboot(emit),
             "refresh" => self.send(bindings::IFACE, bindings::SET_REFRESH_POLICY, &[Arg::s(arg)]),
-            "flicker" => self.send(
-                bindings::IFACE,
-                bindings::SET_FLICKER_FREE,
-                &[Arg::B(arg == "on")],
-            ),
+            "flicker" => {
+                // On an OLED panel "auto" is "on": send it so the user's default is kept.
+                let text = s
+                    .methods
+                    .get("Display1.SetFlickerFree")
+                    .is_some_and(|v| v.first().is_some_and(|t| t == "s"));
+                let a = if arg == "on" && text && s.get(bindings::IFACE, "Oled").bool() {
+                    Arg::s("auto")
+                } else {
+                    Arg::B(arg == "on")
+                };
+                self.send(bindings::IFACE, bindings::SET_FLICKER_FREE, &[a]);
+            }
             "color" => self.send(bindings::IFACE, bindings::SET_COLOR_MODE, &[Arg::s(arg)]),
             "fnlock" => self.send("Hardware1", "SetFnLock", &[Arg::B(arg == "on")]),
             "hw-toggle" => {
