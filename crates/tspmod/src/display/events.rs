@@ -18,6 +18,7 @@ pub fn exclusive<T>(f: impl FnOnce() -> T) -> T {
 /// Bring the screen in line with the settings. Safe to repeat.
 pub fn apply_all(conn: &zbus::Connection, shared: &Shared) {
     let _g = COMPOSITOR.lock().unwrap_or_else(|p| p.into_inner());
+    lock(shared).message.clear();
     let note = |what: &str, r: Result<(), String>| {
         if let Err(e) = r {
             eprintln!("tspmod: display {what}: {e}");

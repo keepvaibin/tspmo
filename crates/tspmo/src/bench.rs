@@ -257,6 +257,8 @@ fn guard(file: &str) -> ExitCode {
 
 struct Rig {
     restore: Restore,
+    /// Paths changed for the whole run (they stay out of the per-condition reset).
+    held: Vec<String>,
     file: String,
     uid: Option<u32>,
     topo: topology::Topology,
@@ -294,9 +296,24 @@ impl Rig {
     }
 
     fn apply(&mut self, c: &Condition) {
-        // Back to the starting point, then this condition's changes.
+        // Back to the starting point (except what the whole run holds), then this condition's
+        // changes. Power modes first: the daemon re-applies its refresh policy when one changes.
+        let held: Vec<(String, String)> = self
+            .held
+            .iter()
+            .map(|p| (p.clone(), self.restore.sysfs.remove(p).unwrap_or_default()))
+            .collect();
         self.restore.apply();
-        for s in &c.settings {
+        for (p, orig) in held {
+            self.restore.sysfs.insert(p, orig);
+        }
+        let had_profile = c.settings.iter().any(|s| matches!(s, Setting::Profile(_)));
+        let mut settings: Vec<&Setting> = c.settings.iter().collect();
+        settings.sort_by_key(|s| !matches!(s, Setting::Profile(_)));
+        if had_profile || self.restore.profile.is_some() {
+            std::thread::sleep(Duration::from_millis(1500));
+        }
+        for s in settings {
             match s {
                 Setting::Hz(hz) => self.refresh(*hz),
                 Setting::Pkg(a, b) => self.rapl("package", *a, *b),
@@ -471,6 +488,7 @@ fn bench(args: &[String]) -> Result<(), String> {
     let file = format!("/run/tspmo-bench-{}", std::process::id());
     let mut rig = Rig {
         restore: Restore::default(),
+        held: Vec::new(),
         file: file.clone(),
         uid: desktop_uid(),
         topo: topology::detect(&SysRoot::default()),
@@ -489,8 +507,26 @@ fn bench(args: &[String]) -> Result<(), String> {
     let charge = "/sys/class/power_supply/BAT1/charge_control_end_threshold";
     let on_ac = tspmo_sys::power_supply::on_ac(&SysRoot::default()) == Some(true);
     if hold && on_ac {
+        // The firmware accepts only some limits (60, 65, ... on ASUS): take the highest one the
+        // battery is already above, so charging stops.
         let cap = read_u64("/sys/class/power_supply/BAT1/capacity").unwrap_or(50);
-        rig.write(charge, &cap.saturating_sub(5).max(20).to_string());
+        let orig = std::fs::read_to_string(charge).ok().map(|v| v.trim().to_owned());
+        let chosen = (20..cap)
+            .rev()
+            .find(|n| std::fs::write(charge, n.to_string()).is_ok() && read_u64(charge) == Some(*n));
+        match (orig, chosen) {
+            (Some(orig), Some(n)) => {
+                rig.restore.sysfs.insert(charge.to_owned(), orig);
+                rig.held.push(charge.to_owned());
+                rig.save();
+                eprintln!("charging held at {n}% (battery {cap}%)");
+            }
+            (Some(orig), None) => {
+                let _ = std::fs::write(charge, orig);
+                eprintln!("can't stop charging: the battery limit won't go below {cap}%");
+            }
+            _ => eprintln!("can't stop charging: no charge limit control"),
+        }
     }
 
     let stop = Arc::new(AtomicBool::new(false));

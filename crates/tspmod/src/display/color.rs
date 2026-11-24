@@ -239,9 +239,9 @@ pub fn eyecare_values(kelvin: u32, saved: &[String; 3]) -> [Option<String>; 3] {
 }
 
 /// `kwriteconfig6` arguments setting (or, for `None`, deleting) one Night Light key. Going
-/// through KDE's own tool matters: it also tells the running KWin that the file changed.
+/// through KDE's own tool with `--notify` matters: that tells the running KWin the file changed.
 fn write_args(key: &str, value: Option<&str>) -> Vec<String> {
-    let mut a: Vec<String> = ["--file", "kwinrc", "--group", GROUP, "--key", key]
+    let mut a: Vec<String> = ["--notify", "--file", "kwinrc", "--group", GROUP, "--key", key]
         .into_iter()
         .map(String::from)
         .collect();
@@ -341,6 +341,6 @@ mod tests {
             write_args("Active", None).last().map(String::as_str),
             Some("--delete")
         );
-        assert_eq!(write_args("Mode", Some("Automatic"))[5..], ["Mode", "Automatic"]);
+        assert_eq!(write_args("Mode", Some("Automatic"))[6..], ["Mode", "Automatic"]);
     }
 }
