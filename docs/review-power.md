@@ -8,7 +8,7 @@ Fixed during this review:
 
 | Found | Fix |
 |---|---|
-| tspmod woke 8 times a second at idle: upstream `blocking` pool threads never exit (condition needs more than 500 threads) | patched copy in `vendor/blocking`; 0.2/s at idle, 0.45/s in Eco+ |
+| tspmod woke 8 times a second at idle: upstream `blocking` pool threads never exit (condition needs more than 500 threads) | patched copy in `vendor/blocking`; 0.1/s at idle, 0.35/s in Eco+ |
 | An OSD popped up on every automatic mode change (plug, unplug) and said "Power saver" for Eco+ | automatic changes are silent; Fn+F5 and `SetProfile` show the right name |
 | `SetBrightness(0)` was accepted and clamped: the e2e test left the screen at 2 % | out-of-range is `InvalidArgs` |
 | Fn+F5 with Fn-lock on did nothing (the key reaches the keyboard driver as a plain key) | the daemon cycles the mode when the kernel did not within 400 ms (not exercised: no key press) |
@@ -47,7 +47,7 @@ Fixed during this review:
 | Doctor | CLI output; `Daemon1.Doctor` 25 ms; unit tests for the new checks | pass |
 | Dump | run: 603 files, nothing from the dGPU, no kernel warning | pass |
 | Bench | used for every table in docs/power.md; restores profile, limits, refresh, charge limit | pass |
-| Idle cost | wake-ups from per-thread context switches over 60 s: 0.2/s balanced, 0.45/s Eco+; CPU 0-30 ms per 60 s; RSS 8 MB. A running `tspmo-gui` adds its own polling (the e2e reports SKIP then) | pass |
+| Idle cost | wake-ups from per-thread context switches over 60 s: 0.1/s balanced, 0.35/s Eco+ (the guard sample), measured over 60 s with nobody at the keyboard; key events and a running window add theirs; CPU 0-30 ms per 60 s; RSS 8 MB. A running `tspmo-gui` adds its own polling (the e2e reports SKIP then) | pass |
 | D-Bus latency | `tspmo ping 200`: p95 0.7-0.8 ms; GetAll 3-8 ms | pass |
 | Transitions | kernel log over the whole session: no Xid, no errors besides the NVIDIA driver's `PlatformRequestHandler` assertion when the thermal mode changes while the driver is loaded (firmware notification; harmless; none in Eco). KDE popups: none seen; the OSD appears only for key and API changes. A refresh change (Eco+ to or from 60 Hz) is one modeset: the panel blinks once | pass |
 

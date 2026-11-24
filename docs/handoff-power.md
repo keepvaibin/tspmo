@@ -13,7 +13,7 @@ State at the end of the session. Branch: this worktree (master with the GUI merg
   every ~22 s, not tspmo, not an app, not `nvidia-powerd`. `tspmo doctor` names it
   (`nvidia-nvpcf`), apps (`nvidia-held`), and a desktop holding the driver (`compositor-nvidia`).
 - **Idle cost**: tspmod woke 8 times a second because upstream `blocking` pool threads never
-  exit. Patched copy in `vendor/blocking` (`[patch.crates-io]`): 0.2/s now (events), 0.45/s in
+  exit. Patched copy in `vendor/blocking` (`[patch.crates-io]`): 0.1/s now (events), 0.35/s in
   Eco+ (the guard's 4 s sample).
 - **API for the GUI**: `Daemon1.Doctor() -> a(sss)`, `Fans1.Temps -> a(us)`.
 - **Fn+F5 with Fn-lock**: the daemon cycles the mode when the kernel did not (`FanKey`).
