@@ -97,10 +97,13 @@ each attribute's own description.
 |---|---|---|
 | `Items` | `a(ssssasxxb)` | `(name, label, kind, current, values, min, max, writable)`. Kind: `toggle` (0/1), `choice` (one of `values`), `number`, `text` |
 | `RebootPending` | `b` | |
+| `FnLock` | `b` | software Fn-lock: F1-F11 are the media keys, Fn+key gives the F-key |
+| `FnLockAvailable` | `b` | a measured ASUS USB keyboard is present (GU605: 0b05:19b6) |
 
 | Method | |
 |---|---|
 | `Set(name s, value s)` | validated against the attribute's description |
+| `SetFnLock(on b)` | writes `/etc/udev/hwdb.d/90-tspmo-fnlock.hwdb`, `systemd-hwdb update`, `udevadm trigger` on the keyboard only; about 1 s. Off restores the native keys, then removes the files |
 
 `charge_mode` is read-only: 0 none, 1 barrel, 2 USB-C charger. Choices are written again at
 start and after resume. Stored in `/var/lib/tspmo/hardware`.
