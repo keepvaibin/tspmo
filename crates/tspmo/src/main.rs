@@ -3,6 +3,7 @@
 mod client;
 mod dump;
 mod info;
+mod session_env;
 
 use std::process::ExitCode;
 use tspmo_core::{SysRoot, doctor, machine::Machine};
@@ -20,9 +21,6 @@ COMMANDS:
     profile cycle     Next profile (what Fn+F5 does)
     gpu [<mode>]      Show or set the GPU mode: eco | hybrid | ultimate | optimized
     gpu users         Apps keeping the NVIDIA GPU awake
-    gpu desktop-igpu-only | desktop-all-gpus
-                      Keep the desktop off the NVIDIA GPU entirely (opt-in)
-                      or let it use the NVIDIA-wired display ports (HDMI); next login
     doctor            Find what breaks features or costs battery, with exact fixes
     doctor --apply    ...and apply those fixes (asks for your password via sudo)
     dump <dir>        Capture an anonymised snapshot of this machine's kernel interfaces
@@ -44,6 +42,10 @@ fn main() -> ExitCode {
         }
         Some("doctor") => run_doctor(&root, args.iter().any(|a| a == "--apply")),
         Some("status") => status(),
+        Some("session-env") => {
+            session_env::print(&root);
+            ExitCode::SUCCESS
+        }
         Some("profile") => profile(args.get(1).map(String::as_str)),
         Some("gpu") => gpu(args.get(1).map(String::as_str)),
         Some("dump") => match args.get(1) {
@@ -164,7 +166,7 @@ fn gpu(arg: Option<&str>) -> ExitCode {
                     let what = if kind == "render" {
                         "app using the GPU (blocks Eco)"
                     } else {
-                        "desktop watching its outputs"
+                        "desktop watching its outputs (released on switch)"
                     };
                     println!("{pid:>7}  {name:<18} {what}");
                 }
@@ -172,15 +174,6 @@ fn gpu(arg: Option<&str>) -> ExitCode {
             }
             Err(e) => fail(e),
         },
-        Some(t @ ("desktop-igpu-only" | "desktop-all-gpus")) => {
-            match client::set_desktop_igpu_only(t == "desktop-igpu-only") {
-                Ok(()) => {
-                    println!("Saved. Takes effect the next time you log in.");
-                    ExitCode::SUCCESS
-                }
-                Err(e) => fail(e),
-            }
-        }
         Some(m) => match client::set_gpu(m) {
             Ok(msg) => {
                 println!("{msg}");

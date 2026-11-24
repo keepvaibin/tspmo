@@ -1,0 +1,4 @@
+#!/bin/sh
+# Installed by tspmo as /usr/lib/systemd/user-environment-generators/60-tspmo.
+# Keeps everyday rendering and video decoding on the iGPU (see `tspmo session-env`).
+exec /usr/bin/tspmo session-env

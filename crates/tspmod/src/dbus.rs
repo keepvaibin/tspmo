@@ -268,7 +268,6 @@ fn tspmo_props(d: &Daemon) -> Vec<(&'static str, OwnedValue)> {
         ("GpuPending", ov(g.pending.map_or("", Mode::as_str))),
         ("DgpuAsleep", ov(g.dgpu_asleep)),
         ("GpuMessage", ov(d.gpu_message.clone())),
-        ("DesktopIgpuOnly", ov(d.compositor_igpu_only)),
     ]
 }
 
@@ -390,12 +389,19 @@ impl Tspmo {
         result.map_err(zbus::fdo::Error::Failed)
     }
 
-    /// Processes that keep the NVIDIA GPU awake (and would block Eco): `(pid, name)`.
-    fn gpu_users(&self) -> Vec<(u32, String)> {
+    /// Processes holding the NVIDIA GPU: `(pid, name, kind)`. `render`: an app using it (blocks
+    /// Eco). `display`: the desktop watching its outputs (released automatically on switch).
+    fn gpu_users(&self) -> Vec<(u32, String, String)> {
         let d = lock(&self.0);
         gpu::blocking_users(&d.root)
             .into_iter()
-            .map(|u| (u.pid, u.name))
+            .map(|u| {
+                let kind = match u.kind {
+                    tspmo_core::gpu::UseKind::Render => "render",
+                    tspmo_core::gpu::UseKind::Display => "display",
+                };
+                (u.pid, u.name, kind.to_owned())
+            })
             .collect()
     }
 }

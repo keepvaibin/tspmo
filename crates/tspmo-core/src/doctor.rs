@@ -285,7 +285,7 @@ fn gtk_renderer(root: &SysRoot, m: &Machine, out: &mut Vec<Finding>) {
         .chain(["/etc/environment".to_owned()])
         .filter_map(|p| root.read_opt(p))
         .any(|s| s.lines().any(|l| l.trim_start().starts_with("GSK_RENDERER=")));
-    if set {
+    if set || root.exists("/usr/lib/systemd/user-environment-generators/60-tspmo") {
         return;
     }
     out.push(Finding {

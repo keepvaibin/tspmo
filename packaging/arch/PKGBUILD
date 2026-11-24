@@ -19,11 +19,6 @@ options=('!lto' '!debug')
 
 _root() { realpath "$startdir/../.."; }
 
-pkgver() {
-  cd "$(_root)"
-  printf "0.1.0.r%s.g%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
-}
-
 build() {
   cd "$(_root)"
   export CARGO_TARGET_DIR="$srcdir/target"
@@ -45,12 +40,16 @@ package() {
   install -Dm644 "$r/data/systemd/plymouth-quit-timeout.conf" \
     "$pkgdir/usr/lib/systemd/system/plymouth-quit.service.d/50-tspmo.conf"
 
+  install -Dm644 "$r/data/systemd/user/plasma-kwin-tspmo.conf" \
+    "$pkgdir/usr/lib/systemd/user/plasma-kwin_wayland.service.d/50-tspmo.conf"
+
   install -Dm644 "$r/data/dbus/org.tspmo.Daemon1.conf" "$pkgdir/usr/share/dbus-1/system.d/org.tspmo.Daemon1.conf"
   for s in org.tspmo.Daemon1 org.freedesktop.UPower.PowerProfiles net.hadess.PowerProfiles; do
     install -Dm644 "$r/data/dbus/$s.service" "$pkgdir/usr/share/dbus-1/system-services/$s.service"
   done
   install -Dm644 "$r/data/polkit/org.tspmo.policy" "$pkgdir/usr/share/polkit-1/actions/org.tspmo.policy"
-  install -Dm644 "$r/data/environment.d/50-tspmo-gtk.conf" "$pkgdir/usr/lib/environment.d/50-tspmo-gtk.conf"
+  install -Dm755 "$r/data/systemd/user-environment-generator" \
+    "$pkgdir/usr/lib/systemd/user-environment-generators/60-tspmo"
 
   install -Dm644 "$r/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
 }

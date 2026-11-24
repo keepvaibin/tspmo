@@ -3,6 +3,9 @@ Description=tspmo daemon (power profiles, GPU modes, hardware control)
 Documentation=https://github.com/tspmo/tspmo
 # tspmod provides the power-profiles API itself.
 Conflicts=power-profiles-daemon.service tuned-ppd.service
+# Before the login screen, so the GPU mode and compositor settings are in place before any
+# compositor opens a GPU.
+Before=display-manager.service
 After=upower.service
 Wants=upower.service
 
@@ -11,6 +14,8 @@ Type=dbus
 BusName=org.freedesktop.UPower.PowerProfiles
 ExecStart=/usr/bin/tspmod
 StateDirectory=tspmo
+RuntimeDirectory=tspmo
+RuntimeDirectoryPreserve=yes
 Restart=on-failure
 RestartSec=1
 

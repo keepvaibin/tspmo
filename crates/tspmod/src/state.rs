@@ -31,9 +31,8 @@ pub struct Daemon {
     pub gpu_policy: Policy,
     /// `gpu_mux_mode` as it was when we started (a later change means a reboot is pending).
     pub boot_mux: Option<u8>,
-    /// Keep the compositor on the iGPU (KWIN_DRM_DEVICES), so Eco/Hybrid switch instantly.
-    /// Costs the outputs wired to the dGPU (HDMI and one USB-C on a G16).
-    pub compositor_igpu_only: bool,
+    /// The policy wants a different GPU mode but an app is using the dGPU; retrying.
+    pub gpu_waiting: bool,
     /// Last message from a GPU switch attempt, shown in the UI.
     pub gpu_message: String,
     /// What was last applied, to avoid redundant firmware writes.
@@ -59,7 +58,7 @@ impl Daemon {
             tunables: Tunables::default(),
             // Eco on battery also sidesteps the NVIDIA "wake on every 1% of battery" bug.
             gpu_policy: Policy::Optimized,
-            compositor_igpu_only: false,
+            gpu_waiting: false,
             gpu_message: String::new(),
             applied: None,
             state_file: state_dir.join("state"),
@@ -182,29 +181,31 @@ impl Daemon {
         gone
     }
 
-    /// Write (or remove) the session environment that keeps KWin off the dGPU. Takes effect at
-    /// the next login. Only written when the stable iGPU symlink exists: pointing KWin at a
-    /// missing device would leave the session without a display.
-    pub fn sync_compositor_env(&self) {
-        const FILE: &str = "/etc/environment.d/50-tspmo-kwin.conf";
-        const IGPU: &str = "/dev/dri/tspmo-igpu";
+    /// Environment for the compositor (read by tspmo's systemd drop-in for KWin at session
+    /// start). Outside Ultimate mode KWin loads only Mesa's EGL: it then holds nothing on the
+    /// NVIDIA GPU but its display device, which it releases when told the GPU is leaving, so
+    /// Eco can switch live. Apps still get the dGPU through PRIME offload.
+    pub fn write_compositor_env(&self) {
+        const FILE: &str = "/run/tspmo/compositor.env";
+        let mesa = self
+            .root
+            .glob("/usr/share/glvnd/egl_vendor.d/*mesa*.json")
+            .into_iter()
+            .next();
+        let ultimate = self.gpu_status().mode == gpu::Mode::Ultimate;
+        let text = match (ultimate, mesa) {
+            (false, Some(m)) => format!(
+                "# Managed by tspmod: the desktop composites on the iGPU (apps can still use the dGPU).\n\
+                 __EGL_VENDOR_LIBRARY_FILENAMES={m}\n"
+            ),
+            _ => "# Managed by tspmod: no compositor overrides in this GPU mode.\n".to_owned(),
+        };
         let path = self.root.path(FILE);
-        let wanted = self.compositor_igpu_only && self.root.exists(IGPU);
-        if wanted {
-            let text = format!(
-                "# Managed by tspmod (\"desktop on iGPU only\"). Keeps KWin off the NVIDIA GPU so it can\n\
-                 # be powered off instantly. Turn off with: tspmo gpu desktop-all-gpus\nKWIN_DRM_DEVICES={IGPU}\n"
-            );
-            if std::fs::read_to_string(&path).ok().as_deref() != Some(text.as_str()) {
-                if let Some(dir) = path.parent() {
-                    let _ = std::fs::create_dir_all(dir);
-                }
-                if let Err(e) = std::fs::write(&path, text) {
-                    eprintln!("tspmod: can't write {FILE}: {e}");
-                }
-            }
-        } else if path.exists() {
-            let _ = std::fs::remove_file(&path);
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        if let Err(e) = std::fs::write(&path, text) {
+            eprintln!("tspmod: can't write {FILE}: {e}");
         }
     }
 
@@ -234,9 +235,6 @@ impl Daemon {
         if let Some(p) = kv.get("gpu_policy").and_then(|v| Policy::parse(v)) {
             self.gpu_policy = p;
         }
-        if let Some(b) = get_b("compositor_igpu_only") {
-            self.compositor_igpu_only = b;
-        }
         let t = &mut self.tunables;
         if let Some(b) = get_b("saver_no_turbo_on_battery") {
             t.saver_no_turbo_on_battery = b;
@@ -256,13 +254,12 @@ impl Daemon {
         let t = &self.tunables;
         let text = format!(
             "# tspmod state (managed by tspmod; safe to edit while it is stopped)\n\
-             profile_ac={}\nprofile_battery={}\ngpu_policy={}\ncompositor_igpu_only={}\n\
+             profile_ac={}\nprofile_battery={}\ngpu_policy={}\n\
              saver_no_turbo_on_battery={}\naspm_on_battery={}\n\
              audio_power_save_on_battery={}\nlazy_writeback_on_battery={}\n",
             self.profile_ac.as_str(),
             self.profile_battery.as_str(),
             self.gpu_policy.as_str(),
-            self.compositor_igpu_only,
             t.saver_no_turbo_on_battery,
             t.aspm_on_battery,
             t.audio_power_save_on_battery,

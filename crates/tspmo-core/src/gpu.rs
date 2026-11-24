@@ -183,12 +183,30 @@ pub enum UseKind {
     Render,
 }
 
+/// Compositors and session managers. They hold the dGPU because it has display outputs, and
+/// they let go when the kernel (or tspmod) announces the GPU is being removed.
+pub const DESKTOP_PROCESSES: &[&str] = &[
+    "kwin_wayland",
+    "Xwayland",
+    "gnome-shell",
+    "mutter",
+    "Hyprland",
+    "sway",
+    "niri",
+    "cosmic-comp",
+    "systemd",
+    "systemd-logind",
+];
+
 /// A process holding the dGPU open.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct User {
     pub pid: u32,
     pub name: String,
     pub kind: UseKind,
+    /// Holds NVIDIA driver handles (`/dev/nvidia*`): the driver can't be unloaded until it exits.
+    /// For a compositor this means it loaded NVIDIA's EGL at start-up.
+    pub driver_handles: bool,
 }
 
 /// Processes with the dGPU's device nodes open (`/dev/nvidia*`, its `/dev/dri` card/render nodes).
@@ -216,22 +234,32 @@ pub fn users(root: &SysRoot, dgpu_addr: Option<&str>) -> Vec<User> {
             continue;
         };
         let mut kind = None;
+        let mut driver_handles = false;
         for e in fds.filter_map(Result::ok) {
             let Ok(t) = std::fs::read_link(e.path()) else {
                 continue;
             };
             let Some(t) = t.to_str() else { continue };
-            if t.starts_with("/dev/nvidia") || renders.iter().any(|n| n == t) {
+            if t.starts_with("/dev/nvidia") {
+                driver_handles = true;
                 kind = Some(UseKind::Render);
-                break;
-            }
-            if cards.iter().any(|n| n == t) {
+            } else if renders.iter().any(|n| n == t) {
+                kind = Some(UseKind::Render);
+            } else if cards.iter().any(|n| n == t) && kind.is_none() {
                 kind = Some(UseKind::Display);
             }
         }
-        if let Some(kind) = kind {
+        if let Some(mut kind) = kind {
             let name = root.read_opt(format!("/proc/{pid}/comm")).unwrap_or_default();
-            out.push(User { pid, name, kind });
+            if DESKTOP_PROCESSES.contains(&name.as_str()) {
+                kind = UseKind::Display;
+            }
+            out.push(User {
+                pid,
+                name,
+                kind,
+                driver_handles,
+            });
         }
     }
     out

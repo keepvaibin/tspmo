@@ -24,7 +24,7 @@ fn run() -> zbus::Result<()> {
     let mut daemon = state::Daemon::new(root);
     // Tune the machine before anyone can ask: the profile, then the GPU policy.
     daemon.apply(true);
-    daemon.sync_compositor_env();
+    daemon.write_compositor_env();
     gpu::enforce_policy(&mut daemon);
     let shared: dbus::Shared = Arc::new(Mutex::new(daemon));
 

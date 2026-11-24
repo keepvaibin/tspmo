@@ -21,14 +21,12 @@ const NVIDIA_MODULES: &[&str] = &["nvidia_drm", "nvidia_modeset", "nvidia_uvm", 
 pub enum Outcome {
     Done(String),
     NeedsReboot(String),
-    /// Will happen by itself once the desktop releases the dGPU.
-    Deferred(String),
 }
 
 impl Outcome {
     pub fn message(&self) -> &str {
         match self {
-            Self::Done(m) | Self::NeedsReboot(m) | Self::Deferred(m) => m,
+            Self::Done(m) | Self::NeedsReboot(m) => m,
         }
     }
 }
@@ -68,10 +66,46 @@ pub fn blocking_users(root: &SysRoot) -> Vec<gpu::User> {
         .collect()
 }
 
-/// `Ok(true)`: powered off. `Ok(false)`: only the desktop holds the GPU's display outputs, so
-/// Eco is deferred until it lets go (log out, or next boot). `Err`: an app is using it.
-fn power_off(root: &SysRoot, fw_attrs: bool) -> Result<bool, String> {
-    let users = blocking_users(root);
+/// Shown when the running desktop still has NVIDIA's EGL driver loaded (it was started before
+/// tspmo's compositor settings existed). Happens once, right after installing tspmo.
+pub const NEEDS_FRESH_SESSION: &str = "The desktop was started before tspmo was set up, so it still has the NVIDIA \
+     driver loaded. Log out and back in once; after that Eco and Hybrid switch instantly.";
+
+/// The dGPU's DRM nodes (`card0`, `renderD129`, ...).
+fn drm_nodes(root: &SysRoot, addr: &str) -> Vec<String> {
+    root.list(format!("{}/{addr}/drm", tspmo_sys::pci::DEVICES))
+        .into_iter()
+        .filter(|n| n.starts_with("card") || n.starts_with("renderD"))
+        .collect()
+}
+
+/// Tell compositors the dGPU's display devices are going away (or back). KWin and Mutter drop a
+/// secondary GPU on `remove`, closing their device files, without disturbing the session.
+fn announce(root: &SysRoot, addr: &str, action: &str) {
+    for n in drm_nodes(root, addr) {
+        let _ = root.write(
+            format!("{}/{addr}/drm/{n}/uevent", tspmo_sys::pci::DEVICES),
+            action,
+        );
+    }
+}
+
+fn holders(root: &SysRoot) -> Vec<gpu::User> {
+    blocking_users(root)
+}
+
+/// Power the dGPU off, live.
+///
+/// 1. Refuse if an app is rendering on it (and say which).
+/// 2. Announce the removal so the desktop releases the GPU's display devices; wait for it.
+/// 3. Stop NVIDIA's helper daemons, unload the driver, cut power (`dgpu_disable=1`).
+///
+/// Any failure rolls back to Hybrid exactly as it was.
+fn power_off(root: &SysRoot, fw_attrs: bool) -> Result<(), String> {
+    let Some(addr) = gpu::dgpu(root).map(|g| g.address) else {
+        return Ok(()); // already off the bus
+    };
+    let users = holders(root);
     let apps: Vec<String> = users
         .iter()
         .filter(|u| u.kind == gpu::UseKind::Render)
@@ -83,34 +117,48 @@ fn power_off(root: &SysRoot, fw_attrs: bool) -> Result<bool, String> {
             apps.join(", ")
         ));
     }
-    if !users.is_empty() {
-        return Ok(false);
+    if users.iter().any(|u| u.driver_handles) {
+        return Err(NEEDS_FRESH_SESSION.into());
     }
+
+    announce(root, &addr, "remove");
+    if !wait_for(Duration::from_secs(4), || holders(root).is_empty()) {
+        announce(root, &addr, "add");
+        let left: Vec<String> = holders(root).iter().map(|u| u.name.clone()).collect();
+        return Err(format!(
+            "{} didn't release the NVIDIA GPU; staying in Hybrid",
+            left.join(", ")
+        ));
+    }
+
     let mut stopped = Vec::new();
     for (_, unit) in gpu::NVIDIA_SERVICES {
         if run("systemctl", &["is-active", "--quiet", unit]) && run("systemctl", &["stop", unit]) {
             stopped.push(*unit);
         }
     }
-    let restore = |msg: String| {
+    let rollback = |msg: String| {
+        run("modprobe", &["nvidia_drm"]);
         for unit in &stopped {
             run("systemctl", &["start", unit]);
         }
+        announce(root, &addr, "add");
         Err(msg)
     };
     for m in NVIDIA_MODULES {
         if root.exists(format!("/sys/module/{m}")) && !run("modprobe", &["-r", m]) {
-            return restore(format!(
-                "could not unload the {m} driver (something still uses it)"
+            return rollback(format!(
+                "could not unload {m}: something still uses the NVIDIA driver"
             ));
         }
     }
     if let Err(e) = set_asus(root, fw_attrs, "dgpu_disable", "1") {
-        run("modprobe", &["nvidia_drm"]);
-        return restore(e);
+        return rollback(e);
     }
-    wait_for(Duration::from_secs(5), || gpu::dgpu(root).is_none());
-    Ok(true)
+    if !wait_for(Duration::from_secs(5), || gpu::dgpu(root).is_none()) {
+        eprintln!("tspmod: gpu: dgpu_disable=1 written but the device is still on the bus");
+    }
+    Ok(())
 }
 
 fn power_on(root: &SysRoot, fw_attrs: bool) -> Result<(), String> {
@@ -156,15 +204,8 @@ pub fn switch(d: &mut Daemon, target: Mode) -> Result<Outcome, String> {
     match (st.mode, target) {
         (a, b) if a == b && st.pending.is_none() => Ok(Outcome::Done(format!("Already in {b} mode"))),
         (Mode::Hybrid, Mode::Eco) => {
-            if power_off(&root, fw_attrs)? {
-                Ok(Outcome::Done("Eco: the NVIDIA GPU is powered off".into()))
-            } else {
-                Ok(Outcome::Deferred(
-                    "Eco will turn on when you log out or reboot: the desktop is watching the NVIDIA \
-                     GPU's display outputs (turn on \"desktop on iGPU only\" to switch instantly)"
-                        .into(),
-                ))
-            }
+            power_off(&root, fw_attrs)?;
+            Ok(Outcome::Done("Eco: the NVIDIA GPU is powered off".into()))
         }
         (Mode::Eco, Mode::Hybrid) => {
             power_on(&root, fw_attrs)?;
@@ -206,11 +247,20 @@ pub fn enforce_policy(d: &mut Daemon) -> Option<String> {
     let target = d.gpu_policy.target(d.on_battery);
     let st = d.gpu_status();
     if st.mode == target || st.pending.is_some() || st.mode == Mode::Ultimate || target == Mode::Ultimate {
+        d.gpu_waiting = false;
         return None;
     }
     let msg = match switch(d, target) {
-        Ok(o) => o.message().to_owned(),
-        Err(e) => format!("Couldn't switch to {target}: {e}"),
+        Ok(o) => {
+            d.gpu_waiting = false;
+            o.message().to_owned()
+        }
+        Err(e) => {
+            // An app (a game) is using the dGPU: retry until it exits. (A desktop that still
+            // has the NVIDIA driver loaded only changes at the next login: no point retrying.)
+            d.gpu_waiting = e != NEEDS_FRESH_SESSION;
+            format!("Waiting to switch to {target}: {e}")
+        }
     };
     eprintln!("tspmod: gpu: {msg}");
     d.gpu_message = msg.clone();
