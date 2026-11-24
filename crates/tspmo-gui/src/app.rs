@@ -642,6 +642,10 @@ impl App {
         bk.set_gpu_pending(ss(&model::color_label(pending)));
         bk.set_gpu_reboot(!pending.is_empty() && pending != mode_raw);
         bk.set_gpu_message(ss(s.get("Daemon1", "GpuMessage").str()));
+        bk.set_gpu_state(ss(gpu_state(
+            s.get("Daemon1", "GpuMode").str(),
+            s.get("Daemon1", "DgpuAsleep").bool(),
+        )));
         bk.set_dgpu_asleep(s.get("Daemon1", "DgpuAsleep").bool());
         sync(
             &self.m.gpu_users,
@@ -856,4 +860,26 @@ fn head_text(s: &Store) -> String {
         t.push_str(&format!(" · {w:.1} W"));
     }
     t
+}
+
+/// What the dGPU is doing: removed (Eco), runtime-suspended, or powered.
+fn gpu_state(mode: &str, asleep: bool) -> &'static str {
+    match (mode, asleep) {
+        ("eco", _) => "dGPU off",
+        (_, true) => "dGPU asleep",
+        _ => "dGPU active",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::gpu_state;
+
+    #[test]
+    fn dgpu_states() {
+        assert_eq!(gpu_state("eco", true), "dGPU off");
+        assert_eq!(gpu_state("hybrid", true), "dGPU asleep");
+        assert_eq!(gpu_state("hybrid", false), "dGPU active");
+        assert_eq!(gpu_state("ultimate", false), "dGPU active");
+    }
 }
