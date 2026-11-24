@@ -21,12 +21,14 @@ const NVIDIA_MODULES: &[&str] = &["nvidia_drm", "nvidia_modeset", "nvidia_uvm", 
 pub enum Outcome {
     Done(String),
     NeedsReboot(String),
+    /// Will happen by itself once the desktop releases the dGPU.
+    Deferred(String),
 }
 
 impl Outcome {
     pub fn message(&self) -> &str {
         match self {
-            Self::Done(m) | Self::NeedsReboot(m) => m,
+            Self::Done(m) | Self::NeedsReboot(m) | Self::Deferred(m) => m,
         }
     }
 }
@@ -66,14 +68,23 @@ pub fn blocking_users(root: &SysRoot) -> Vec<gpu::User> {
         .collect()
 }
 
-fn power_off(root: &SysRoot, fw_attrs: bool) -> Result<(), String> {
+/// `Ok(true)`: powered off. `Ok(false)`: only the desktop holds the GPU's display outputs, so
+/// Eco is deferred until it lets go (log out, or next boot). `Err`: an app is using it.
+fn power_off(root: &SysRoot, fw_attrs: bool) -> Result<bool, String> {
     let users = blocking_users(root);
-    if !users.is_empty() {
-        let list: Vec<String> = users.iter().map(|u| format!("{} ({})", u.name, u.pid)).collect();
+    let apps: Vec<String> = users
+        .iter()
+        .filter(|u| u.kind == gpu::UseKind::Render)
+        .map(|u| format!("{} ({})", u.name, u.pid))
+        .collect();
+    if !apps.is_empty() {
         return Err(format!(
             "the NVIDIA GPU is in use by {}; close them and try again",
-            list.join(", ")
+            apps.join(", ")
         ));
+    }
+    if !users.is_empty() {
+        return Ok(false);
     }
     let mut stopped = Vec::new();
     for (_, unit) in gpu::NVIDIA_SERVICES {
@@ -99,7 +110,7 @@ fn power_off(root: &SysRoot, fw_attrs: bool) -> Result<(), String> {
         return restore(e);
     }
     wait_for(Duration::from_secs(5), || gpu::dgpu(root).is_none());
-    Ok(())
+    Ok(true)
 }
 
 fn power_on(root: &SysRoot, fw_attrs: bool) -> Result<(), String> {
@@ -145,8 +156,15 @@ pub fn switch(d: &mut Daemon, target: Mode) -> Result<Outcome, String> {
     match (st.mode, target) {
         (a, b) if a == b && st.pending.is_none() => Ok(Outcome::Done(format!("Already in {b} mode"))),
         (Mode::Hybrid, Mode::Eco) => {
-            power_off(&root, fw_attrs)?;
-            Ok(Outcome::Done("Eco: the NVIDIA GPU is powered off".into()))
+            if power_off(&root, fw_attrs)? {
+                Ok(Outcome::Done("Eco: the NVIDIA GPU is powered off".into()))
+            } else {
+                Ok(Outcome::Deferred(
+                    "Eco will turn on when you log out or reboot: the desktop is watching the NVIDIA \
+                     GPU's display outputs (turn on \"desktop on iGPU only\" to switch instantly)"
+                        .into(),
+                ))
+            }
         }
         (Mode::Eco, Mode::Hybrid) => {
             power_on(&root, fw_attrs)?;

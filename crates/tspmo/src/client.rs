@@ -64,7 +64,14 @@ pub fn set_gpu(mode: &str) -> Result<String, String> {
     proxy(&conn)?.call("SetGpuMode", &(mode,)).map_err(explain)
 }
 
-pub fn gpu_users() -> Result<Vec<(u32, String)>, String> {
+pub fn set_desktop_igpu_only(on: bool) -> Result<(), String> {
+    let conn = connect()?;
+    proxy(&conn)?
+        .call::<_, _, ()>("SetDesktopIgpuOnly", &(on,))
+        .map_err(explain)
+}
+
+pub fn gpu_users() -> Result<Vec<(u32, String, String)>, String> {
     let conn = connect()?;
     proxy(&conn)?.call("GpuUsers", &()).map_err(explain)
 }

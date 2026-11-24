@@ -20,6 +20,9 @@ COMMANDS:
     profile cycle     Next profile (what Fn+F5 does)
     gpu [<mode>]      Show or set the GPU mode: eco | hybrid | ultimate | optimized
     gpu users         Apps keeping the NVIDIA GPU awake
+    gpu desktop-igpu-only | desktop-all-gpus
+                      Keep the desktop off the NVIDIA GPU entirely (opt-in)
+                      or let it use the NVIDIA-wired display ports (HDMI); next login
     doctor            Find what breaks features or costs battery, with exact fixes
     doctor --apply    ...and apply those fixes (asks for your password via sudo)
     dump <dir>        Capture an anonymised snapshot of this machine's kernel interfaces
@@ -157,13 +160,27 @@ fn gpu(arg: Option<&str>) -> ExitCode {
                 ExitCode::SUCCESS
             }
             Ok(u) => {
-                for (pid, name) in u {
-                    println!("{pid:>7}  {name}");
+                for (pid, name, kind) in u {
+                    let what = if kind == "render" {
+                        "app using the GPU (blocks Eco)"
+                    } else {
+                        "desktop watching its outputs"
+                    };
+                    println!("{pid:>7}  {name:<18} {what}");
                 }
                 ExitCode::SUCCESS
             }
             Err(e) => fail(e),
         },
+        Some(t @ ("desktop-igpu-only" | "desktop-all-gpus")) => {
+            match client::set_desktop_igpu_only(t == "desktop-igpu-only") {
+                Ok(()) => {
+                    println!("Saved. Takes effect the next time you log in.");
+                    ExitCode::SUCCESS
+                }
+                Err(e) => fail(e),
+            }
+        }
         Some(m) => match client::set_gpu(m) {
             Ok(msg) => {
                 println!("{msg}");

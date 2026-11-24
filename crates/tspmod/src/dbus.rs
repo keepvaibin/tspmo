@@ -268,6 +268,7 @@ fn tspmo_props(d: &Daemon) -> Vec<(&'static str, OwnedValue)> {
         ("GpuPending", ov(g.pending.map_or("", Mode::as_str))),
         ("DgpuAsleep", ov(g.dgpu_asleep)),
         ("GpuMessage", ov(d.gpu_message.clone())),
+        ("DesktopIgpuOnly", ov(d.compositor_igpu_only)),
     ]
 }
 

@@ -146,7 +146,32 @@ pub fn hold_owners(conn: Connection, shared: Shared) {
     });
 }
 
+/// A deferred Eco switch happens once the desktop that held the dGPU has gone (logout).
+pub fn sessions(conn: Connection, shared: Shared) {
+    spawn("sessions", move || {
+        let Ok(proxy) = zbus::blocking::Proxy::new(
+            &conn,
+            "org.freedesktop.login1",
+            "/org/freedesktop/login1",
+            "org.freedesktop.login1.Manager",
+        ) else {
+            return;
+        };
+        let Ok(signals) = proxy.receive_signal("SessionRemoved") else {
+            return;
+        };
+        for _ in signals {
+            // Give the compositor a moment to close its device files.
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            if gpu::enforce_policy(&mut lock(&shared)).is_some() {
+                emit_changed_blocking(&conn, &shared);
+            }
+        }
+    });
+}
+
 pub fn all(conn: &Connection, shared: &Shared) {
+    sessions(conn.clone(), Arc::clone(shared));
     power_source(conn.clone(), Arc::clone(shared));
     platform_profile(conn.clone(), Arc::clone(shared));
     resume(conn.clone(), Arc::clone(shared));

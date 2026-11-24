@@ -172,25 +172,39 @@ pub fn status(root: &SysRoot, boot_mux: Option<u8>) -> Status {
     }
 }
 
+/// How a process uses the dGPU.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UseKind {
+    /// Holds only the display (card) node: the compositor or the session manager watching the
+    /// GPU's outputs. It goes away when the desktop stops using the dGPU (log out, or keep the
+    /// compositor on the iGPU).
+    Display,
+    /// Renders or computes on it (`/dev/nvidia*` or the render node): an app.
+    Render,
+}
+
 /// A process holding the dGPU open.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct User {
     pub pid: u32,
     pub name: String,
+    pub kind: UseKind,
 }
 
 /// Processes with the dGPU's device nodes open (`/dev/nvidia*`, its `/dev/dri` card/render nodes).
 /// Needs root to see other users' processes.
 pub fn users(root: &SysRoot, dgpu_addr: Option<&str>) -> Vec<User> {
-    let mut nodes: Vec<String> = Vec::new();
+    let mut cards: Vec<String> = Vec::new();
+    let mut renders: Vec<String> = Vec::new();
     if let Some(addr) = dgpu_addr {
         for n in root.list(format!("{}/{addr}/drm", pci::DEVICES)) {
-            if n.starts_with("card") || n.starts_with("renderD") {
-                nodes.push(format!("/dev/dri/{n}"));
+            if n.starts_with("card") {
+                cards.push(format!("/dev/dri/{n}"));
+            } else if n.starts_with("renderD") {
+                renders.push(format!("/dev/dri/{n}"));
             }
         }
     }
-    let is_dgpu_node = |t: &str| t.starts_with("/dev/nvidia") || nodes.iter().any(|n| n == t);
     let me = std::process::id();
     let mut out = Vec::new();
     for pid_dir in root.list("/proc") {
@@ -198,16 +212,26 @@ pub fn users(root: &SysRoot, dgpu_addr: Option<&str>) -> Vec<User> {
         if pid == me {
             continue;
         }
-        let fd_dir = root.path(format!("/proc/{pid}/fd"));
-        let Ok(fds) = std::fs::read_dir(&fd_dir) else {
+        let Ok(fds) = std::fs::read_dir(root.path(format!("/proc/{pid}/fd"))) else {
             continue;
         };
-        let holds = fds
-            .filter_map(Result::ok)
-            .any(|e| std::fs::read_link(e.path()).is_ok_and(|t| t.to_str().is_some_and(is_dgpu_node)));
-        if holds {
+        let mut kind = None;
+        for e in fds.filter_map(Result::ok) {
+            let Ok(t) = std::fs::read_link(e.path()) else {
+                continue;
+            };
+            let Some(t) = t.to_str() else { continue };
+            if t.starts_with("/dev/nvidia") || renders.iter().any(|n| n == t) {
+                kind = Some(UseKind::Render);
+                break;
+            }
+            if cards.iter().any(|n| n == t) {
+                kind = Some(UseKind::Display);
+            }
+        }
+        if let Some(kind) = kind {
             let name = root.read_opt(format!("/proc/{pid}/comm")).unwrap_or_default();
-            out.push(User { pid, name });
+            out.push(User { pid, name, kind });
         }
     }
     out
