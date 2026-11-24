@@ -28,11 +28,10 @@ const NVIDIA_MODULES: &[&str] = &["nvidia_drm", "nvidia_modeset", "nvidia_uvm", 
 
 /// Shown when the running desktop still has NVIDIA's EGL driver loaded (it was started before
 /// tspmo's compositor settings existed). Happens once, right after installing tspmo.
-pub const NEEDS_FRESH_SESSION: &str = "The desktop was started before tspmo was set up, so it still has the NVIDIA \
-     driver loaded. Log out and back in once; after that Eco and Hybrid switch instantly.";
+pub const NEEDS_FRESH_SESSION: &str = "The desktop holds the NVIDIA driver. Log out and in once.";
 
 /// Shown when a GPU change is asked for before the boot has settled (see `boot.rs`).
-pub const STILL_STARTING: &str = "The system is still starting; try again in a minute.";
+pub const STILL_STARTING: &str = "Still starting. Try again in a minute.";
 
 #[cfg(test)]
 mod tests {
@@ -190,7 +189,7 @@ pub fn precheck(root: &SysRoot, st: &Status, target: Mode) -> Result<(), String>
             return Err("this laptop has no firmware GPU switch".into());
         }
         Switcher::Asus { has_mux: false, .. } if target == Mode::Ultimate => {
-            return Err("this laptop has no MUX switch, so there is no Ultimate mode".into());
+            return Err("no MUX switch: no Ultimate mode".into());
         }
         _ => {}
     }
@@ -286,7 +285,7 @@ fn power_on(root: &SysRoot, fw_attrs: bool) -> Result<(), String> {
 pub fn switch(root: &SysRoot, st: &Status, target: Mode) -> Result<Outcome, String> {
     precheck(root, st, target)?;
     let Switcher::Asus { fw_attrs, .. } = st.switcher else {
-        return Ok(Outcome::Done("Hybrid is the only mode on this laptop".into()));
+        return Ok(Outcome::Done("Hybrid is the only mode".into()));
     };
 
     // Going back to what is running now cancels a pending MUX change.
@@ -307,7 +306,7 @@ pub fn switch(root: &SysRoot, st: &Status, target: Mode) -> Result<Outcome, Stri
         (Mode::Eco, Mode::Hybrid) => {
             power_on(root, fw_attrs)?;
             Ok(Outcome::Done(
-                "Hybrid: the NVIDIA GPU is ready for apps that ask for it".into(),
+                "Hybrid: the NVIDIA GPU is ready".into(),
             ))
         }
         (_, Mode::Ultimate) => {
@@ -316,7 +315,7 @@ pub fn switch(root: &SysRoot, st: &Status, target: Mode) -> Result<Outcome, Stri
             }
             set_asus(root, fw_attrs, "gpu_mux_mode", "0")?;
             Ok(Outcome::NeedsReboot(
-                "Ultimate is ready: restart to wire the screen straight to the NVIDIA GPU".into(),
+                "Ultimate set. Restart to apply.".into(),
             ))
         }
         (Mode::Ultimate, b) => {
