@@ -8,6 +8,7 @@ use super::thermal::lock;
 use super::{PATH, authorize};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use tspmo_core::asus::anime::{self, Anime, Grid};
 use tspmo_core::asus::slash::{self, Mode, Slash, When};
 use tspmo_sys::{SysRoot, power_supply};
 use zbus::message::Header;
@@ -44,6 +45,28 @@ impl Default for SlashCfg {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AnimeCfg {
+    enabled: bool,
+    /// 0-3.
+    brightness: u8,
+    /// The firmware's own animations (boot, awake, sleep, shutdown).
+    builtin: bool,
+    /// Which of two animations plays in each of those states.
+    choice: [u8; 4],
+}
+
+impl Default for AnimeCfg {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            brightness: 2,
+            builtin: true,
+            choice: [0; 4],
+        }
+    }
+}
+
 const OPTIONS: [&str; 6] = ["boot", "sleep", "shutdown", "battery", "lid", "warning"];
 
 impl SlashCfg {
@@ -76,12 +99,14 @@ impl SlashCfg {
 
 struct State {
     cfg: SlashCfg,
+    anime: AnimeCfg,
     on_battery: bool,
 }
 
 pub struct Lid {
     root: SysRoot,
     slash: Option<Slash>,
+    anime: Option<Anime>,
     file: PathBuf,
     st: Mutex<State>,
 }
@@ -90,14 +115,19 @@ impl Lid {
     /// `None` if the machine has no lid display.
     pub fn new(root: SysRoot, dir: PathBuf) -> Option<Self> {
         let slash = slash::detect(&root);
-        slash.as_ref()?;
+        let anime = anime::detect(&root);
+        if slash.is_none() && anime.is_none() {
+            return None;
+        }
         let lid = Self {
             file: dir.join("lid"),
             st: Mutex::new(State {
                 cfg: SlashCfg::default(),
+                anime: AnimeCfg::default(),
                 on_battery: power_supply::on_ac(&root) == Some(false),
             }),
             slash,
+            anime,
             root,
         };
         lid.load();
@@ -111,12 +141,26 @@ impl Lid {
         let mut st = lock(&self.st);
         for (k, v) in text.lines().filter_map(|l| l.split_once('=')) {
             let (k, v) = (k.trim(), v.trim());
+            let st = &mut *st;
             let c = &mut st.cfg;
             match k {
                 "enabled" => c.enabled = v == "1",
                 "brightness" => c.brightness = v.parse().unwrap_or(c.brightness),
                 "interval" => c.interval = v.parse().unwrap_or(c.interval),
                 "mode" => c.mode = Mode::parse(v).unwrap_or(c.mode),
+                "anime_enabled" => st.anime.enabled = v == "1",
+                "anime_brightness" => st.anime.brightness = v.parse::<u8>().unwrap_or(2).min(3),
+                "anime_builtin" => st.anime.builtin = v == "1",
+                "anime_choice" => {
+                    let n: Vec<u8> = v
+                        .split(',')
+                        .filter_map(|x| x.parse::<u8>().ok())
+                        .map(|x| x & 1)
+                        .collect();
+                    if let Ok(a) = <[u8; 4]>::try_from(n) {
+                        st.anime.choice = a;
+                    }
+                }
                 other => {
                     c.set_option(other, v == "1");
                 }
@@ -137,6 +181,14 @@ impl Lid {
         for o in OPTIONS {
             t.push_str(&format!("{o}={}\n", u8::from(c.option(o).unwrap_or(false))));
         }
+        let a = &st.anime;
+        t.push_str(&format!(
+            "anime_enabled={}\nanime_brightness={}\nanime_builtin={}\nanime_choice={}\n",
+            u8::from(a.enabled),
+            a.brightness,
+            u8::from(a.builtin),
+            a.choice.map(|c| c.to_string()).join(",")
+        ));
         if let Some(dir) = self.file.parent() {
             let _ = std::fs::create_dir_all(dir);
         }
@@ -178,6 +230,10 @@ impl Lid {
             let st = lock(&self.st);
             (st.cfg.clone(), st.on_battery)
         };
+        self.apply_anime();
+        if self.slash.is_none() {
+            return;
+        }
         let id = self.report();
         let [i0, i1] = slash::init(id);
         let [en, op] = self.display_packets(&c, on_battery);
@@ -198,6 +254,92 @@ impl Lid {
         ]);
         // Remember the defaults on first start.
         self.save(&lock(&self.st));
+    }
+
+    fn send_anime(&self, packets: &[Vec<u8>]) {
+        if let Some(a) = &self.anime {
+            if let Err(e) = a.send(&self.root, packets) {
+                eprintln!("tspmod: anime matrix: {e}");
+            }
+        }
+    }
+
+    fn anime_state_packets(c: &AnimeCfg) -> Vec<Vec<u8>> {
+        let [b, a, s, d] = c.choice;
+        vec![
+            anime::enable(c.enabled).to_vec(),
+            anime::brightness(if c.enabled { c.brightness } else { 0 }).to_vec(),
+            anime::builtin(c.builtin).to_vec(),
+            anime::builtin_choice(b, a, s, d).to_vec(),
+        ]
+    }
+
+    fn apply_anime(&self) {
+        if self.anime.is_none() {
+            return;
+        }
+        let c = lock(&self.st).anime.clone();
+        let mut p: Vec<Vec<u8>> = anime::init().iter().map(|x| x.to_vec()).collect();
+        p.extend(Self::anime_state_packets(&c));
+        self.send_anime(&p);
+    }
+
+    fn change_anime(&self, f: impl FnOnce(&mut AnimeCfg)) -> Result<(), String> {
+        if self.anime.is_none() {
+            return Err("no AniMe Matrix on this laptop".into());
+        }
+        let mut st = lock(&self.st);
+        f(&mut st.anime);
+        self.save(&st);
+        let p = Self::anime_state_packets(&st.anime);
+        drop(st);
+        self.send_anime(&p);
+        Ok(())
+    }
+
+    pub fn set_anime_enabled(&self, on: bool) -> Result<(), String> {
+        self.change_anime(|c| c.enabled = on)
+    }
+
+    pub fn set_anime_brightness(&self, level: u8) -> Result<(), String> {
+        if level > 3 {
+            return Err("brightness must be 0-3".into());
+        }
+        self.change_anime(|c| c.brightness = level)
+    }
+
+    pub fn set_anime_builtin(&self, on: bool) -> Result<(), String> {
+        self.change_anime(|c| c.builtin = on)
+    }
+
+    pub fn set_anime_choice(&self, choice: [u8; 4]) -> Result<(), String> {
+        if choice.iter().any(|c| *c > 1) {
+            return Err("each animation is 0 or 1".into());
+        }
+        self.change_anime(|c| c.choice = choice)
+    }
+
+    fn show_grid(&self, g: &Grid) -> Result<(), String> {
+        let a = self.anime.as_ref().ok_or("no AniMe Matrix on this laptop")?;
+        let (leds, bright) = (g.leds(a.kind)?, lock(&self.st).anime.brightness);
+        let mut p: Vec<Vec<u8>> = vec![anime::brightness(bright.max(1)).to_vec()];
+        p.extend(anime::frame(a.kind, &leds)?.iter().map(|x| x.to_vec()));
+        p.push(anime::flush().to_vec());
+        self.send_anime(&p);
+        Ok(())
+    }
+
+    pub fn show_text(&self, text: &str) -> Result<(), String> {
+        let a = self.anime.as_ref().ok_or("no AniMe Matrix on this laptop")?;
+        let (w, h) = a.kind.size();
+        self.show_grid(&Grid::text(w, h, text))
+    }
+
+    /// A PGM (P2 or P5) image, scaled to the display.
+    pub fn show_image(&self, pgm: &[u8]) -> Result<(), String> {
+        let a = self.anime.as_ref().ok_or("no AniMe Matrix on this laptop")?;
+        let (w, h) = a.kind.size();
+        self.show_grid(&Grid::from_pgm(pgm, w, h)?)
     }
 
     pub fn on_power_source(&self, on_battery: bool) {
@@ -288,10 +430,122 @@ pub struct Lid1(pub Arc<Lid>);
 
 #[zbus::interface(name = "org.tspmo.Lid1")]
 impl Lid1 {
-    /// Lid displays this laptop has: `slash`.
+    /// Lid displays this laptop has: `slash`, `anime`.
     #[zbus(property)]
     fn devices(&self) -> Vec<String> {
-        vec!["slash".to_owned()]
+        let mut v = Vec::new();
+        if self.0.slash.is_some() {
+            v.push("slash".to_owned());
+        }
+        if self.0.anime.is_some() {
+            v.push("anime".to_owned());
+        }
+        v
+    }
+
+    #[zbus(property)]
+    fn anime_enabled(&self) -> bool {
+        lock(&self.0.st).anime.enabled
+    }
+
+    /// 0-3.
+    #[zbus(property)]
+    fn anime_brightness(&self) -> u8 {
+        lock(&self.0.st).anime.brightness
+    }
+
+    /// The firmware's own animations are on.
+    #[zbus(property)]
+    fn anime_builtin(&self) -> bool {
+        lock(&self.0.st).anime.builtin
+    }
+
+    /// Which animation (0 or 1) plays at boot, awake, sleep, shutdown.
+    #[zbus(property)]
+    fn anime_builtin_choice(&self) -> (u8, u8, u8, u8) {
+        let c = lock(&self.0.st).anime.choice;
+        (c[0], c[1], c[2], c[3])
+    }
+
+    async fn set_anime_enabled(
+        &self,
+        on: bool,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        authorize(conn, &hdr, super::SET_LID).await?;
+        self.0
+            .set_anime_enabled(on)
+            .map_err(zbus::fdo::Error::InvalidArgs)?;
+        changed(conn).await;
+        Ok(())
+    }
+
+    async fn set_anime_brightness(
+        &self,
+        level: u8,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        authorize(conn, &hdr, super::SET_LID).await?;
+        self.0
+            .set_anime_brightness(level)
+            .map_err(zbus::fdo::Error::InvalidArgs)?;
+        changed(conn).await;
+        Ok(())
+    }
+
+    async fn set_anime_builtin(
+        &self,
+        on: bool,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        authorize(conn, &hdr, super::SET_LID).await?;
+        self.0
+            .set_anime_builtin(on)
+            .map_err(zbus::fdo::Error::InvalidArgs)?;
+        changed(conn).await;
+        Ok(())
+    }
+
+    async fn set_anime_builtin_choice(
+        &self,
+        boot: u8,
+        awake: u8,
+        sleep: u8,
+        shutdown: u8,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        authorize(conn, &hdr, super::SET_LID).await?;
+        self.0
+            .set_anime_choice([boot, awake, sleep, shutdown])
+            .map_err(zbus::fdo::Error::InvalidArgs)?;
+        changed(conn).await;
+        Ok(())
+    }
+
+    /// Show text (5x7 font, upper case) on the AniMe Matrix.
+    async fn show_anime_text(
+        &self,
+        text: String,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        authorize(conn, &hdr, super::SET_LID).await?;
+        self.0.show_text(&text).map_err(zbus::fdo::Error::InvalidArgs)
+    }
+
+    /// Show a PGM image (P2 or P5), scaled to the display.
+    async fn show_anime_image(
+        &self,
+        pgm: Vec<u8>,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        authorize(conn, &hdr, super::SET_LID).await?;
+        self.0.show_image(&pgm).map_err(zbus::fdo::Error::InvalidArgs)
     }
 
     #[zbus(property)]
@@ -410,6 +664,10 @@ pub async fn changed(conn: &zbus::Connection) {
     let _ = i.slash_interval_changed(e).await;
     let _ = i.slash_mode_changed(e).await;
     let _ = i.slash_show_changed(e).await;
+    let _ = i.anime_enabled_changed(e).await;
+    let _ = i.anime_brightness_changed(e).await;
+    let _ = i.anime_builtin_changed(e).await;
+    let _ = i.anime_builtin_choice_changed(e).await;
 }
 
 #[cfg(test)]
@@ -489,6 +747,43 @@ mod tests {
         let fx = Fix::new("lid-none");
         fx.set("/sys/class/dmi/id/board_name", "FX507ZC4\n");
         assert!(Lid::new(fx.root(), fx.dir().join("state")).is_none());
+    }
+
+    #[test]
+    fn anime_matrix_is_driven_on_models_that_have_one() {
+        let fx = Fix::new("lid-anime");
+        // A GA402 uses the same USB device as the Slash does on the GU605.
+        fx.set("/sys/class/dmi/id/board_name", "GA402XV\n");
+        let l = lid(&fx);
+        assert!(l.anime.is_some() && l.slash.is_none());
+        clear(&fx);
+        l.set_anime_brightness(3).unwrap();
+        let b = sent(&fx);
+        assert_eq!(b.len(), 4 * 640);
+        assert_eq!(&b[..3], &[0x5e, 0xc3, 0x01]); // enable
+        assert_eq!(&b[640..644], &[0x5e, 0xc0, 0x04, 3]); // brightness
+        assert!(l.set_anime_brightness(4).is_err());
+        assert!(l.set_anime_choice([0, 2, 0, 0]).is_err());
+
+        clear(&fx);
+        l.show_text("HI").unwrap();
+        let b = sent(&fx);
+        // brightness, three panes, flush
+        assert_eq!(b.len(), 5 * 640);
+        assert_eq!(&b[4 * 640..4 * 640 + 3], &[0x5e, 0xc0, 0x03]);
+        assert!(b[640..4 * 640].contains(&255), "dots are lit");
+        assert!(l.show_image(b"junk").is_err());
+        // The Slash settings stay inert without a Slash.
+        l.on_power_source(true);
+    }
+
+    #[test]
+    fn no_anime_on_the_slash_model() {
+        let fx = Fix::new("lid-no-anime");
+        let l = lid(&fx);
+        assert!(l.anime.is_none());
+        assert!(l.set_anime_enabled(true).is_err());
+        assert!(l.show_text("x").is_err());
     }
 
     #[test]

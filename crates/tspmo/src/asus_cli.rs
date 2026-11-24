@@ -29,6 +29,7 @@ ASUS COMMANDS:
     lid                          Slash light bar
     lid on | off | brightness <0-255> | interval <0-255> | mode <name>
     lid show <boot|sleep|shutdown|battery|lid|warning> on|off
+    lid anime on|off | brightness <0-3> | builtin on|off | text <text> | image <file.pgm>
 ";
 
 pub fn handles(cmd: &str) -> bool {
@@ -438,7 +439,22 @@ fn light(a: &[&str]) -> Result<(), String> {
 fn lid(a: &[&str]) -> Result<(), String> {
     let l = Iface::new("org.tspmo.Lid1")?;
     match a {
+        ["anime", rest @ ..] => anime(&l, rest),
         [] => {
+            let devices: Vec<String> = l.get("Devices")?;
+            if devices.iter().any(|d| d == "anime") {
+                let on: bool = l.get("AnimeEnabled")?;
+                let level: u8 = l.get("AnimeBrightness")?;
+                let builtin: bool = l.get("AnimeBuiltin")?;
+                println!(
+                    "anime {}  brightness {level}  built-in animations {}",
+                    if on { "on" } else { "off" },
+                    if builtin { "on" } else { "off" }
+                );
+            }
+            if !devices.iter().any(|d| d == "slash") {
+                return Ok(());
+            }
             let enabled: bool = l.get("SlashEnabled")?;
             let brightness: u8 = l.get("SlashBrightness")?;
             let interval: u8 = l.get("SlashInterval")?;
@@ -472,6 +488,27 @@ fn lid(a: &[&str]) -> Result<(), String> {
         _ => {
             Err("usage: tspmo lid [on|off|brightness <n>|interval <n>|mode <name>|show <what> on|off]".into())
         }
+    }
+}
+
+fn anime(l: &Iface, a: &[&str]) -> Result<(), String> {
+    match a {
+        ["on"] => l.call("SetAnimeEnabled", &(true,)),
+        ["off"] => l.call("SetAnimeEnabled", &(false,)),
+        ["brightness", v] => l.call(
+            "SetAnimeBrightness",
+            &(v.parse::<u8>().map_err(|_| format!("'{v}': 0-3"))?,),
+        ),
+        ["builtin", v] => l.call("SetAnimeBuiltin", &(on_off(v)?,)),
+        ["text", words @ ..] if !words.is_empty() => l.call("ShowAnimeText", &(words.join(" "),)),
+        ["image", file] => {
+            let data = std::fs::read(file).map_err(|e| format!("{file}: {e}"))?;
+            l.call("ShowAnimeImage", &(data,))
+        }
+        _ => Err(
+            "usage: tspmo lid anime on|off|brightness <0-3>|builtin on|off|text <text>|image <file.pgm>"
+                .into(),
+        ),
     }
 }
 

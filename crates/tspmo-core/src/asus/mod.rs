@@ -2,6 +2,7 @@
 //! hotkeys. Pure logic and sysfs access through [`tspmo_sys::SysRoot`]; the daemon (`tspmod`)
 //! owns state, D-Bus and threads. Capabilities are discovered, never assumed.
 
+pub mod anime;
 pub mod battery;
 pub mod fans;
 pub mod hardware;
