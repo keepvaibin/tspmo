@@ -100,7 +100,10 @@ pub fn resume(conn: Connection, shared: Shared) {
                 continue;
             };
             if !going_to_sleep {
-                lock(&shared).apply(true);
+                let mut d = lock(&shared);
+                d.apply(true);
+                tspmo_core::usbpm::apply(&d.root);
+                drop(d);
                 emit_changed_blocking(&conn, &shared);
             }
         }

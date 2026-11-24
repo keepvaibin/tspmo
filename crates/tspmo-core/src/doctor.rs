@@ -173,34 +173,46 @@ fn duplicate_backlight(_root: &SysRoot, m: &Machine, out: &mut Vec<Finding>) {
 /// Internal vendor HID devices left at `power/control=on` keep the USB controller awake,
 /// which blocks the deepest package C-state. Measured on a GU605MI: ~0.8 W at screen-off idle.
 fn usb_hid_autosuspend(root: &SysRoot, _m: &Machine, out: &mut Vec<Finding>) {
-    const VENDORS: &[u16] = &[
-        0x0b05, /* ASUS */
-        0x048d, /* ITE (Lenovo RGB) */
-        0x17ef, /* Lenovo */
-    ];
-    let awake: Vec<usb::UsbDevice> = usb::devices(root)
+    let awake: Vec<usb::UsbDevice> = crate::usbpm::internal_devices(root)
         .into_iter()
-        .filter(|d| VENDORS.contains(&d.vendor) && !d.autosuspend_enabled())
+        .filter(|d| !d.autosuspend_enabled())
         .collect();
     if awake.is_empty() {
         return;
     }
     let list = awake
         .iter()
-        .map(|d| format!("{} {} ({})", d.port, d.id(), d.name.as_deref().unwrap_or("?")))
+        .map(|d| format!("{} ({})", d.id(), d.name.as_deref().unwrap_or("?")))
         .collect::<Vec<_>>()
         .join(", ");
+    let safe = crate::usbpm::autosuspend_safe(root);
     out.push(Finding {
         id: "usb-hid-autosuspend",
         severity: Severity::Warn,
         title: "Internal keyboard/lighting USB chips never sleep".into(),
         detail: format!(
-            "{list} have autosuspend off. While they are awake the CPU can't reach its deepest \
-             idle state (about 0.8 W at screen-off idle on a GU605MI). Enabling autosuspend \
-             safely needs a sleep hook (asusctl #690) and a daemon that doesn't hold hidraw open; \
-             tspmod handles both (milestone 3)."
+            "{list} stay powered, which keeps the CPU out of its deepest idle state (about \
+             0.6 W at light use on a GU605MI). {}",
+            if safe {
+                "The patched keyboard driver is loaded; tspmod enables autosuspend at start-up."
+            } else {
+                "Letting them sleep needs tspmo's patched keyboard driver (tspmo-hid-asus-dkms): \
+                 the stock one can't change the keyboard backlight while it sleeps."
+            }
         ),
-        fix: None,
+        fix: Some(Fix {
+            summary: if safe {
+                "Restart tspmod to apply it".into()
+            } else {
+                "Install the patched keyboard driver, then reload it".into()
+            },
+            commands: if safe {
+                vec!["sudo systemctl restart tspmod".into()]
+            } else {
+                vec!["sudo pacman -S --needed dkms   # then install tspmo-hid-asus-dkms".into()]
+            },
+            needs_reboot: false,
+        }),
     });
 }
 

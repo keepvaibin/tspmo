@@ -42,6 +42,20 @@ fn main() -> ExitCode {
         }
         Some("doctor") => run_doctor(&root, args.iter().any(|a| a == "--apply")),
         Some("status") => status(),
+        // systemd-sleep hook: keep the internal USB chips powered across sleep (some keyboard
+        // firmware corrupts its USB state when resumed from autosuspend after a long sleep).
+        Some("sleep-hook") => {
+            match args.get(1).map(String::as_str) {
+                Some("pre") => {
+                    tspmo_core::usbpm::set_control(&root, false);
+                }
+                Some("post") => {
+                    tspmo_core::usbpm::apply(&root);
+                }
+                _ => {}
+            }
+            ExitCode::SUCCESS
+        }
         Some("session-env") => {
             session_env::print(&root);
             ExitCode::SUCCESS

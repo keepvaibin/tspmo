@@ -5,5 +5,6 @@ pub mod doctor;
 pub mod gpu;
 pub mod machine;
 pub mod power;
+pub mod usbpm;
 
 pub use tspmo_sys::SysRoot;

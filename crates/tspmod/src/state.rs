@@ -39,6 +39,8 @@ pub struct Daemon {
     pub gpu_waiting: bool,
     /// Last message from a GPU switch attempt, shown in the UI.
     pub gpu_message: String,
+    /// Settings the kernel refused with EPERM/EACCES (firmware-owned); never retried.
+    refused: std::collections::HashSet<String>,
     /// What was last applied, to avoid redundant firmware writes.
     applied: Option<(Profile, bool)>,
     state_file: PathBuf,
@@ -72,6 +74,7 @@ impl Daemon {
             gpu_switching: None,
             gpu_waiting: false,
             gpu_message: String::new(),
+            refused: std::collections::HashSet::new(),
             applied: None,
             state_file: state_dir.join("state"),
         };
@@ -106,10 +109,21 @@ impl Daemon {
         if !force && self.applied == Some(key) {
             return;
         }
-        let plan = power::plan(&self.root, key.0, key.1, &self.tunables);
+        let mut plan = power::plan(&self.root, key.0, key.1, &self.tunables);
+        plan.retain(|w| !self.refused.contains(&w.path));
         let r = power::apply(&self.root, &plan);
         for (w, e) in &r.failed {
-            eprintln!("tspmod: {} ({} = {}) failed: {e}", w.what, w.path, w.value);
+            // The firmware owns some settings (e.g. PCIe ASPM when the ACPI FADT forbids OS
+            // control): note it once and stop asking.
+            if e.contains("os error 1)") || e.contains("os error 13)") {
+                eprintln!(
+                    "tspmod: {} is controlled by the firmware on this laptop; leaving it alone",
+                    w.what
+                );
+                self.refused.insert(w.path.clone());
+            } else {
+                eprintln!("tspmod: {} ({} = {}) failed: {e}", w.what, w.path, w.value);
+            }
         }
         if !r.changed.is_empty() {
             eprintln!(

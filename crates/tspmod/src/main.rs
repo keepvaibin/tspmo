@@ -24,6 +24,10 @@ fn run() -> zbus::Result<()> {
     let mut daemon = state::Daemon::new(root);
     // Tune the machine before anyone can ask: the profile, then the GPU policy.
     daemon.apply(true);
+    let n = tspmo_core::usbpm::apply(&daemon.root);
+    if n > 0 {
+        eprintln!("tspmod: internal USB devices allowed to sleep: {n}");
+    }
     daemon.write_compositor_env();
     gpu::enforce_at_boot(&mut daemon);
     let shared: dbus::Shared = Arc::new(Mutex::new(daemon));

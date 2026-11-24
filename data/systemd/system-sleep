@@ -1,0 +1,4 @@
+#!/bin/sh
+# Installed by tspmo as /usr/lib/systemd/system-sleep/tspmo.
+# $1 = pre | post. Keeps internal keyboard/lighting USB chips powered across system sleep.
+exec /usr/bin/tspmo sleep-hook "$1"

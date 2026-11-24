@@ -2,19 +2,15 @@
 #
 # Local development package: builds the working tree this PKGBUILD lives in.
 #   cd packaging/arch && makepkg -si
-pkgname=tspmo-git
+pkgbase=tspmo-git
+pkgname=('tspmo-git' 'tspmo-hid-asus-dkms')
 pkgver=0.1.0
 pkgrel=1
-pkgdesc="Thermal & System Power Management Optimizer for ASUS and Lenovo laptops (power profiles, GPU modes, fans, lighting)"
+pkgdesc="Thermal & System Power Management Optimizer for ASUS and Lenovo laptops"
 arch=('x86_64')
 url="https://github.com/tspmo/tspmo"
 license=('GPL-3.0-or-later')
-depends=('dbus' 'polkit' 'upower' 'kmod' 'systemd')
 makedepends=('cargo')
-optdepends=('nvidia-utils: NVIDIA GPU mode switching')
-# tspmod implements the power-profiles D-Bus API itself.
-provides=('tspmo' 'power-profiles-daemon')
-conflicts=('tspmo' 'power-profiles-daemon' 'tuned-ppd')
 options=('!lto' '!debug')
 
 _root() { realpath "$startdir/../.."; }
@@ -31,7 +27,14 @@ check() {
   cargo test --release --locked --workspace
 }
 
-package() {
+package_tspmo-git() {
+  pkgdesc="Thermal & System Power Management Optimizer for ASUS and Lenovo laptops (power profiles, GPU modes, fans, lighting)"
+  depends=('dbus' 'polkit' 'upower' 'kmod' 'systemd')
+  optdepends=('nvidia-utils: NVIDIA GPU mode switching'
+              'tspmo-hid-asus-dkms: lets ASUS keyboard/lighting chips sleep (~0.6 W)')
+  # tspmod implements the power-profiles D-Bus API itself.
+  provides=('tspmo' 'power-profiles-daemon')
+  conflicts=('tspmo' 'power-profiles-daemon' 'tuned-ppd')
   local r; r="$(_root)"
   install -Dm755 "$srcdir/target/release/tspmo"  "$pkgdir/usr/bin/tspmo"
   install -Dm755 "$srcdir/target/release/tspmod" "$pkgdir/usr/bin/tspmod"
@@ -51,5 +54,17 @@ package() {
   install -Dm755 "$r/data/systemd/user-environment-generator" \
     "$pkgdir/usr/lib/systemd/user-environment-generators/60-tspmo"
 
+  install -Dm755 "$r/data/systemd/system-sleep" "$pkgdir/usr/lib/systemd/system-sleep/tspmo"
+
   install -Dm644 "$r/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
+
+package_tspmo-hid-asus-dkms() {
+  pkgdesc="hid-asus that wakes the ASUS keyboard before backlight commands, so it can autosuspend (rebuilt for every kernel)"
+  arch=('any')
+  license=('GPL-2.0-only')
+  depends=('dkms' 'curl' 'patch')
+  local r; r="$(_root)" d="$pkgdir/usr/src/tspmo-hid-asus-1"
+  install -Dm644 "$r"/packaging/dkms/hid-asus/{dkms.conf,Makefile,Kbuild,0001-HID-asus-wake-the-keyboard-for-feature-reports.patch} -t "$d"
+  install -Dm755 "$r/packaging/dkms/hid-asus/fetch-source.sh" -t "$d"
 }
