@@ -115,6 +115,15 @@ impl Iface {
             .call::<_, _, ()>(method, body)
             .map_err(|e| explain(e, self.iface))
     }
+
+    fn call_str<B>(&self, method: &str, body: &B) -> Result<String, String>
+    where
+        B: zbus::export::serde::Serialize + zbus::zvariant::DynamicType,
+    {
+        self.proxy()?
+            .call::<_, _, String>(method, body)
+            .map_err(|e| explain(e, self.iface))
+    }
 }
 
 // --- fans --------------------------------------------------------------------------------------
@@ -396,7 +405,7 @@ fn light(a: &[&str]) -> Result<(), String> {
             l.call("SetBrightness", &(rest.first().copied().unwrap_or(""), level))
         }
         ["next"] | ["prev"] => {
-            l.call("CycleEffect", &(a[0] == "next",))?;
+            println!("{}", l.call_str("CycleEffect", &(a[0] == "next",))?);
             Ok(())
         }
         ["power", b, w, s, d] => l.call(

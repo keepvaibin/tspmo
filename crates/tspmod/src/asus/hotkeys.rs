@@ -182,3 +182,66 @@ fn pressed(a: &Asus, source: Source, code: u16) {
         Some(Hotkey::Fan | Hotkey::Rog) | None => {}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tspmo_core::asus::hotkeys::{EV_KEY, KEY_PROG3};
+    use tspmo_core::asus::testfix::Fix;
+
+    fn event(code: u16, value: i32) -> [u8; EVENT_SIZE] {
+        let mut b = [0u8; EVENT_SIZE];
+        b[16..18].copy_from_slice(&EV_KEY.to_ne_bytes());
+        b[18..20].copy_from_slice(&code.to_ne_bytes());
+        b[20..24].copy_from_slice(&value.to_ne_bytes());
+        b
+    }
+
+    #[test]
+    fn aura_key_cycles_the_effect_and_activity_wakes_the_keyboard() {
+        let fx = Fix::new("hotkeys-aura");
+        let root = fx.root();
+        std::fs::create_dir_all(root.path("/dev")).unwrap();
+        std::fs::write(root.path("/dev/hidraw2"), b"").unwrap();
+        let a = Asus::build(&root, fx.dir().join("state"));
+        let l = a.lighting.as_ref().unwrap();
+
+        // press, release, press: two cycles
+        let path = fx.dir().join("event");
+        let mut f = std::fs::File::create(&path).unwrap();
+        for (code, v) in [(KEY_PROG3, 1), (KEY_PROG3, 0), (KEY_PROG3, 1)] {
+            f.write_all(&event(code, v)).unwrap();
+        }
+        drop(f);
+        let dev = Dev {
+            fd: open_nonblock(path.to_str().unwrap()).unwrap(),
+            source: Some(Source::Keyboard),
+        };
+        let mut last = Instant::now() - Duration::from_secs(60);
+        let alive = drain(&a, &dev, &mut last);
+        assert!(!alive, "end of file counts as a vanished device");
+        assert!(last.elapsed() < Duration::from_secs(5));
+        // Cycled twice: static -> breathe -> rainbow-cycle.
+        assert_eq!(l.cycle_effect(false).unwrap(), "breathe");
+    }
+
+    #[test]
+    fn input_wakes_a_dimmed_keyboard() {
+        let fx = Fix::new("hotkeys-idle");
+        fx.set("/sys/class/leds/asus::kbd_backlight/brightness", "2\n");
+        let a = Asus::build(&fx.root(), fx.dir().join("state"));
+        let l = a.lighting.as_ref().unwrap();
+        l.set_idle(10);
+        l.idle_dim();
+        assert_eq!(fx.get("/sys/class/leds/asus::kbd_backlight/brightness"), "0");
+        let path = fx.dir().join("event");
+        std::fs::write(&path, event(30, 1)).unwrap();
+        let dev = Dev {
+            fd: open_nonblock(path.to_str().unwrap()).unwrap(),
+            source: None,
+        };
+        drain(&a, &dev, &mut Instant::now());
+        assert_eq!(fx.get("/sys/class/leds/asus::kbd_backlight/brightness"), "2");
+    }
+}

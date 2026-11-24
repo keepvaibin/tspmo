@@ -234,9 +234,13 @@ impl Thermal {
         let ids = self.fan_ids(fan)?;
         {
             let mut st = lock(&self.state);
+            let active = st.mode == mode;
             for id in &ids {
                 st.settings.remove(&(mode_index(mode), *id));
-                st.factory.remove(&(mode_index(mode), *id));
+                // Only the active mode's curve can be read again right now.
+                if active {
+                    st.factory.remove(&(mode_index(mode), *id));
+                }
             }
             self.save(&st);
         }
@@ -329,8 +333,15 @@ impl Thermal {
     }
 
     pub fn refresh_limits(&self) {
-        let l = limits::discover(&self.root);
-        lock(&self.state).limits = l;
+        let mut l = limits::discover(&self.root);
+        let mut st = lock(&self.state);
+        let m = mode_index(st.mode);
+        for x in &mut l {
+            if !st.custom.contains_key(&(m, st.on_battery, x.name.to_owned())) {
+                x.current = x.default;
+            }
+        }
+        st.limits = l;
     }
 
     // --- applying ------------------------------------------------------------------------------
@@ -439,7 +450,14 @@ impl Thermal {
             }
         }
 
-        let limits_now = limits::discover(root);
+        // The kernel only remembers what was last written; after a reload of the thermal
+        // mode the firmware default is what runs.
+        let mut limits_now = limits::discover(root);
+        for l in &mut limits_now {
+            if !wanted.iter().any(|(w, _)| w.name == l.name) {
+                l.current = l.default;
+            }
+        }
         let mut st = lock(&self.state);
         for (i, c) in factory {
             st.factory.insert((mode_index(mode), i), c);

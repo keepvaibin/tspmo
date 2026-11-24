@@ -161,19 +161,24 @@ impl Asus {
     }
 }
 
+impl Asus {
+    fn build(root: &SysRoot, dir: PathBuf) -> Self {
+        Self {
+            root: root.clone(),
+            lighting: lighting::Lighting::new(root.clone(), dir.clone()).map(Arc::new),
+            lid: lid::Lid::new(root.clone(), dir.clone()).map(Arc::new),
+            shown_mode: Mutex::new(None),
+            thermal: thermal::Thermal::new(root.clone(), dir.clone()).map(Arc::new),
+            battery: battery::Battery::new(root.clone(), dir.clone()).map(Arc::new),
+            hardware: hardware::Hardware::new(root.clone(), dir).map(Arc::new),
+            conn: OnceLock::new(),
+        }
+    }
+}
+
 /// Discover the hardware and subscribe to events. Call before anything publishes events.
 pub fn init(root: &SysRoot) -> Arc<Asus> {
-    let dir = state_dir();
-    let asus = Arc::new(Asus {
-        root: root.clone(),
-        lighting: lighting::Lighting::new(root.clone(), dir.clone()).map(Arc::new),
-        lid: lid::Lid::new(root.clone(), dir.clone()).map(Arc::new),
-        shown_mode: Mutex::new(None),
-        thermal: thermal::Thermal::new(root.clone(), dir.clone()).map(Arc::new),
-        battery: battery::Battery::new(root.clone(), dir.clone()).map(Arc::new),
-        hardware: hardware::Hardware::new(root.clone(), dir).map(Arc::new),
-        conn: OnceLock::new(),
-    });
+    let asus = Arc::new(Asus::build(root, state_dir()));
     // One worker thread blocks on the channel; subscribers (which run on the publisher's
     // thread, often under the daemon lock) only enqueue.
     let (tx, rx) = mpsc::channel::<events::Event>();
