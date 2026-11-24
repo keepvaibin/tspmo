@@ -964,7 +964,7 @@ impl App {
             &self.m.kb_effects,
             s.get(k, "Modes").strings().iter().map(|m| opt(m, m)).collect(),
         );
-        bk.set_kb_effect(ss(&ef.mode));
+        bk.set_kb_effect(ss(&model::color_label(&ef.mode)));
         bk.set_kb_color(slint::Color::from_rgb_u8(ef.color.0, ef.color.1, ef.color.2));
         bk.set_kb_color_idx(
             model::KB_COLORS
@@ -992,7 +992,10 @@ impl App {
                 .position(|m| m == s.get(l, "SlashMode").str())
                 .unwrap_or(0) as i32,
         );
-        sync(&self.m.slash_modes, modes.iter().map(|m| ss(m)).collect());
+        sync(
+            &self.m.slash_modes,
+            modes.iter().map(|m| ss(&model::color_label(m))).collect(),
+        );
         sync(
             &self.m.slash_show,
             s.get(l, "SlashShow")

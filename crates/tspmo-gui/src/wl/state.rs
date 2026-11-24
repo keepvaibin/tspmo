@@ -311,8 +311,8 @@ impl State {
         ) else {
             return;
         };
-        for (d, p) in mem.chunks_exact_mut(4).zip(canvas) {
-            d.copy_from_slice(&[p.b, p.g, p.r, p.a]);
+        for (d, p) in mem.as_chunks_mut::<4>().0.iter_mut().zip(canvas) {
+            *d = [p.b, p.g, p.r, p.a];
         }
         if let Some(path) = &self.dump {
             let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
@@ -389,6 +389,7 @@ impl Dispatch<WpFractionalScaleV1, usize> for State {
             && let Some(s) = st.surfs.get_mut(id)
             && s.scale120 != scale
         {
+            crate::trace(&format!("preferred scale {scale}/120"));
             s.scale120 = scale;
             st.out.push(Out::Scale(*id));
         }
@@ -478,6 +479,7 @@ impl LayerShellHandler for State {
             && let Some(s) = self.surfs.get_mut(&id)
         {
             s.configured = true;
+            crate::trace("layer configured");
             self.out.push(Out::Scale(id));
         }
     }
@@ -541,10 +543,10 @@ impl SeatHandler for State {
         _: wl_seat::WlSeat,
         cap: Capability,
     ) {
-        if cap == Capability::Keyboard {
-            if let Some(k) = self.keyboard.take() {
-                k.release();
-            }
+        if cap == Capability::Keyboard
+            && let Some(k) = self.keyboard.take()
+        {
+            k.release();
         }
         if cap == Capability::Pointer {
             self.cursor_dev = None;

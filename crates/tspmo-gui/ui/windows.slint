@@ -262,7 +262,6 @@ export component KeysWin inherits WinFrame {
             }
             Group {
                 title: "Off after idle";
-                value: Bk.kb-idle;
                 Stepper {
                     text: Bk.kb-idle;
                     prev => { Bk.acti("kb-idle-step", -1); }

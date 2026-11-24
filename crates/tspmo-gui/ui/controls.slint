@@ -50,7 +50,7 @@ export component Field inherits Rectangle {
                 background: Th.line;
             }
         }
-        Mono { text: root.value; }
+        if root.value != "": Mono { text: root.value; }
     }
 }
 
