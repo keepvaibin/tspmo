@@ -82,6 +82,16 @@ impl SlashCfg {
         })
     }
 
+    /// The firmware-side "show when" flags and their values.
+    fn flags(&self) -> [(When, bool); 4] {
+        [
+            (When::Boot, self.boot),
+            (When::Sleep, self.sleep),
+            (When::Shutdown, self.shutdown),
+            (When::LowBattery, self.warning),
+        ]
+    }
+
     fn set_option(&mut self, name: &str, v: bool) -> bool {
         let slot = match name {
             "boot" => &mut self.boot,
@@ -134,8 +144,27 @@ impl Lid {
         Some(lid)
     }
 
+    /// First start: the settings are whatever the firmware has, not guesses.
+    fn adopt_firmware(&self) {
+        let Some(s) = &self.slash else { return };
+        let Some(live) = s.open(&self.root).ok().and_then(|mut d| d.read()) else {
+            return;
+        };
+        let mut st = lock(&self.st);
+        let c = &mut st.cfg;
+        c.enabled = live.enabled;
+        c.brightness = live.brightness;
+        c.interval = live.interval;
+        c.mode = live.mode.unwrap_or(c.mode);
+        c.boot = live.boot.unwrap_or(c.boot);
+        c.sleep = live.sleep.unwrap_or(c.sleep);
+        c.shutdown = live.shutdown.unwrap_or(c.shutdown);
+        c.warning = live.low_battery.unwrap_or(c.warning);
+    }
+
     fn load(&self) {
         let Ok(text) = std::fs::read_to_string(&self.file) else {
+            self.adopt_firmware();
             return;
         };
         let mut st = lock(&self.st);
@@ -146,7 +175,9 @@ impl Lid {
             match k {
                 "enabled" => c.enabled = v == "1",
                 "brightness" => c.brightness = v.parse().unwrap_or(c.brightness),
-                "interval" => c.interval = v.parse().unwrap_or(c.interval),
+                "interval" => {
+                    c.interval = v.parse::<u8>().unwrap_or(c.interval).min(slash::MAX_INTERVAL);
+                }
                 "mode" => c.mode = Mode::parse(v).unwrap_or(c.mode),
                 "anime_enabled" => st.anime.enabled = v == "1",
                 "anime_brightness" => st.anime.brightness = v.parse::<u8>().unwrap_or(2).min(3),
@@ -199,6 +230,9 @@ impl Lid {
     }
 
     fn send(&self, packets: &[Vec<u8>]) {
+        if packets.is_empty() {
+            return;
+        }
         if let Some(s) = &self.slash {
             if let Err(e) = s.send(&self.root, packets) {
                 eprintln!("tspmod: slash: {e}");
@@ -237,21 +271,34 @@ impl Lid {
         let id = self.report();
         let [i0, i1] = slash::init(id);
         let [en, op] = self.display_packets(&c, on_battery);
-        self.send(&[
-            i0,
-            i1,
-            en,
-            op,
-            slash::mode(id, c.mode),
-            slash::save(id),
-            slash::show_when(id, When::Boot, c.boot),
-            slash::show_when(id, When::Sleep, c.sleep),
-            slash::show_when(id, When::Shutdown, c.shutdown),
-            slash::show_when(id, When::LowBattery, c.warning),
-            slash::show_on_battery(id, c.battery),
-            slash::show_on_lid_closed(id, c.lid),
-            slash::save(id),
-        ]);
+        if let Some(s) = &self.slash {
+            let r = s.open(&self.root).and_then(|mut d| {
+                d.write(&[i0, i1, en, op])?;
+                d.set_mode(c.mode)?;
+                d.write(&[slash::save(id)])?;
+                for (w, on) in c.flags() {
+                    d.set_flag(w, on)?;
+                }
+                d.write(&[
+                    slash::show_on_battery(id, c.battery),
+                    slash::show_on_lid_closed(id, c.lid),
+                    slash::save(id),
+                ])?;
+                // The firmware says what it took; a difference is worth a log line, not a retry.
+                if let Some(live) = d.read() {
+                    let lit = Self::lit(&c, on_battery);
+                    if (live.enabled, live.brightness, live.interval, live.mode)
+                        != (lit, c.brightness, c.interval, Some(c.mode))
+                    {
+                        eprintln!("tspmod: slash: wrote {c:?} (lit {lit}) but the firmware reports {live:?}");
+                    }
+                }
+                Ok(())
+            });
+            if let Err(e) = r {
+                eprintln!("tspmod: slash: {e}");
+            }
+        }
         // Remember the defaults on first start.
         self.save(&lock(&self.st));
     }
@@ -382,6 +429,12 @@ impl Lid {
     }
 
     pub fn set_interval(&self, v: u8) -> Result<(), String> {
+        if v > slash::MAX_INTERVAL {
+            return Err(format!(
+                "interval must be 0-{} seconds (0: no pause between animations)",
+                slash::MAX_INTERVAL
+            ));
+        }
         let on_battery = lock(&self.st).on_battery;
         self.change(|c| {
             c.interval = v;
@@ -392,37 +445,59 @@ impl Lid {
     pub fn set_mode(&self, name: &str) -> Result<(), String> {
         let m = Mode::parse(name).ok_or_else(|| {
             format!(
-                "unknown mode '{name}' ({})",
+                "unknown mode '{name}' (use {})",
                 Mode::ALL.iter().map(|m| m.name()).collect::<Vec<_>>().join(", ")
             )
         })?;
-        let id = self.report();
         self.change(|c| {
             c.mode = m;
-            Ok(vec![slash::mode(id, m), slash::save(id)])
-        })
+            Ok(Vec::new())
+        })?;
+        let id = self.report();
+        self.with_session(|d| {
+            d.set_mode(m)?;
+            d.write(&[slash::save(id)])
+        });
+        Ok(())
     }
 
     pub fn set_show(&self, what: &str, on: bool) -> Result<(), String> {
         let id = self.report();
         let on_battery = lock(&self.st).on_battery;
+        let mut flag = None;
         self.change(|c| {
             if !c.set_option(what, on) {
-                return Err(format!("unknown option '{what}' ({})", OPTIONS.join(", ")));
+                return Err(format!("unknown option '{what}' (use {})", OPTIONS.join(", ")));
             }
+            flag = match what {
+                "boot" => Some(When::Boot),
+                "sleep" => Some(When::Sleep),
+                "shutdown" => Some(When::Shutdown),
+                "warning" => Some(When::LowBattery),
+                _ => None,
+            };
             Ok(match what {
-                "boot" => vec![slash::show_when(id, When::Boot, on)],
-                "sleep" => vec![slash::show_when(id, When::Sleep, on)],
-                "shutdown" => vec![slash::show_when(id, When::Shutdown, on)],
-                "warning" => vec![slash::show_when(id, When::LowBattery, on)],
                 "battery" => {
                     let mut v = vec![slash::show_on_battery(id, on)];
                     v.extend(self.display_packets(c, on_battery));
                     v
                 }
-                _ => vec![slash::show_on_lid_closed(id, on), slash::save(id)],
+                "lid" => vec![slash::show_on_lid_closed(id, on), slash::save(id)],
+                _ => Vec::new(),
             })
-        })
+        })?;
+        if let Some(w) = flag {
+            self.with_session(|d| d.set_flag(w, on));
+        }
+        Ok(())
+    }
+
+    /// An exchange with the Slash that reads before it writes.
+    fn with_session(&self, f: impl FnOnce(&mut slash::Session) -> std::io::Result<()>) {
+        let Some(s) = &self.slash else { return };
+        if let Err(e) = s.open(&self.root).and_then(|mut d| f(&mut d)) {
+            eprintln!("tspmod: slash: {e}");
+        }
     }
 }
 
@@ -559,10 +634,32 @@ impl Lid1 {
         lock(&self.0.st).cfg.brightness
     }
 
-    /// Pause between animations, 0-255.
+    /// Whether the Slash is lighting right now: enabled, and either on AC or allowed on
+    /// battery (`SlashShow` "battery").
+    #[zbus(property)]
+    fn slash_lit(&self) -> bool {
+        let st = lock(&self.0.st);
+        Lid::lit(&st.cfg, st.on_battery)
+    }
+
+    /// Pause between animations in seconds, 0 to `SlashIntervalMax` (0: none).
     #[zbus(property)]
     fn slash_interval(&self) -> u8 {
         lock(&self.0.st).cfg.interval
+    }
+
+    #[zbus(property)]
+    fn slash_interval_max(&self) -> u8 {
+        slash::MAX_INTERVAL
+    }
+
+    /// The brightness steps of the firmware's own apps, `(name, value)`; any value 0-255 works.
+    #[zbus(property)]
+    fn slash_brightness_levels(&self) -> Vec<(String, u8)> {
+        slash::BRIGHTNESS_LEVELS
+            .iter()
+            .map(|(n, v)| ((*n).to_owned(), *v))
+            .collect()
     }
 
     #[zbus(property)]
@@ -660,6 +757,7 @@ pub async fn changed(conn: &zbus::Connection) {
     let i = r.get().await;
     let e = r.signal_emitter();
     let _ = i.slash_enabled_changed(e).await;
+    let _ = i.slash_lit_changed(e).await;
     let _ = i.slash_brightness_changed(e).await;
     let _ = i.slash_interval_changed(e).await;
     let _ = i.slash_mode_changed(e).await;
