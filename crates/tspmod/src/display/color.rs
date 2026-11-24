@@ -7,7 +7,7 @@ use super::{Shared, State, kscreen_doctor, lock};
 use crate::session;
 use std::path::PathBuf;
 use std::time::Duration;
-use tspmo_core::display::{icc, kscreen};
+use tspmo_core::display::{icc, ini, kscreen};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
@@ -224,30 +224,32 @@ pub fn set_mode(shared: &Shared, name: &str) -> Result<String, String> {
 const GROUP: &str = "NightColor";
 const KEYS: [&str; 3] = ["Active", "Mode", "NightTemperature"];
 
-/// `kwriteconfig6` argument lists that turn constant-temperature Night Light on at `kelvin`,
-/// or put the `saved` values back (an empty saved value deletes the key) when `kelvin` is 0.
-pub fn eyecare_commands(kelvin: u32, saved: &[String; 3]) -> Vec<Vec<String>> {
-    let write = |key: &str, value: &str| -> Vec<String> {
-        let mut c = vec!["--file", "kwinrc", "--group", GROUP, "--key", key]
-            .into_iter()
-            .map(String::from)
-            .collect::<Vec<_>>();
-        if value.is_empty() {
-            c.push("--delete".into());
-        } else {
-            c.push(value.into());
-        }
-        c
-    };
+/// The Night Light settings that turn constant-temperature mode on at `kelvin`, or, when
+/// `kelvin` is 0, the `saved` ones (an empty saved value means the key was not set).
+pub fn eyecare_values(kelvin: u32, saved: &[String; 3]) -> [Option<String>; 3] {
     if kelvin == 0 {
-        KEYS.iter().zip(saved).map(|(k, v)| write(k, v)).collect()
+        saved.clone().map(|v| (!v.is_empty()).then_some(v))
     } else {
-        vec![
-            write("Active", "true"),
-            write("Mode", "Constant"),
-            write("NightTemperature", &kelvin.to_string()),
+        [
+            Some("true".into()),
+            Some("Constant".into()),
+            Some(kelvin.to_string()),
         ]
     }
+}
+
+/// `kwriteconfig6` arguments setting (or, for `None`, deleting) one Night Light key. Going
+/// through KDE's own tool matters: it also tells the running KWin that the file changed.
+fn write_args(key: &str, value: Option<&str>) -> Vec<String> {
+    let mut a: Vec<String> = ["--file", "kwinrc", "--group", GROUP, "--key", key]
+        .into_iter()
+        .map(String::from)
+        .collect();
+    match value {
+        Some(v) => a.push(v.to_owned()),
+        None => a.push("--delete".to_owned()),
+    }
+    a
 }
 
 pub fn set_eyecare(shared: &Shared, kelvin: u32) -> Result<String, String> {
@@ -255,49 +257,28 @@ pub fn set_eyecare(shared: &Shared, kelvin: u32) -> Result<String, String> {
     let Some(sess) = session::active(&root) else {
         return Err("no desktop session".into());
     };
-    let t = Duration::from_secs(5);
-    let read = |key: &str| -> String {
-        session::run(
-            &sess,
-            "kreadconfig6",
-            &["--file", "kwinrc", "--group", GROUP, "--key", key],
-            t,
-        )
-        .map(|o| o.stdout.trim().to_owned())
-        .unwrap_or_default()
-    };
+    let config =
+        std::fs::read_to_string(PathBuf::from(&sess.home).join(".config/kwinrc")).unwrap_or_default();
     // Remember what Night Light was before eye care first took it over.
     let saved = {
         let mut s = lock(shared);
         if kelvin != 0 && s.color.saved_nightlight.is_none() {
-            s.color.saved_nightlight = Some(KEYS.map(&read));
+            s.color.saved_nightlight = Some(KEYS.map(|k| ini::get(&config, GROUP, k).unwrap_or_default()));
         }
         s.color
             .saved_nightlight
             .clone()
             .unwrap_or_else(|| KEYS.map(|_| String::new()))
     };
-    for cmd in eyecare_commands(kelvin, &saved) {
-        let refs: Vec<&str> = cmd.iter().map(String::as_str).collect();
-        let o = session::run(&sess, "kwriteconfig6", &refs, t).map_err(|e| e.to_string())?;
+    for (key, v) in KEYS.iter().zip(eyecare_values(kelvin, &saved)) {
+        let args = write_args(key, v.as_deref());
+        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        let o =
+            session::run(&sess, "kwriteconfig6", &refs, Duration::from_secs(5)).map_err(|e| e.to_string())?;
         if !o.ok {
             return Err(format!("kwriteconfig6: {}", o.stderr.trim()));
         }
     }
-    session::run(
-        &sess,
-        "busctl",
-        &[
-            "--user",
-            "call",
-            "org.kde.KWin",
-            "/KWin",
-            "org.kde.KWin",
-            "reconfigure",
-        ],
-        t,
-    )
-    .map_err(|e| e.to_string())?;
     let mut s = lock(shared);
     s.color.eyecare_k = kelvin;
     if kelvin == 0 {
@@ -343,14 +324,23 @@ mod tests {
     }
 
     #[test]
-    fn eyecare_commands_turn_on_and_restore() {
-        let saved = ["".to_owned(), "Automatic".to_owned(), "4000".to_owned()];
-        let on = eyecare_commands(4500, &saved);
-        assert_eq!(on.len(), 3);
-        assert_eq!(on[1].last().map(String::as_str), Some("Constant"));
-        assert_eq!(on[2].last().map(String::as_str), Some("4500"));
-        let off = eyecare_commands(0, &saved);
-        assert_eq!(off[0].last().map(String::as_str), Some("--delete")); // Active was unset
-        assert_eq!(off[1].last().map(String::as_str), Some("Automatic"));
+    fn eyecare_turns_on_and_restores_the_users_settings() {
+        let config = "[NightColor]\nMode=Automatic\nNightTemperature=4000\n\n[Other]\nx=1\n";
+        let saved = KEYS.map(|k| ini::get(config, GROUP, k).unwrap_or_default());
+        assert_eq!(saved, ["".to_owned(), "Automatic".to_owned(), "4000".to_owned()]);
+
+        let on = eyecare_values(4500, &saved);
+        assert_eq!(
+            on,
+            [Some("true".into()), Some("Constant".into()), Some("4500".into())]
+        );
+        let off = eyecare_values(0, &saved);
+        assert_eq!(off, [None, Some("Automatic".into()), Some("4000".into())]);
+        // Unset keys are deleted, set ones written back.
+        assert_eq!(
+            write_args("Active", None).last().map(String::as_str),
+            Some("--delete")
+        );
+        assert_eq!(write_args("Mode", Some("Automatic"))[5..], ["Mode", "Automatic"]);
     }
 }

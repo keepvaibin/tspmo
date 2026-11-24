@@ -23,6 +23,7 @@ COMMANDS:
     profile cycle     Next mode
     display ...       Screen: refresh rate, brightness, dimming, colour (tspmo display help)
     bench ...         Measure what a setting costs or saves (tspmo bench help)
+    ping [N]          Time N (default 50) round trips to tspmod
     gpu [<mode>]      Show or set the GPU mode: eco | hybrid | ultimate | optimized
     gpu users         Apps keeping the NVIDIA GPU awake
     doctor            Find what breaks features or costs battery, with exact fixes
@@ -68,6 +69,7 @@ fn main() -> ExitCode {
         Some("gpu") => gpu(args.get(1).map(String::as_str)),
         Some("display") => display::run(&args[1..]),
         Some("bench") => bench::run(&args[1..]),
+        Some("ping") => ping(args.get(1).and_then(|n| n.parse().ok()).unwrap_or(50)),
         Some("dump") => match args.get(1) {
             Some(dir) => match dump::dump(&root, dir.as_ref()) {
                 Ok(n) => {
@@ -140,6 +142,25 @@ fn status() -> ExitCode {
     if !msg.is_empty() {
         println!("          {msg}");
     }
+    ExitCode::SUCCESS
+}
+
+/// Round-trip times to the daemon, over one connection (the cost the desktop sees).
+fn ping(n: usize) -> ExitCode {
+    let mut ms = Vec::with_capacity(n);
+    for _ in 0..n {
+        let t = std::time::Instant::now();
+        if let Err(e) = client::state() {
+            return fail(e);
+        }
+        ms.push(t.elapsed().as_secs_f64() * 1000.0);
+    }
+    println!(
+        "{n} calls: median {:.2} ms, p95 {:.2} ms, max {:.2} ms",
+        bench::median(&ms),
+        bench::percentile(&ms, 95.0),
+        bench::percentile(&ms, 100.0)
+    );
     ExitCode::SUCCESS
 }
 

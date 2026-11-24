@@ -273,6 +273,17 @@ fn tspmo_props(d: &Daemon) -> Vec<(&'static str, OwnedValue)> {
     ]
 }
 
+/// Show an on-screen note for the changes KDE's own power-profile OSD can't show: it sees
+/// Eco+ as power-saver, so moving between those two changes nothing it knows about.
+fn announce(before: Profile, after: Profile) {
+    let text = match (before, after) {
+        (b, Profile::EcoPlus) if b != Profile::EcoPlus => "Eco+",
+        (Profile::EcoPlus, Profile::PowerSaver) => "Power saver",
+        _ => return,
+    };
+    crate::session::osd("battery-profile-powersave", text, None);
+}
+
 pub struct Tspmo(pub Shared);
 
 #[zbus::interface(name = "org.tspmo.Daemon1")]
@@ -338,7 +349,12 @@ impl Tspmo {
             .ok_or_else(|| zbus::fdo::Error::InvalidArgs(format!("unknown profile '{profile}'")))?;
         let sender = hdr.sender().map(|s| s.to_string());
         polkit::check(conn, sender.as_deref(), polkit::SWITCH_PROFILE).await?;
-        lock(&self.0).choose(p);
+        {
+            let mut d = lock(&self.0);
+            let before = d.effective();
+            d.choose(p);
+            announce(before, d.effective());
+        }
         emit_changed(conn, &self.0).await;
         Ok(())
     }
@@ -353,8 +369,10 @@ impl Tspmo {
         polkit::check(conn, sender.as_deref(), polkit::SWITCH_PROFILE).await?;
         let next = {
             let mut d = lock(&self.0);
+            let before = d.effective();
             let next = d.chosen().next();
             d.choose(next);
+            announce(before, d.effective());
             next
         };
         emit_changed(conn, &self.0).await;

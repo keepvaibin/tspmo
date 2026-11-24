@@ -6,6 +6,7 @@
 pub mod dimming;
 pub mod edid;
 pub mod icc;
+pub mod ini;
 pub mod kscreen;
 pub mod refresh;
 
