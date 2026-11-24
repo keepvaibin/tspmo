@@ -590,6 +590,28 @@ mod tests {
         assert_eq!(fx.get(&format!("{HW}/pwm2_auto_point1_pwm")), "255");
     }
 
+    #[test]
+    fn eco_plus_stops_the_fans_while_cool_and_leaving_it_gives_them_back() {
+        let fx = Fix::new("th-eco");
+        fx.set(power::PLATFORM_PROFILE, "low-power\n");
+        let t = thermal(&fx);
+        // A user curve for power-saver does not survive Eco+ ...
+        t.set_fan(Profile::PowerSaver, 0, Setting::Full).unwrap();
+        t.set_eco(true);
+        t.on_profile(Profile::PowerSaver, false);
+        for fan in 1..=3 {
+            assert_eq!(fx.get(&format!("{HW}/pwm{fan}_enable")), "1");
+            assert_eq!(fx.get(&format!("{HW}/pwm{fan}_auto_point1_pwm")), "0", "fan {fan}");
+            assert_eq!(fx.get(&format!("{HW}/pwm{fan}_auto_point2_pwm")), "0", "fan {fan}");
+        }
+        // ... and is back, not Eco+'s curve, when Eco+ ends.
+        t.set_eco(false);
+        t.on_profile(Profile::PowerSaver, false);
+        assert_eq!(fx.get(&format!("{HW}/pwm1_auto_point1_pwm")), "255");
+        t.set_fan(Profile::PowerSaver, 0, Setting::Auto).unwrap();
+        assert_eq!(fx.get(&format!("{HW}/pwm1_enable")), "2");
+    }
+
     fn fx_factory(t: &Thermal, fan: u32) -> Curve {
         lock(&t.state)
             .factory

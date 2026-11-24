@@ -726,6 +726,27 @@ mod tests {
     }
 
     #[test]
+    fn eco_plus_keeps_the_light_bar_dark_and_leaving_it_lights_it_again() {
+        let fx = Fix::new("lid-eco");
+        fx.set("/sys/class/power_supply/ACAD/online", "1\n");
+        let l = lid(&fx);
+        clear(&fx);
+        l.set_eco(true);
+        assert_eq!(sent(&fx)[6 + 8], 0, "options: disabled");
+        // A settings change in Eco+ stays dark.
+        clear(&fx);
+        l.set_brightness(100).unwrap();
+        assert_eq!(sent(&fx)[6 + 8], 0);
+        clear(&fx);
+        l.set_eco(false);
+        assert_eq!(sent(&fx)[6 + 8], 1);
+        // No change, no packet.
+        clear(&fx);
+        l.set_eco(false);
+        assert!(sent(&fx).is_empty());
+    }
+
+    #[test]
     fn battery_option_keeps_it_lit() {
         let fx = Fix::new("lid-show-battery");
         let l = lid(&fx);

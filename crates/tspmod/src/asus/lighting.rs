@@ -751,6 +751,25 @@ mod tests {
     }
 
     #[test]
+    fn eco_plus_darkens_the_keyboard_after_ten_seconds_and_leaving_it_brings_it_back() {
+        let fx = Fix::new("light-eco");
+        fx.set(BR, "2\n");
+        let l = light(&fx);
+        assert_eq!(l.idle_armed(), None);
+        l.set_eco(true);
+        assert_eq!(l.idle_armed(), Some(ECO_IDLE));
+        // The user's own shorter timeout still wins.
+        l.set_idle(5);
+        assert_eq!(l.idle_armed(), Some(5));
+        l.set_idle(0);
+        l.idle_dim();
+        assert_eq!(fx.get(BR), "0");
+        l.set_eco(false);
+        assert_eq!(fx.get(BR), "2");
+        assert_eq!(l.idle_armed(), None);
+    }
+
+    #[test]
     fn idle_dims_and_restores() {
         let fx = Fix::new("light-idle");
         fx.set(BR, "2\n");
