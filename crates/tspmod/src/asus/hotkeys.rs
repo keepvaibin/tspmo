@@ -69,8 +69,49 @@ pub fn start(a: Arc<Asus>) {
     super::spawn("asus-input", move || run(&a));
 }
 
+/// Kernel uevents (no udev daemon needed), to notice input devices appearing after start.
+fn uevent_socket() -> Option<OwnedFd> {
+    use rustix::net::{AddressFamily, SocketFlags, SocketType, bind, netlink, socket_with};
+    let fd = socket_with(
+        AddressFamily::NETLINK,
+        SocketType::RAW,
+        SocketFlags::CLOEXEC | SocketFlags::NONBLOCK,
+        Some(netlink::KOBJECT_UEVENT),
+    )
+    .ok()?;
+    bind(&fd, &netlink::SocketAddrNetlink::new(0, 1)).ok()?;
+    Some(fd)
+}
+
+/// Drain the socket; true if an input device was added or removed.
+fn input_changed(fd: &OwnedFd) -> bool {
+    let mut buf = [0u8; 4096];
+    let mut hit = false;
+    while let Ok(n) = read(fd, &mut buf) {
+        if n == 0 {
+            break;
+        }
+        hit |= is_input_hotplug(&buf[..n]);
+    }
+    hit
+}
+
+fn is_input_hotplug(msg: &[u8]) -> bool {
+    let mut change = false;
+    let mut input = false;
+    for f in msg.split(|b| *b == 0) {
+        match f {
+            b"ACTION=add" | b"ACTION=remove" => change = true,
+            b"SUBSYSTEM=input" => input = true,
+            _ => {}
+        }
+    }
+    change && input
+}
+
 fn run(a: &Asus) {
     let Some(wake) = WAKE.get() else { return };
+    let uevents = uevent_socket();
     let mut last_input = Instant::now();
     'outer: loop {
         let mut devs = open_devices(a);
@@ -83,6 +124,11 @@ fn run(a: &Asus) {
         loop {
             // (index into devs) for each polled descriptor after the first two.
             let mut fds = vec![PollFd::new(wake, PollFlags::IN)];
+            if let Some(u) = &uevents {
+                fds.push(PollFd::new(u, PollFlags::IN));
+            }
+            let has_u = uevents.is_some();
+            let hw_slot = fds.len();
             if let Some(f) = &hw {
                 fds.push(PollFd::new(f, PollFlags::PRI | PollFlags::ERR));
             }
@@ -116,7 +162,14 @@ fn run(a: &Asus) {
                 let _ = read(wake, &mut b);
                 continue 'outer;
             }
-            if hw_slots == 2 && !fds[1].revents().is_empty() {
+            if has_u && !fds[1].revents().is_empty() {
+                if let Some(u) = &uevents {
+                    if input_changed(u) {
+                        continue 'outer;
+                    }
+                }
+            }
+            if hw.is_some() && !fds[hw_slot].revents().is_empty() {
                 use std::io::{Read, Seek, SeekFrom};
                 if let Some(mut f) = hw.as_ref() {
                     // Reading re-arms the notification.
@@ -196,6 +249,16 @@ mod tests {
         b[18..20].copy_from_slice(&code.to_ne_bytes());
         b[20..24].copy_from_slice(&value.to_ne_bytes());
         b
+    }
+
+    #[test]
+    fn uevents_filter_input_hotplug() {
+        let add = b"add@/devices/x/input/input9/event9\0ACTION=add\0DEVPATH=/devices/x\0SUBSYSTEM=input\0";
+        assert!(is_input_hotplug(add));
+        let usb = b"add@/devices/x\0ACTION=add\0SUBSYSTEM=usb\0";
+        assert!(!is_input_hotplug(usb));
+        let bind = b"bind@/devices/x\0ACTION=bind\0SUBSYSTEM=input\0";
+        assert!(!is_input_hotplug(bind));
     }
 
     #[test]

@@ -5,6 +5,7 @@
 pub mod anime;
 pub mod battery;
 pub mod fans;
+pub mod fnlock;
 pub mod hardware;
 pub mod hid;
 pub mod hotkeys;

@@ -28,7 +28,8 @@ ProtectSystem=strict
 # The daemon runs short commands as the desktop user (display, OSD): they need the user's
 # runtime directory (Wayland and D-Bus sockets), and eye care edits the user's kwinrc.
 ProtectHome=no
-ReadWritePaths=-/home -/run/user
+# Fn-lock writes its keymap (hwdb) under /etc/udev.
+ReadWritePaths=-/home -/run/user /etc/udev
 PrivateTmp=yes
 NoNewPrivileges=yes
 RestrictRealtime=yes

@@ -5,6 +5,7 @@
 
 mod battery;
 mod fans;
+mod fnlock;
 mod hardware;
 mod hotkeys;
 mod lid;
@@ -238,6 +239,7 @@ pub fn start(conn: &zbus::blocking::Connection, asus: &Arc<Asus>) {
     }
     if let Some(h) = &asus.hardware {
         h.reapply();
+        spawn("asus-fnlock-refresh", fnlock::refresh_if_stale);
     }
     if let Some(l) = &asus.lighting {
         l.apply();

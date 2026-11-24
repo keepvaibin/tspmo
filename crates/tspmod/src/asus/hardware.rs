@@ -128,6 +128,31 @@ impl Hardware1 {
         lock(&self.0.st).reboot
     }
 
+    /// Software Fn-lock: F1-F12 are the media keys, Fn+key gives the F-key. Needs a measured
+    /// keyboard (`FnLockAvailable`).
+    #[zbus(property)]
+    fn fn_lock(&self) -> bool {
+        super::fnlock::state()
+    }
+
+    #[zbus(property)]
+    fn fn_lock_available(&self) -> bool {
+        super::fnlock::find(&self.0.root).is_some()
+    }
+
+    /// Rewrites the keymap (about a second); rare, so it runs on the call itself.
+    async fn set_fn_lock(
+        &self,
+        on: bool,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        authorize(conn, &hdr, super::SET_HARDWARE).await?;
+        super::fnlock::set(&self.0.root, on).map_err(zbus::fdo::Error::Failed)?;
+        changed(conn).await;
+        Ok(())
+    }
+
     async fn set(
         &self,
         name: String,
@@ -150,6 +175,7 @@ pub async fn changed(conn: &zbus::Connection) {
     let e = r.signal_emitter();
     let _ = i.items_changed(e).await;
     let _ = i.reboot_pending_changed(e).await;
+    let _ = i.fn_lock_changed(e).await;
 }
 
 #[cfg(test)]
