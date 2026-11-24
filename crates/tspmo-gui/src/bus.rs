@@ -76,11 +76,11 @@ pub fn explain(e: &zbus::Error) -> String {
         zbus::Error::MethodError(name, desc, _) => {
             let name = name.as_str();
             if name.ends_with("AccessDenied") || name.ends_with("NotAuthorized") {
-                "Not authorised".into()
+                "Not authorized".into()
+            } else if name.ends_with("ServiceUnknown") || name.ends_with("NameHasNoOwner") {
+                "tspmod is not running".into()
             } else if let Some(d) = desc.as_deref().filter(|d| !d.is_empty()) {
                 d.to_owned()
-            } else if name.ends_with("ServiceUnknown") {
-                "tspmod is not running".into()
             } else {
                 name.rsplit('.').next().unwrap_or(name).to_owned()
             }
