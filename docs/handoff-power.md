@@ -86,3 +86,36 @@ killed with `kill`, the file `/run/tspmo-bench-<pid>` lists what is still to res
 - `SessionNew` handling (apply at login) was not tested with a real logout.
 - Only KDE is supported for refresh, dimming and colour; the OSD falls back to `tspmo-gui --osd`.
 - `tools/bench/*.sh` are the old prototypes, superseded by `tspmo bench`.
+
+## Update: snappiness work (latest session)
+
+New user requirement: in Eco+ the cursor, typing, scrolling, page loads and the GUI must stay
+snappy even with heavy background work. The old Eco+ (pkg 5/7 W, no turbo, uncore 1.6 GHz) starved
+interactive work when builds ran. **Eco+ must not be enabled until redesigned and measured.**
+
+Done: `tspmo bench` now measures what is needed (committed, built, unit tests pass, not yet used):
+
+```
+sudo tspmo bench --bg 20 --rounds 3 --settle 10 --measure 15 \
+  profile=power-saver  profile=eco-plus \
+  profile=power-saver+pkg=5/25+pkgwin=10000 \
+  profile=power-saver+pkg=5/25+pkgwin=10000+ecap=1200+bgcpus=e+bgweight=20
+```
+
+Columns: battery W (machine is on battery: real draw), psys/pkg W, burst latency median/p95 and
+p95 ratio against the first condition (target at most 1.3x), timer wake-up p95 in microseconds.
+`--bg N` runs N busy threads in a systemd scope (`tspmo-bench.slice`) so CPUs/weight can be set.
+New settings: `pkgwin=<ms>` (PL1 window), `ecap=<mhz>` (E-core max clock), `bgcpus=`, `bgweight=`.
+Hypothesis to test: background confined to E/LP-E cores at a low clock with low weight leaves
+power budget and P-cores for foreground; PL1 low with a long window, PL2 high; uncore uncapped.
+Measure with and without `--bg`. Then implement the winner in `power::plan` (Tunables.eco), keep
+kwin/session slices unrestricted, and document the table in docs/power.md.
+
+Still to do after that: fans off in Eco+ (A's API), keyboard/lid idle-off, live test of Eco+
+forcing the dGPU off (`gpu::wanted_mode`, installed in master, never exercised), and the question
+why the dGPU is runtime-active about 20 s of every 30 s in Hybrid with tspmod stopped
+(`/sys/kernel/debug/tracing/events/rpm`, or bpftrace on `nv_pmops_runtime_resume`; suspects: KWin
+on card0, nvidia-powerd, Firefox), with a doctor check.
+
+State left: balanced on battery and AC, refresh policy max, GPU policy hybrid, RAPL 90/104 W,
+uncore 3.4 GHz, turbo on, charge limit 100, AllowedCPUs empty, no bench processes.
