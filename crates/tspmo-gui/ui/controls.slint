@@ -69,7 +69,6 @@ component Ring inherits Rectangle {
 
 export component Btn inherits Rectangle {
     in property <string> text;
-    in property <string> hint;
     in property <bool> enabled: true;
     in property <bool> active;
     in property <bool> danger;
@@ -91,13 +90,6 @@ export component Btn inherits Rectangle {
             color: root.danger ? Th.danger : Th.text;
             vertical-alignment: center;
             overflow: elide;
-        }
-        if root.hint != "": Text {
-            text: root.hint;
-            color: Th.dim;
-            font-family: Th.mono;
-            font-size: 0.8rem;
-            vertical-alignment: center;
         }
     }
     Ring { on: fs.has-focus; }
@@ -208,14 +200,6 @@ export component Seg inherits Rectangle {
                     background: sel ? c : c.with-alpha(0.5);
                     animate height { duration: 140ms; }
                     animate background { duration: 140ms; }
-                }
-                Text {
-                    x: parent.width - self.width - 0.4rem;
-                    y: 0.25rem;
-                    text: o.hint;
-                    color: Th.dim;
-                    font-family: Th.mono;
-                    font-size: 0.7rem;
                 }
                 Text {
                     text: o.label;

@@ -70,7 +70,7 @@ export component CurveEditor inherits Rectangle {
         font-family: Th.mono;
         font-size: 0.8rem;
         color: Th.text;
-        text: Bk.curve.length > root.sel ? Bk.curve[root.sel].t + " °C  " + Bk.curve[root.sel].p + " %" : "";
+        text: Bk.curve.length > root.sel ? Bk.curve[root.sel].t + " °C  " + Bk.curve[root.sel].p + "%" : "";
     }
 
     // Slint cannot loop over path elements, so the polyline is spelled out for 8 points.

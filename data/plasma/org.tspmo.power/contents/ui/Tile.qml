@@ -1,4 +1,4 @@
-// One option of a row: a flat tile. The chosen one gets a light tint and a bar in the accent;
+// One option of a row: a flat tile. The chosen one gets a neutral fill and a bar in the accent;
 // a keyed tile (the modes) shows its own colour dimly when not chosen. Same look as tspmo-gui.
 import QtQuick
 import org.kde.kirigami as Kirigami
@@ -7,7 +7,6 @@ Item {
     id: tile
 
     property string text
-    property string hint
     property color accent: Kirigami.Theme.highlightColor
     property bool keyed: false
     property bool selected: false
@@ -29,8 +28,8 @@ Item {
     Rectangle {
         anchors.fill: parent
         radius: 3
-        color: tile.accent
-        opacity: tile.selected ? 0.2 : 0
+        color: Kirigami.Theme.textColor
+        opacity: tile.selected ? 0.12 : 0
         Behavior on opacity { NumberAnimation { duration: 140 } }
     }
     Rectangle {
@@ -40,16 +39,6 @@ Item {
         color: tile.accent
         opacity: tile.selected ? 1 : 0.5
         Behavior on height { NumberAnimation { duration: 140 } }
-    }
-    Text {
-        anchors.right: parent.right
-        anchors.top: parent.top
-        anchors.rightMargin: Kirigami.Units.smallSpacing
-        anchors.topMargin: 2
-        text: tile.hint
-        color: Kirigami.Theme.disabledTextColor
-        font.family: "monospace"
-        font.pixelSize: Math.round(Kirigami.Theme.defaultFont.pixelSize * 0.7)
     }
     Text {
         id: label
