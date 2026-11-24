@@ -15,15 +15,18 @@ path = "src/main.rs"
 # OpenGL (femtovg) renderer instead of the software one. Off by default: the software renderer
 # never touches EGL, so the NVIDIA GPU cannot be woken.
 gl = ["slint/renderer-femtovg"]
+# Slint's winit backend, for X11 sessions. Wayland needs nothing else: the platform in
+# `src/wl` speaks the protocol directly (layer-shell popup, plain toplevel where it is missing).
+winit = ["slint/backend-winit"]
 
 [dependencies]
 zbus.workspace = true
 futures-lite = { version = "2", default-features = false }
 rustix = { version = "1.1", features = ["process"] }
+smithay-client-toolkit = "0.19"
 slint = { version = "1.19", default-features = false, features = [
     "std",
     "compat-1-2",
-    "backend-winit",
     "renderer-software",
     "software-renderer-systemfonts",
 ] }

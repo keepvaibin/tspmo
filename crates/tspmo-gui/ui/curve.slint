@@ -2,21 +2,32 @@ import { Th } from "theme.slint";
 import { Bk } from "bk.slint";
 
 // Fan curve: 8 draggable points, temperature 20-100 °C across, speed 0-100 % up.
-// Arrow keys move the selected point (Tab keeps its usual meaning), Shift is the fine step.
+// Arrow keys move the selected point, Ctrl+Left/Right (or , and .) pick another, Shift is the
+// fine step, Enter or leaving the editor sends the curve.
 export component CurveEditor inherits Rectangle {
     in property <bool> editable: true;
     in property <color> tint: Th.accent;
-    property <length> pad-l: 30px;
-    property <length> pad-b: 16px;
-    property <length> pw: self.width - pad-l - 8px;
-    property <length> ph: self.height - pad-b - 8px;
+    property <length> pad-l: 2.4rem;
+    property <length> pad-b: 1.5rem;
+    property <length> pad-t: 0.6rem;
+    property <length> pad-r: 0.6rem;
+    property <length> pw: self.width - pad-l - pad-r;
+    property <length> ph: self.height - pad-b - pad-t;
     property <int> sel: 0;
-    height: 170px;
+    property <int> hot: -1;
 
     function px(t: int) -> length { root.pad-l + (t - 20) / 80 * root.pw }
-    function py(p: int) -> length { 8px + (100 - p) / 100 * root.ph }
+    function py(p: int) -> length { root.pad-t + (100 - p) / 100 * root.ph }
 
-    // grid
+    Rectangle {
+        x: root.pad-l;
+        y: root.pad-t;
+        width: root.pw;
+        height: root.ph;
+        background: Th.bg;
+        border-width: 1px;
+        border-color: Th.line;
+    }
     for v in [0, 25, 50, 75, 100]: Rectangle {
         x: root.pad-l;
         y: root.py(v);
@@ -25,22 +36,41 @@ export component CurveEditor inherits Rectangle {
         background: Th.line;
         Text {
             x: -root.pad-l;
-            y: -7px;
-            width: root.pad-l - 6px;
+            y: -0.5rem;
+            width: root.pad-l - 0.4rem;
+            height: 1rem;
             text: v;
-            font-size: 10px;
+            font-family: Th.mono;
+            font-size: 0.75rem;
             color: Th.dim;
             horizontal-alignment: right;
+            vertical-alignment: center;
         }
     }
-    for t in [20, 40, 60, 80, 100]: Text {
-        x: root.px(t) - 15px;
-        y: root.height - root.pad-b + 3px;
-        width: 30px;
-        text: t;
-        font-size: 10px;
-        color: Th.dim;
-        horizontal-alignment: center;
+    for t in [20, 40, 60, 80, 100]: Rectangle {
+        x: root.px(t);
+        y: root.pad-t;
+        width: 1px;
+        height: root.ph;
+        background: Th.line;
+        Text {
+            x: -1.5rem;
+            y: root.ph + 0.2rem;
+            width: 3rem;
+            text: t;
+            font-family: Th.mono;
+            font-size: 0.75rem;
+            color: Th.dim;
+            horizontal-alignment: center;
+        }
+    }
+    Text {
+        x: root.pad-l + 0.5rem;
+        y: root.pad-t + 0.3rem;
+        font-family: Th.mono;
+        font-size: 0.8rem;
+        color: Th.text;
+        text: Bk.curve.length > root.sel ? Bk.curve[root.sel].t + " °C  " + Bk.curve[root.sel].p + " %" : "";
     }
 
     // Slint cannot loop over path elements, so the polyline is spelled out for 8 points.
@@ -60,7 +90,6 @@ export component CurveEditor inherits Rectangle {
         stroke-line-join: round;
         stroke-line-cap: round;
         fill: transparent;
-        animate stroke { duration: 200ms; }
     }
 
     fs := FocusScope {
@@ -115,27 +144,33 @@ export component CurveEditor inherits Rectangle {
             }
         }
     }
+    Rectangle {
+        border-width: fs.has-focus ? 2px : 0;
+        border-color: Th.focus;
+        border-radius: Th.radius;
+    }
 
     for p[i] in Bk.curve: Rectangle {
         x: root.px(p.t) - self.width / 2;
         y: root.py(p.p) - self.height / 2;
-        width: 26px;
-        height: 26px;
-        property <bool> hot: ta.has-hover || ta.pressed || (fs.has-focus && root.sel == i);
+        width: 1.8rem;
+        height: 1.8rem;
+        property <bool> on: ta.has-hover || ta.pressed || (fs.has-focus && root.sel == i);
         Rectangle {
-            width: hot ? 14px : 10px;
+            width: on ? 0.9rem : 0.6rem;
             height: self.width;
-            border-radius: self.width / 2;
-            background: hot ? root.tint : Th.surface;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            border-radius: 1px;
+            background: on ? root.tint : Th.bg;
             border-width: 2px;
             border-color: root.tint;
-            animate width { duration: 120ms; easing: ease-out; }
+            animate width { duration: 100ms; }
         }
         ta := TouchArea {
             enabled: root.editable;
             property <length> gx;
             property <length> gy;
-            mouse-cursor: pointer;
             pointer-event(e) => {
                 if (e.button == PointerEventButton.left) {
                     if (e.kind == PointerEventKind.down) {

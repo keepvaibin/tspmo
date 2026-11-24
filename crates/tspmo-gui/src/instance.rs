@@ -1,5 +1,5 @@
 //! One window at a time. The first instance owns the abstract socket `@tspmo-gui-<uid>`; a second
-//! launch tells it to quit and exits, so the ROG key opens and closes the popup.
+//! launch hands it a message and exits, so the ROG key opens and closes the popup.
 
 use std::io::{BufRead, BufReader, Write};
 use std::os::linux::net::SocketAddrExt;
@@ -19,7 +19,8 @@ pub enum Role {
     Toggled,
 }
 
-pub fn claim() -> Role {
+/// Become the window, or hand `msg` (`toggle`, `open fans`) to the one that exists.
+pub fn claim(msg: &str) -> Role {
     let Ok(a) = addr() else {
         return Role::Toggled;
     };
@@ -27,7 +28,7 @@ pub fn claim() -> Role {
         Ok(l) => Role::Window(l),
         Err(_) => {
             if let Ok(mut s) = UnixStream::connect_addr(&a) {
-                let _ = s.write_all(b"quit\n");
+                let _ = s.write_all(format!("{msg}\n").as_bytes());
                 Role::Toggled
             } else {
                 // Unreachable owner (it just exited): become the window without a socket.
@@ -42,15 +43,15 @@ pub fn claim() -> Role {
     }
 }
 
-/// Wait for "quit" on a thread that blocks in the kernel (no wakeups while idle).
-pub fn serve(l: UnixListener, on_quit: fn()) {
+/// Wait for messages on a thread that blocks in the kernel (no wakeups while idle).
+pub fn serve(l: UnixListener, on_msg: fn(&str)) {
     std::thread::Builder::new()
         .name("instance".into())
         .spawn(move || {
             for s in l.incoming().flatten() {
                 let mut line = String::new();
-                if BufReader::new(s).read_line(&mut line).is_ok() && line.trim() == "quit" {
-                    on_quit();
+                if BufReader::new(s).read_line(&mut line).is_ok() && !line.trim().is_empty() {
+                    on_msg(line.trim());
                 }
             }
         })

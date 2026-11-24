@@ -1,8 +1,8 @@
-// The contract between the UI and Rust: plain data in, callbacks out.
+// The contract between the UI and Rust: plain data in, callbacks out. Each window has its own
+// copy of this global; Rust fills all of them from the same state.
 
-export struct Opt { id: string, label: string, icon: string }
+export struct Opt { id: string, label: string, hint: string, tint: color, keyed: bool }
 export struct GpuUser { pid: int, name: string }
-export struct FanRow { label: string, rpm: int, kind: string }
 export struct Pt { t: int, p: int }
 export struct LimitRow { name: string, label: string, unit: string, min: int, max: int, def: int, cur: int, custom: bool }
 export struct Item {
@@ -11,8 +11,6 @@ export struct Item {
     kind: string,
     on: bool,
     text: string,
-    choices: [string],
-    idx: int,
     min: int,
     max: int,
     value: int,
@@ -23,30 +21,21 @@ export global Bk {
     // general
     in property <bool> loaded;
     in property <string> error;
-    in property <string> section;
-    in property <[Opt]> sections;
     in property <string> mode;
-    in property <string> mode-label;
     in property <string> fan-text;
-    in property <bool> has-gpu;
-    in property <bool> has-battery;
-    in property <bool> has-fans;
-    in property <bool> has-power;
-    in property <bool> has-light;
-    in property <bool> has-lid;
-    in property <bool> eco-available: true;
-    in property <bool> on-battery;
-    in property <string> head-text;
-    in property <string> hint;
+    in property <bool> win-fans;
+    in property <bool> win-screen;
+    in property <bool> win-keys;
+    in property <bool> win-system;
 
     // gpu
+    in property <bool> has-gpu;
     in property <string> gpu-mode;
     in property <string> gpu-policy;
     in property <string> gpu-switching;
     in property <string> gpu-pending;
     in property <bool> gpu-reboot;
     in property <string> gpu-message;
-    in property <bool> dgpu-asleep;
     in property <string> gpu-state;
     in property <[GpuUser]> gpu-users;
 
@@ -58,13 +47,13 @@ export global Bk {
     in property <bool> flicker;
     in property <int> brightness: -1;
     in property <[Opt]> color-modes;
-    in property <string> color-mode;
     in property <int> color-idx;
     in property <bool> has-eye;
     in property <int> eye-kelvin;
     in property <[Item]> screen-items;
 
     // battery
+    in property <bool> has-battery;
     in property <int> bat-percent: -1;
     in property <string> bat-status;
     in property <string> bat-power;
@@ -78,27 +67,30 @@ export global Bk {
     in property <string> bat-cycles;
 
     // fans
+    in property <bool> has-fans;
     in property <int> fan-mode: 1;
     in property <int> fan-sel: 0;
-    in property <[FanRow]> fans;
+    in property <[Opt]> fan-opts;
     in property <string> fan-kind;
     in property <[Pt]> curve;
 
     // power limits
-    in property <int> pw-mode: 1;
+    in property <bool> has-power;
     in property <int> pw-source: 0;
     in property <[LimitRow]> limits;
     in property <bool> pw-needs-fan;
 
     // lighting
+    in property <bool> has-light;
     in property <int> kb-max;
     in property <int> kb-level;
     in property <[Opt]> kb-effects;
     in property <string> kb-effect;
     in property <color> kb-color: #ffffff;
+    in property <int> kb-color-idx;
     in property <int> kb-speed;
     in property <[bool]> kb-states;
-    in property <int> kb-idle;
+    in property <string> kb-idle;
 
     // lid
     in property <bool> has-slash;
@@ -114,10 +106,13 @@ export global Bk {
     // system
     in property <[Item]> system-items;
     in property <bool> reboot-pending;
+    in property <bool> has-fnlock;
+    in property <bool> fnlock;
 
     callback act(string, string);
     callback acti(string, int);
     callback curve-move(int, int, int);
     callback curve-commit();
-    callback quit();
+    callback open(string);
+    callback close();
 }
