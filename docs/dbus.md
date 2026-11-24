@@ -27,11 +27,27 @@ The standard API (KDE, GNOME, `powerprofilesctl`, games), served by `tspmod`.
 
 The GPU members (`GpuMode`, `SetGpuMode`, ...) are as before.
 
-Eco+ is `power-saver` plus: no turbo, package power limits (RAPL, both `intel-rapl` and
-`intel-rapl-mmio`), a lower uncore clock, and 60 Hz. What it replaces is restored when it ends,
-when the daemon stops, and after a daemon crash (kept in `/run/tspmo/rapl-orig` meanwhile).
-See [power.md](power.md). `SetProfile` and `CycleProfile` show an on-screen note when the change
-is invisible to KDE (to or from Eco+ and power-saver).
+Eco+ is the maximum-battery mode, on AC and on battery. It is `power-saver` (firmware quiet
+mode) plus:
+
+- the NVIDIA GPU forced off (Eco), the GPU policy restored when Eco+ ends (an app holding the
+  GPU gets an OSD naming it; retried every 15 s);
+- fans stopped while cool, a steep ramp above (`fans::eco_curve`, written over the fans'
+  per-mode settings while Eco+ is active);
+- keyboard backlight dark after 10 s without input, Slash dark, 60 Hz;
+- CPU: turbo kept, `balance_performance`, package PL1 12 W over a 10 s window, PL2 28 W,
+  efficiency cores held to 1.2 GHz;
+- a background guard (`tspmobg.slice`): heavy jobs outside the desktop and graphical apps move
+  to the efficiency cores at the lowest CPU weight.
+
+Everything it replaces is restored when it ends, when the daemon stops, and after a daemon crash
+(`/run/tspmo/rapl-orig`, `/run/tspmo/guard`). See [power.md](power.md). `SetProfile` and
+`CycleProfile` show an on-screen note when the change is invisible to KDE (to or from Eco+ and
+power-saver). Automatic changes (AC plugged, unplugged) show nothing.
+
+| Member | Type | |
+|---|---|---|
+| `Doctor() -> a(sss)` | method | `tspmo doctor`'s findings: `(severity, topic, text)`. Severity `error`, `warn` or `info`; text is the title and detail, with `Fix: <command>` lines |
 
 In-process event: `ProfileApplied { profile, eco_plus, on_battery }`. For Eco+, `profile` is
 `power-saver` and `eco_plus` is true. `session::osd(icon, text, value)` shows a note in the
@@ -72,7 +88,7 @@ checked with polkit (actions in `data/polkit/org.tspmo.policy`; root always pass
 An interface is present only if the machine has the hardware. Errors are
 `org.freedesktop.DBus.Error.InvalidArgs` with a one-line message.
 
-Property reads never touch firmware, except `Fans1.Rpm`.
+Property reads never touch firmware, except `Fans1.Rpm` and `Fans1.Temps`.
 
 <!-- Package B documents Daemon1 (profiles, GPU) and Display1 here. -->
 
@@ -93,6 +109,7 @@ Present when the `asus_custom_fan_curve` hwmon device exists. Curves are 8 point
 | `Settings` | `a(susa(yy))` | `(mode, fan, kind, points)` for every mode and fan. `kind`: `auto`, `custom`, `full`. `auto` lists the firmware curve once known |
 | `Factory` | `a(sua(yy))` | `(mode, fan, points)`: the firmware's curves, read from the EC |
 | `Rpm` | `a(uu)` | `(fan, rpm)`, read on each query, no signal |
+| `Temps` | `a(us)` | `(°C, label)`, read on each query, no signal. CPU package only: the NVIDIA GPU's sensors wake it |
 
 | Method | |
 |---|---|
