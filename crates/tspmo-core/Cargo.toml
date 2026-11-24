@@ -1,0 +1,13 @@
+[package]
+name = "tspmo-core"
+description = "tspmo capability model and diagnostics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+tspmo-sys.workspace = true
+
+[lints]
+workspace = true

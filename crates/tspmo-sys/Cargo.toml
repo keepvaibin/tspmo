@@ -1,0 +1,10 @@
+[package]
+name = "tspmo-sys"
+description = "Kernel interface helpers (sysfs, hwmon, firmware-attributes) with a relocatable root for fixture testing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true

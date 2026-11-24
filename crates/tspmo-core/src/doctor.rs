@@ -1,0 +1,340 @@
+//! `tspmo doctor`: read-only checks that explain what costs battery or breaks a feature,
+//! each with the exact fix. Nothing here writes to the system.
+
+use crate::machine::Machine;
+use tspmo_sys::{SysRoot, backlight, dmi::Vendor, pci, usb};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Severity {
+    /// A feature is broken.
+    Error,
+    /// Costs battery or performance.
+    Warn,
+    /// Worth knowing; no action needed unless you want it.
+    Info,
+}
+
+#[derive(Debug, Clone)]
+pub struct Fix {
+    pub summary: String,
+    /// Shell commands, run in order, that apply the fix.
+    pub commands: Vec<String>,
+    pub needs_reboot: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct Finding {
+    pub id: &'static str,
+    pub severity: Severity,
+    pub title: String,
+    pub detail: String,
+    pub fix: Option<Fix>,
+}
+
+/// Run every check.
+pub fn run(root: &SysRoot, m: &Machine) -> Vec<Finding> {
+    let mut out = Vec::new();
+    let checks: &[fn(&SysRoot, &Machine, &mut Vec<Finding>)] = &[
+        oled_dpcd_backlight,
+        duplicate_backlight,
+        usb_hid_autosuspend,
+        numlock_led,
+        nvidia_runtime_pm,
+        gtk_renderer,
+        conflicting_daemons,
+        charge_limit,
+    ];
+    for check in checks {
+        check(root, m, &mut out);
+    }
+    out.sort_by_key(|f| f.severity);
+    out
+}
+
+fn cmdline(root: &SysRoot) -> String {
+    root.read_opt("/proc/cmdline").unwrap_or_default()
+}
+
+fn has_param(root: &SysRoot, key: &str) -> bool {
+    cmdline(root)
+        .split_whitespace()
+        .any(|p| p.split('=').next() == Some(key))
+}
+
+/// Commands that add a kernel parameter persistently, for the bootloader in use.
+fn add_kernel_param(root: &SysRoot, param: &str) -> Vec<String> {
+    if root.exists("/etc/default/limine") {
+        vec![
+            format!("echo 'KERNEL_CMDLINE[default]+=\" {param}\"' | sudo tee -a /etc/default/limine"),
+            "sudo limine-update".into(),
+        ]
+    } else if root.exists("/etc/kernel/cmdline") {
+        vec![
+            format!("sudo sed -i 's/$/ {param}/' /etc/kernel/cmdline"),
+            "sudo mkinitcpio -P   # or your distro's UKI rebuild command".into(),
+        ]
+    } else if root.exists("/etc/default/grub") {
+        vec![
+            format!("sudo sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=\"/&{param} /' /etc/default/grub"),
+            "sudo grub-mkconfig -o /boot/grub/grub.cfg".into(),
+        ]
+    } else {
+        vec![format!(
+            "# add `{param}` to your bootloader's kernel command line"
+        )]
+    }
+}
+
+/// i915 OLED panels are dimmed over the eDP AUX channel (DPCD). Without
+/// `i915.enable_dpcd_backlight=3` the driver drives a PWM line the panel ignores, so
+/// brightness keys and sliders appear to do nothing.
+fn oled_dpcd_backlight(root: &SysRoot, m: &Machine, out: &mut Vec<Finding>) {
+    let Some(intel) = m.backlights.iter().find(|b| b.name == "intel_backlight") else {
+        return;
+    };
+    if has_param(root, "i915.enable_dpcd_backlight") || has_param(root, "xe.enable_dpcd_backlight") {
+        return;
+    }
+    let stuck_low = intel.percent() < 2.0;
+    let is_oled_hint = m.dmi.vendor() == Vendor::Asus || stuck_low;
+    if !is_oled_hint {
+        return;
+    }
+    out.push(Finding {
+        id: "oled-dpcd-backlight",
+        severity: if stuck_low {
+            Severity::Error
+        } else {
+            Severity::Warn
+        },
+        title: "Screen brightness can't be controlled (OLED needs DPCD backlight)".into(),
+        detail: format!(
+            "intel_backlight is at {}/{} ({:.1}%). OLED panels take brightness over the eDP AUX \
+             channel; i915 is using a control the panel ignores. The kernel log suggests \
+             i915.enable_dpcd_backlight=3 (force the Intel DPCD interface).",
+            intel.brightness,
+            intel.max,
+            intel.percent()
+        ),
+        fix: Some(Fix {
+            summary: "Add i915.enable_dpcd_backlight=3 to the kernel command line".into(),
+            commands: add_kernel_param(root, "i915.enable_dpcd_backlight=3"),
+            needs_reboot: true,
+        }),
+    });
+}
+
+fn duplicate_backlight(_root: &SysRoot, m: &Machine, out: &mut Vec<Finding>) {
+    let nv: Vec<&backlight::Backlight> = m.backlights.iter().filter(|b| b.is_nvidia()).collect();
+    if nv.is_empty() || m.backlights.len() < 2 {
+        return;
+    }
+    out.push(Finding {
+        id: "duplicate-backlight",
+        severity: Severity::Info,
+        title: "The NVIDIA driver registers an extra backlight that controls nothing".into(),
+        detail: format!(
+            "{} is registered by the dGPU, but the built-in panel is wired to the iGPU. KDE and \
+             GNOME match the backlight to the panel's connector so they ignore it, but simpler \
+             tools (brightnessctl, some bars) may pick it. tspmo always uses the connector's own \
+             backlight.",
+            nv.iter().map(|b| b.name.as_str()).collect::<Vec<_>>().join(", ")
+        ),
+        fix: None,
+    });
+}
+
+/// Internal vendor HID devices left at `power/control=on` keep the USB controller awake,
+/// which blocks the deepest package C-state. Measured on a GU605MI: ~0.8 W at screen-off idle.
+fn usb_hid_autosuspend(root: &SysRoot, _m: &Machine, out: &mut Vec<Finding>) {
+    const VENDORS: &[u16] = &[
+        0x0b05, /* ASUS */
+        0x048d, /* ITE (Lenovo RGB) */
+        0x17ef, /* Lenovo */
+    ];
+    let awake: Vec<usb::UsbDevice> = usb::devices(root)
+        .into_iter()
+        .filter(|d| VENDORS.contains(&d.vendor) && !d.autosuspend_enabled())
+        .collect();
+    if awake.is_empty() {
+        return;
+    }
+    let list = awake
+        .iter()
+        .map(|d| format!("{} {} ({})", d.port, d.id(), d.name.as_deref().unwrap_or("?")))
+        .collect::<Vec<_>>()
+        .join(", ");
+    out.push(Finding {
+        id: "usb-hid-autosuspend",
+        severity: Severity::Warn,
+        title: "Internal keyboard/lighting USB chips never sleep".into(),
+        detail: format!(
+            "{list} have autosuspend off. While they are awake the CPU can't reach its deepest \
+             idle state (about 0.8 W at screen-off idle on a GU605MI). Enabling autosuspend \
+             safely needs a sleep hook (asusctl #690) and a daemon that doesn't hold hidraw open; \
+             tspmod handles both (milestone 3)."
+        ),
+        fix: None,
+    });
+}
+
+fn numlock_led(root: &SysRoot, m: &Machine, out: &mut Vec<Finding>) {
+    if m.dmi.vendor() == Vendor::Other {
+        return;
+    }
+    let lit = root
+        .glob("/sys/class/leds/input*::numlock/brightness")
+        .iter()
+        .any(|p| root.read_parse::<u32>(p).is_some_and(|v| v > 0));
+    if lit {
+        out.push(Finding {
+            id: "numlock-led",
+            severity: Severity::Info,
+            title: "Num Lock is on, which keeps the keyboard from suspending".into(),
+            detail: "USB HID won't autosuspend a keyboard while one of its LEDs is lit.".into(),
+            fix: Some(Fix {
+                summary: "Turn Num Lock off (and disable 'Num Lock on at login' in your desktop settings)"
+                    .into(),
+                commands: vec![],
+                needs_reboot: false,
+            }),
+        });
+    }
+}
+
+fn nvidia_runtime_pm(root: &SysRoot, m: &Machine, out: &mut Vec<Finding>) {
+    for gpu in m.gpus.iter().filter(|g| g.vendor == pci::VENDOR_NVIDIA) {
+        if gpu.driver.as_deref() != Some("nvidia") {
+            continue;
+        }
+        let dpm: Option<u32> = root.read_parse("/sys/module/nvidia/parameters/NVreg_DynamicPowerManagement");
+        // 0 = disabled, 1 = coarse, 2 = fine-grained, 3 = driver default (fine-grained on Turing+).
+        let dpm_ok = matches!(dpm, Some(2 | 3));
+        let control_ok = gpu.pm_control.as_deref() == Some("auto");
+        if dpm_ok && control_ok {
+            if !gpu.is_asleep() && !gpu.boot_vga {
+                out.push(Finding {
+                    id: "nvidia-awake",
+                    severity: Severity::Info,
+                    title: format!("The NVIDIA GPU ({}) is awake", gpu.address),
+                    detail: "Something is using it right now. tspmo's dGPU view (milestone 4) \
+                             lists the processes holding it."
+                        .into(),
+                    fix: None,
+                });
+            }
+            continue;
+        }
+        out.push(Finding {
+            id: "nvidia-rtd3",
+            severity: Severity::Warn,
+            title: format!("The NVIDIA GPU ({}) can't power off when idle", gpu.address),
+            detail: format!(
+                "NVreg_DynamicPowerManagement={} and power/control={}. Both are needed for the \
+                 dGPU to reach D3cold.",
+                dpm.map_or("unset".into(), |v| v.to_string()),
+                gpu.pm_control.as_deref().unwrap_or("?")
+            ),
+            fix: Some(Fix {
+                summary: "Enable fine-grained runtime D3".into(),
+                commands: vec![
+                    "echo 'options nvidia NVreg_DynamicPowerManagement=0x02' | sudo tee /etc/modprobe.d/tspmo-nvidia-pm.conf".into(),
+                    "echo 'ACTION==\"bind\", SUBSYSTEM==\"pci\", ATTR{vendor}==\"0x10de\", ATTR{class}==\"0x03[0-9]*\", TEST==\"power/control\", ATTR{power/control}=\"auto\"' | sudo tee /etc/udev/rules.d/80-tspmo-nvidia-pm.rules".into(),
+                ],
+                needs_reboot: true,
+            }),
+        });
+    }
+}
+
+/// GTK 4.14+ defaults to a Vulkan renderer that can enumerate (and wake) the NVIDIA GPU.
+fn gtk_renderer(root: &SysRoot, m: &Machine, out: &mut Vec<Finding>) {
+    if !m.has_nvidia() {
+        return;
+    }
+    let set = root
+        .glob("/etc/environment.d/*.conf")
+        .into_iter()
+        .chain(["/etc/environment".to_owned()])
+        .filter_map(|p| root.read_opt(p))
+        .any(|s| s.lines().any(|l| l.trim_start().starts_with("GSK_RENDERER=")));
+    if set {
+        return;
+    }
+    out.push(Finding {
+        id: "gtk-renderer",
+        severity: Severity::Info,
+        title: "GTK 4 apps may wake the NVIDIA GPU at launch".into(),
+        detail: "GTK's Vulkan renderer enumerates every GPU, which resumes a sleeping dGPU \
+                 (about +2.6 s launch time and a power spike on a GU605MI). The OpenGL renderer \
+                 stays on the iGPU."
+            .into(),
+        fix: Some(Fix {
+            summary: "Use GTK's OpenGL renderer system-wide".into(),
+            commands: vec!["echo 'GSK_RENDERER=ngl' | sudo tee /etc/environment.d/50-tspmo-gtk.conf".into()],
+            needs_reboot: false,
+        }),
+    });
+}
+
+fn running(root: &SysRoot, names: &[&str]) -> Vec<String> {
+    let mut found: Vec<String> = root
+        .glob("/proc/*/comm")
+        .into_iter()
+        .filter_map(|p| root.read_opt(p))
+        .filter(|c| names.contains(&c.as_str()))
+        .collect();
+    found.sort_unstable();
+    found.dedup();
+    found
+}
+
+fn conflicting_daemons(root: &SysRoot, _m: &Machine, out: &mut Vec<Finding>) {
+    let found = running(
+        root,
+        &[
+            "asusd",
+            "legiond",
+            "auto-cpufreq",
+            "tlp",
+            "power-profiles-",
+            "tuned",
+            "system76-power",
+            "tccd",
+        ],
+    );
+    let tlp_installed = root.exists("/etc/tlp.conf") && root.exists("/usr/bin/tlp");
+    if found.is_empty() && !tlp_installed {
+        return;
+    }
+    let mut names = found;
+    if tlp_installed {
+        names.push("tlp (installed)".into());
+    }
+    out.push(Finding {
+        id: "other-power-tools",
+        severity: Severity::Info,
+        title: "Other power/vendor tools are present".into(),
+        detail: format!(
+            "{}. tspmod will defer to these for the controls they own instead of fighting them.",
+            names.join(", ")
+        ),
+        fix: None,
+    });
+}
+
+fn charge_limit(_root: &SysRoot, m: &Machine, out: &mut Vec<Finding>) {
+    for b in &m.batteries {
+        if b.charge_end == Some(100) {
+            out.push(Finding {
+                id: "charge-limit",
+                severity: Severity::Info,
+                title: format!("{} charges to 100%", b.name),
+                detail: "Fine when you need maximum runtime. Keeping it at 80% when you're mostly \
+                         plugged in slows battery wear considerably."
+                    .into(),
+                fix: None,
+            });
+        }
+    }
+}

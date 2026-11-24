@@ -1,0 +1,27 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+rust-version = "1.85"
+
+[workspace.dependencies]
+tspmo-sys = { path = "crates/tspmo-sys" }
+tspmo-core = { path = "crates/tspmo-core" }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+# Small, fast binaries: the daemon and CLI must cost as little as possible.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+opt-level = 3
