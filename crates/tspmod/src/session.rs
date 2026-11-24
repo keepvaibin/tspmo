@@ -201,42 +201,44 @@ pub fn osd(icon: &str, text: &str, value: Option<u8>) {
             return;
         }
         let Some(s) = active(&root) else { return };
-        let line = match value {
-            Some(v) => format!("{text} {}%", v.min(100)),
-            None => text,
-        };
-        let out = if s.is_kde() {
-            // Plasma's own OSD: the same one the volume and brightness keys show.
-            run(
-                &s,
-                "busctl",
-                &[
-                    "--user",
-                    "--timeout=2",
-                    "call",
-                    "org.kde.plasmashell",
-                    "/org/kde/osdService",
-                    "org.kde.osdService",
-                    "showText",
-                    "ss",
-                    &icon,
-                    &line,
-                ],
-                Duration::from_secs(3),
-            )
-        } else {
-            // Other desktops: the GUI's one-shot OSD (implemented by tspmo-gui).
-            run(
-                &s,
-                "tspmo-gui",
-                &[
-                    "--osd",
-                    &icon,
-                    &line,
-                    &value.map_or(String::new(), |v| v.to_string()),
-                ],
-                Duration::from_secs(3),
-            )
+        // tspmo's own OSD (bottom centre, about 40 ms): `tspmo-gui --osd <icon> <text> [value]`.
+        let mut args = vec!["--osd", icon.as_str(), text.as_str()];
+        let v = value.map(|v| v.min(100).to_string());
+        if let Some(v) = &v {
+            args.push(v);
+        }
+        let out = match run(&s, "tspmo-gui", &args, Duration::from_secs(3)) {
+            Ok(o) if o.ok => Ok(o),
+            // The binary is missing or failed: Plasma's own OSD, where there is one.
+            first if s.is_kde() => {
+                let line = match value {
+                    Some(v) => format!("{text} {}%", v.min(100)),
+                    None => text.clone(),
+                };
+                let fallback = run(
+                    &s,
+                    "busctl",
+                    &[
+                        "--user",
+                        "--timeout=2",
+                        "call",
+                        "org.kde.plasmashell",
+                        "/org/kde/osdService",
+                        "org.kde.osdService",
+                        "showText",
+                        "ss",
+                        &icon,
+                        &line,
+                    ],
+                    Duration::from_secs(3),
+                );
+                if fallback.as_ref().is_ok_and(|o| o.ok) {
+                    fallback
+                } else {
+                    first
+                }
+            }
+            other => other,
         };
         match out {
             Ok(o) if o.ok => {}

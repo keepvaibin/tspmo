@@ -281,16 +281,24 @@ fn announce(before: Profile, after: Profile) {
         (Profile::EcoPlus, Profile::PowerSaver) => "Power saver",
         _ => return,
     };
-    crate::session::osd("battery-profile-powersave", text, None);
+    crate::session::osd(
+        if text == "Eco+" {
+            "eco-plus"
+        } else {
+            "battery-profile-powersave"
+        },
+        text,
+        None,
+    );
 }
 
 /// The on-screen note for a mode chosen with a key.
 pub fn osd_mode(p: Profile) {
     let (icon, text) = match p {
-        Profile::EcoPlus => ("battery-profile-powersave", "Eco+"),
-        Profile::PowerSaver => ("power-profile-power-saver-symbolic", "Power saver"),
-        Profile::Balanced => ("power-profile-balanced-symbolic", "Balanced"),
-        Profile::Performance => ("power-profile-performance-symbolic", "Performance"),
+        Profile::EcoPlus => ("eco-plus", "Eco+"),
+        Profile::PowerSaver => ("battery-profile-powersave", "Power saver"),
+        Profile::Balanced => ("battery-profile-balanced", "Balanced"),
+        Profile::Performance => ("battery-profile-performance", "Performance"),
     };
     crate::session::osd(icon, text, None);
 }
