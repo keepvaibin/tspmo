@@ -17,6 +17,14 @@ State at the end of the session. Branch: this worktree (master with the GUI merg
   Eco+ (the guard's 4 s sample).
 - **API for the GUI**: `Daemon1.Doctor() -> a(sss)`, `Fans1.Temps -> a(us)`.
 - **Fn+F5 with Fn-lock**: the daemon cycles the mode when the kernel did not (`FanKey`).
+- **Flicker-free dimming pulse fixed** (docs/display.md "The pulse"): the floor is pinned about
+  1 ms after KDE's write, the level comes from KDE's own `Brightness`, the ICC source is sent once.
+  `tools/test/dim-trace.py START TARGET` shows the backlight sequence of one step.
+- **OSD**: `session::osd` runs `tspmo-gui --osd <icon> <text> [value]` as the session user;
+  Plasma's OSD only when that fails. Seen starting on a mode change; not seen on the screen.
+- **Eco+ and the GPU**: `Daemon1.GpuWanted` (`eco` while Eco+ is active); `SetGpuMode` in Eco+
+  saves the policy only. The switch itself is refused in this session (KWin holds the driver),
+  so `GpuMode` stays `hybrid` here: unverified live.
 - `tools/test/e2e.sh` covers modes, KDE API, guard, fans, power limits, display, Slash,
   lighting, battery, latency, idle. `tools/test/gpu-live.sh` is the live GPU switching test.
 - docs/review-power.md: every feature, how verified, result.

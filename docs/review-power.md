@@ -13,6 +13,9 @@ Fixed during this review:
 | `SetBrightness(0)` was accepted and clamped: the e2e test left the screen at 2 % | out-of-range is `InvalidArgs` |
 | Fn+F5 with Fn-lock on did nothing (the key reaches the keyboard driver as a plain key) | the daemon cycles the mode when the kernel did not within 400 ms (not exercised: no key press) |
 | `tspmo dump` read deprecated `asus-nb-wmi` attributes: kernel log warning | explicit list |
+| Flicker-free dimming "pulse": the screen went darker, then settled (the backlight sat below the floor for 260 ms while the daemon waited for KDE and loaded the profile; a flash on every step from re-sending the ICC source) | docs/display.md "The pulse": floor pinned within 1 ms, KDE's own target as the level, source sent once |
+| Eco+ ended with a stale "Waiting to switch to eco" message | cleared |
+| Eco+ did not say the GPU is meant to be off | `GpuWanted`; `SetGpuMode` in Eco+ saves the policy |
 | Eco+ old design starved the desktop | redesigned, docs/power.md |
 | Messages with sentences ("The desktop was started before tspmo was set up, so ...") | one short line each |
 | Doctor said nothing about why the dGPU is awake | `nvidia-nvpcf`, `nvidia-held`, `compositor-nvidia` |

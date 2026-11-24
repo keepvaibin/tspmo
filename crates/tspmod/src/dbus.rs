@@ -265,6 +265,7 @@ fn tspmo_props(d: &Daemon) -> Vec<(&'static str, OwnedValue)> {
         ("ProfileBattery", ov(d.profile_battery.as_str())),
         ("OnBattery", ov(d.on_battery)),
         ("GpuMode", ov(g.mode.as_str())),
+        ("GpuWanted", ov(wanted_gpu(d).as_str())),
         ("GpuPolicy", ov(d.gpu_policy.as_str())),
         ("GpuPending", ov(g.pending.map_or("", Mode::as_str))),
         ("DgpuAsleep", ov(g.dgpu_asleep)),
@@ -290,6 +291,10 @@ fn announce(before: Profile, after: Profile) {
         text,
         None,
     );
+}
+
+fn wanted_gpu(d: &Daemon) -> Mode {
+    gpu::wanted_mode(d.gpu_policy, d.on_battery, d.effective().is_eco_plus())
 }
 
 /// The on-screen note for a mode chosen with a key.
@@ -334,6 +339,13 @@ impl Tspmo {
     #[zbus(property)]
     fn gpu_mode(&self) -> String {
         lock(&self.0).gpu_status().mode.as_str().to_owned()
+    }
+    /// The mode the hardware is being brought to: `eco` while Eco+ is active, else what the
+    /// policy says for this power source. `GpuMode` is what it is now (they differ while a
+    /// switch is pending, or refused because an app or the desktop holds the GPU).
+    #[zbus(property)]
+    fn gpu_wanted(&self) -> String {
+        wanted_gpu(&lock(&self.0)).as_str().to_owned()
     }
     #[zbus(property)]
     fn gpu_policy(&self) -> String {
@@ -435,6 +447,17 @@ impl Tspmo {
             .ok_or_else(|| zbus::fdo::Error::InvalidArgs(format!("unknown GPU mode '{mode}'")))?;
         let sender = hdr.sender().map(|s| s.to_string());
         polkit::check(conn, sender.as_deref(), polkit::SET_GPU).await?;
+        // Eco+ keeps the GPU off whatever is chosen: the choice is kept for when it ends.
+        if lock(&self.0).effective().is_eco_plus() && policy != Policy::Fixed(Mode::Ultimate) {
+            let msg = {
+                let mut d = lock(&self.0);
+                d.gpu_policy = policy;
+                d.save();
+                "Saved. Eco+ keeps the GPU off.".to_owned()
+            };
+            emit_changed(conn, &self.0).await;
+            return Ok(msg);
+        }
         let (target, current) = {
             let d = lock(&self.0);
             let st = d.gpu_status();

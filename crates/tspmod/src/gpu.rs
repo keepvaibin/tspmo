@@ -432,6 +432,13 @@ pub fn enforce(conn: &zbus::Connection, shared: &Shared) {
         Some(t) => {
             let _ = begin(conn.clone(), shared.clone(), t, None, true);
         }
-        None => lock(shared).gpu_waiting = false,
+        None => {
+            // Nothing to wait for any more (Eco+ ended, or the GPU is where it should be).
+            let mut d = lock(shared);
+            if d.gpu_waiting || d.gpu_message.starts_with("Waiting to switch") {
+                d.gpu_message.clear();
+            }
+            d.gpu_waiting = false;
+        }
     }
 }

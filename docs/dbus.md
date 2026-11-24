@@ -25,7 +25,7 @@ The standard API (KDE, GNOME, `powerprofilesctl`, games), served by `tspmod`.
 | `SetProfile(s)` | method | Choose a mode for the current power source |
 | `CycleProfile() -> s` | method | eco-plus, power-saver, balanced, performance, eco-plus |
 
-The GPU members (`GpuMode`, `SetGpuMode`, ...) are as before.
+The GPU members (`GpuMode`, `SetGpuMode`, ...) are as before, plus `GpuWanted` (`s` property): the mode the hardware is being brought to, `eco` while Eco+ is active (`GpuMode` follows once the switch can happen: an app or a desktop that loaded the NVIDIA driver holds the GPU until it lets go, and `GpuMessage` says which). `SetGpuMode` while Eco+ is active only saves the policy ("Saved. Eco+ keeps the GPU off.") and it is restored when Eco+ ends.
 
 Eco+ is the maximum-battery mode, on AC and on battery. It is `power-saver` (firmware quiet
 mode) plus:
