@@ -246,3 +246,13 @@ already does that on battery. `tspmo doctor` names the cause (`nvidia-nvpcf`), o
 that hold the GPU (`nvidia-held`), or a desktop that loaded the driver (`compositor-nvidia`:
 KWin started before tspmo's compositor setting existed holds `/dev/nvidia*`, so Eco cannot
 unload the driver until the next login).
+
+### On the battery (first runs, light load, nothing running)
+
+`tspmo bench --no-load --no-wake`, 30-95 % brightness (the user's), other builds running: the
+absolute watts are not usable, but the pattern is. Every condition that starts with a
+thermal-mode change (power-saver, Eco+, and the balanced that follows them) measured 10-14 W
+higher at the platform than the one that did not (`hz=60` after balanced: 11.5 W against 20-23 W).
+The cause is the dGPU: each `platform_profile` write makes the EC notify the NVIDIA driver, which
+wakes the GPU for about 25 s, longer than the 8-12 s settle. Compare conditions only with a
+settle of 35 s or more, or with the GPU off (Eco): with the GPU off there is no driver to wake.
