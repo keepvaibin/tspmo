@@ -10,7 +10,7 @@ pkgdesc="Thermal & System Power Management Optimizer for ASUS and Lenovo laptops
 arch=('x86_64')
 url="https://github.com/keepvaibin/tspmo"
 license=('GPL-3.0-or-later')
-makedepends=('cargo')
+makedepends=('cargo' 'fontconfig' 'libxkbcommon' 'wayland' 'pkgconf')
 options=('!lto' '!debug')
 
 _root() { realpath "$startdir/../.."; }
@@ -29,8 +29,9 @@ check() {
 
 package_tspmo-git() {
   pkgdesc="Thermal & System Power Management Optimizer for ASUS and Lenovo laptops (power profiles, GPU modes, fans, lighting)"
-  depends=('dbus' 'polkit' 'upower' 'kmod' 'systemd')
+  depends=('dbus' 'polkit' 'upower' 'kmod' 'systemd' 'fontconfig' 'libxkbcommon' 'wayland')
   optdepends=('nvidia-utils: NVIDIA GPU mode switching'
+              'plasma-workspace: Plasma power-mode widget and ROG-key shortcut'
               'tspmo-hid-asus-dkms: lets ASUS keyboard/lighting chips sleep (~0.6 W)')
   # tspmod implements the power-profiles D-Bus API itself.
   provides=('tspmo' 'power-profiles-daemon')
@@ -38,6 +39,14 @@ package_tspmo-git() {
   local r; r="$(_root)"
   install -Dm755 "$srcdir/target/release/tspmo"  "$pkgdir/usr/bin/tspmo"
   install -Dm755 "$srcdir/target/release/tspmod" "$pkgdir/usr/bin/tspmod"
+  install -Dm755 "$srcdir/target/release/tspmo-gui" "$pkgdir/usr/bin/tspmo-gui"
+
+  # The popup and its ROG-key shortcut: KDE reads X-KDE-Shortcuts from both directories.
+  install -Dm644 "$r/data/applications/org.tspmo.gui.desktop" "$pkgdir/usr/share/applications/org.tspmo.gui.desktop"
+  install -Dm644 "$r/data/applications/org.tspmo.gui.desktop" "$pkgdir/usr/share/kglobalaccel/org.tspmo.gui.desktop"
+  # Plasma 6 widget.
+  install -d "$pkgdir/usr/share/plasma/plasmoids"
+  cp -r "$r/data/plasma/org.tspmo.power" "$pkgdir/usr/share/plasma/plasmoids/"
 
   install -Dm644 "$r/data/systemd/tspmod.service" "$pkgdir/usr/lib/systemd/system/tspmod.service"
   install -Dm644 "$r/data/systemd/plymouth-quit-timeout.conf" \
