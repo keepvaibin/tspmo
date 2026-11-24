@@ -20,10 +20,19 @@ ASUS COMMANDS:
     battery once [off]           Charge to 100% once
     hw                           Firmware toggles (panel overdrive, boot sound, ...)
     hw <name> <value>
+    light                        Keyboard lighting
+    light brightness <0-3> [ac|battery]
+    light <effect> [rrggbb] [rrggbb] [low|med|high] [right|left|up|down]
+    light next | prev            Cycle effects (what the Aura key does)
+    light power <boot> <awake> <sleep> <shutdown>   on|off for each
+    light idle <seconds>         Dark after this long without input (0: never)
+    lid                          Slash light bar
+    lid on | off | brightness <0-255> | interval <0-255> | mode <name>
+    lid show <boot|sleep|shutdown|battery|lid|warning> on|off
 ";
 
 pub fn handles(cmd: &str) -> bool {
-    matches!(cmd, "fans" | "limits" | "battery" | "hw")
+    matches!(cmd, "fans" | "limits" | "battery" | "hw" | "light" | "lid")
 }
 
 pub fn run(cmd: &str, args: &[String]) -> ExitCode {
@@ -33,6 +42,8 @@ pub fn run(cmd: &str, args: &[String]) -> ExitCode {
         "limits" => limits(&a),
         "battery" => battery(&a),
         "hw" => hw(&a),
+        "light" => light(&a),
+        "lid" => lid(&a),
         _ => Err(format!("unknown command '{cmd}'")),
     };
     match r {
@@ -320,6 +331,141 @@ fn hw(a: &[&str]) -> Result<(), String> {
     }
 }
 
+// --- keyboard lighting -------------------------------------------------------------------------
+
+type Effect = (String, (u8, u8, u8), (u8, u8, u8), String, String);
+
+pub fn parse_colour(s: &str) -> Result<(u8, u8, u8), String> {
+    let h = s.trim_start_matches('#');
+    match (h.len(), u32::from_str_radix(h, 16)) {
+        (6, Ok(v)) => Ok(((v >> 16) as u8, (v >> 8) as u8, v as u8)),
+        _ => Err(format!("'{s}': colour is rrggbb, e.g. ff8000")),
+    }
+}
+
+fn on_off(s: &str) -> Result<bool, String> {
+    match s {
+        "on" | "1" | "yes" => Ok(true),
+        "off" | "0" | "no" => Ok(false),
+        _ => Err(format!("'{s}': use on or off")),
+    }
+}
+
+fn light(a: &[&str]) -> Result<(), String> {
+    let l = Iface::new("org.tspmo.Lighting1")?;
+    match a {
+        [] => {
+            let max: u8 = l.get("MaxBrightness")?;
+            let level: u8 = l.get("Brightness")?;
+            let modes: Vec<String> = l.get("Modes")?;
+            let source: String = l.get("Source")?;
+            println!("brightness {level}/{max} ({source})");
+            if modes.is_empty() {
+                return Ok(());
+            }
+            let e: Effect = l.get("Effect")?;
+            if !e.0.is_empty() {
+                println!(
+                    "effect     {} {:02x}{:02x}{:02x} {:02x}{:02x}{:02x} {} {}",
+                    e.0, e.1.0, e.1.1, e.1.2, e.2.0, e.2.1, e.2.2, e.3, e.4
+                );
+            }
+            println!("effects    {}", modes.join(" "));
+            let (b, w, s, d): (bool, bool, bool, bool) = l.get("PowerStates")?;
+            let f = |v: bool| if v { "on" } else { "off" };
+            println!(
+                "lit in     boot {} awake {} sleep {} shutdown {}",
+                f(b),
+                f(w),
+                f(s),
+                f(d)
+            );
+            let idle: u32 = l.get("IdleTimeout")?;
+            println!(
+                "idle       {}",
+                if idle == 0 {
+                    "never".to_owned()
+                } else {
+                    format!("{idle} s")
+                }
+            );
+            Ok(())
+        }
+        ["brightness", level, rest @ ..] => {
+            let level: u8 = level.parse().map_err(|_| format!("'{level}': not a level"))?;
+            l.call("SetBrightness", &(rest.first().copied().unwrap_or(""), level))
+        }
+        ["next"] | ["prev"] => {
+            l.call("CycleEffect", &(a[0] == "next",))?;
+            Ok(())
+        }
+        ["power", b, w, s, d] => l.call(
+            "SetPowerStates",
+            &(on_off(b)?, on_off(w)?, on_off(s)?, on_off(d)?),
+        ),
+        ["idle", n] => l.call(
+            "SetIdleTimeout",
+            &(n.parse::<u32>().map_err(|_| format!("'{n}': not a number"))?,),
+        ),
+        [effect, rest @ ..] => {
+            // Colours are hex; speed and direction are words.
+            let (mut colours, mut speed, mut dir) = (Vec::new(), "med", "right");
+            for r in rest {
+                match *r {
+                    "low" | "med" | "high" => speed = r,
+                    "right" | "left" | "up" | "down" => dir = r,
+                    c => colours.push(parse_colour(c)?),
+                }
+            }
+            let c1 = colours.first().copied().unwrap_or((255, 255, 255));
+            let c2 = colours.get(1).copied().unwrap_or((0, 0, 0));
+            l.call("SetEffect", &("", (*effect, c1, c2, speed, dir)))
+        }
+    }
+}
+
+// --- lid display -------------------------------------------------------------------------------
+
+fn lid(a: &[&str]) -> Result<(), String> {
+    let l = Iface::new("org.tspmo.Lid1")?;
+    match a {
+        [] => {
+            let enabled: bool = l.get("SlashEnabled")?;
+            let brightness: u8 = l.get("SlashBrightness")?;
+            let interval: u8 = l.get("SlashInterval")?;
+            let mode: String = l.get("SlashMode")?;
+            let show: Vec<(String, bool)> = l.get("SlashShow")?;
+            println!(
+                "slash {}  brightness {brightness}  interval {interval}  mode {mode}",
+                if enabled { "on" } else { "off" }
+            );
+            let s: Vec<String> = show
+                .iter()
+                .map(|(n, on)| format!("{n} {}", if *on { "on" } else { "off" }))
+                .collect();
+            println!("show  {}", s.join(", "));
+            let modes: Vec<String> = l.get("SlashModes")?;
+            println!("modes {}", modes.join(" "));
+            Ok(())
+        }
+        ["on"] => l.call("SetSlashEnabled", &(true,)),
+        ["off"] => l.call("SetSlashEnabled", &(false,)),
+        ["brightness", v] => l.call(
+            "SetSlashBrightness",
+            &(v.parse::<u8>().map_err(|_| format!("'{v}': 0-255"))?,),
+        ),
+        ["interval", v] => l.call(
+            "SetSlashInterval",
+            &(v.parse::<u8>().map_err(|_| format!("'{v}': 0-255"))?,),
+        ),
+        ["mode", m] => l.call("SetSlashMode", &(*m,)),
+        ["show", what, v] => l.call("SetSlashShow", &(*what, on_off(v)?)),
+        _ => {
+            Err("usage: tspmo lid [on|off|brightness <n>|interval <n>|mode <name>|show <what> on|off]".into())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,6 +477,16 @@ mod tests {
         assert!(parse_curve("40").is_err());
         assert!(parse_curve("x:1").is_err());
         assert!(parse_curve("300:1").is_err());
+    }
+
+    #[test]
+    fn colours_parse() {
+        assert_eq!(parse_colour("ff8000"), Ok((255, 128, 0)));
+        assert_eq!(parse_colour("#00ff00"), Ok((0, 255, 0)));
+        assert!(parse_colour("fff").is_err());
+        assert!(parse_colour("gg0000").is_err());
+        assert_eq!(on_off("on"), Ok(true));
+        assert!(on_off("maybe").is_err());
     }
 
     #[test]

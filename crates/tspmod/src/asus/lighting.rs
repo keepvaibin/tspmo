@@ -549,14 +549,18 @@ impl Lighting1 {
         Ok(())
     }
 
-    /// Next effect.
+    /// Next (or previous) effect; returns its name.
     async fn cycle_effect(
         &self,
+        forward: bool,
         #[zbus(header)] hdr: Header<'_>,
         #[zbus(connection)] conn: &zbus::Connection,
     ) -> zbus::fdo::Result<String> {
         authorize(conn, &hdr, super::SET_LIGHTING).await?;
-        let name = self.0.cycle_effect(true).map_err(zbus::fdo::Error::InvalidArgs)?;
+        let name = self
+            .0
+            .cycle_effect(forward)
+            .map_err(zbus::fdo::Error::InvalidArgs)?;
         changed(conn).await;
         Ok(name.to_owned())
     }
