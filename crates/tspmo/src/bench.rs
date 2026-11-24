@@ -731,6 +731,11 @@ fn bench(args: &[String]) -> Result<(), String> {
                     .args(["stop", "--quiet", "tspmo-bench.slice"])
                     .stderr(Stdio::null())
                     .status();
+                // Eco+'s guard may have moved the load out of the unit: stop it by name.
+                let _ = Command::new("pkill")
+                    .args(["-f", "bench --burn"])
+                    .stderr(Stdio::null())
+                    .status();
             }
             results[i].push(s);
         }

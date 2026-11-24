@@ -4,7 +4,7 @@
 //! `/proc/stat` while the machine is quiet, so an idle laptop costs about a wake-up every 4 s
 //! and nothing else). When a process outside the interactive part of the desktop keeps a core
 //! busy, the guard moves it, its whole job (the build's `make`, not the shell above it) and
-//! everything it starts into `tspmo-bg.slice`: efficiency cores only and the lowest CPU weight.
+//! everything it starts into `tspmobg.slice`: efficiency cores only and the lowest CPU weight.
 //! The performance cores, and with them the power budget, stay free for the compositor, the
 //! shell and the app in use. When Eco+ ends, or the daemon stops, everything goes back to the
 //! cgroup it came from.
@@ -21,7 +21,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tspmo_sys::SysRoot;
 
-pub const SLICE: &str = "tspmo-bg.slice";
+pub const SLICE: &str = "tspmobg.slice";
 const CGROUP: &str = "/sys/fs/cgroup";
 /// Where each moved process came from, kept while Eco+ is active so a restarted daemon (or
 /// `tspmod --restore-limits`) still puts everything back.
