@@ -16,6 +16,10 @@ pub fn list(root: &SysRoot) -> Vec<Hwmon> {
         .into_iter()
         .filter_map(|n| {
             let dir = format!("{CLASS}/{n}");
+            // An NVIDIA GPU's sensors wake it when read.
+            if crate::pci::entry_is_nvidia(root, &dir) {
+                return None;
+            }
             let name = root.read_opt(format!("{dir}/name"))?;
             Some(Hwmon { dir, name })
         })
@@ -43,5 +47,28 @@ impl Hwmon {
         v.sort_unstable();
         v.dedup();
         v
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::testutil::FakeRoot;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn the_dgpus_sensors_are_not_read() {
+        let f = FakeRoot::new("hwmon-nv");
+        f.file("/sys/bus/pci/devices/0000:01:00.0/class", "0x030200\n")
+            .file("/sys/bus/pci/devices/0000:01:00.0/vendor", "0x10de\n")
+            .file("/sys/class/hwmon/hwmon4/name", "coretemp\n")
+            .file("/sys/class/hwmon/hwmon7/name", "nouveau\n");
+        let p = f.path().join("sys/class/hwmon/hwmon7/device");
+        std::os::unix::fs::symlink("../../../bus/pci/devices/0000:01:00.0", p).unwrap();
+        // A read of the dGPU's `name` would fail.
+        let name = f.path().join("sys/class/hwmon/hwmon7/name");
+        std::fs::set_permissions(name, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let names: Vec<String> = list(&f.root()).into_iter().map(|h| h.name).collect();
+        assert_eq!(names, ["coretemp"]);
     }
 }

@@ -28,6 +28,11 @@ pub fn internal_panel(root: &SysRoot) -> Option<Panel> {
         if !["eDP", "LVDS", "DSI"].iter().any(|p| connector.starts_with(p)) {
             continue;
         }
+        // Reading a connector of the NVIDIA GPU (even its status) can wake it: only the GPU
+        // that drives the panel is asked.
+        if tspmo_sys::pci::drm_entry_is_nvidia(root, name) {
+            continue;
+        }
         if root.read_opt(format!("{dir}/status")).as_deref() != Some("connected") {
             continue;
         }

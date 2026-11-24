@@ -49,7 +49,7 @@ fn device(root: &SysRoot, connector: Option<&str>) -> Option<backlight::Backligh
     let all = backlight::list(root);
     // A backlight under the connector's own sysfs directory is the panel's.
     if let Some(c) = connector {
-        for b in &all {
+        for b in all.iter().filter(|b| !b.is_nvidia()) {
             if !root
                 .glob(&format!("/sys/class/drm/card*-{c}/{}", b.name))
                 .is_empty()
