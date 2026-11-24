@@ -26,6 +26,27 @@ jobs:
             TSPMO_SYSROOT="$f" ./target/release/tspmo doctor || true
           done
 
+  gui-snapshots:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Slint build dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends pkg-config libfontconfig1-dev libxkbcommon-dev libwayland-dev fonts-dejavu-core
+      - name: Render every window headless, at 100 % and 200 % text
+        run: |
+          cargo build -p tspmo-gui
+          for w in popup fans screen keys system; do
+            ./target/debug/tspmo-gui --snapshot "/tmp/$w.ppm" --window "$w"
+            TSPMO_FONT="DejaVu Sans,20" ./target/debug/tspmo-gui --snapshot "/tmp/$w-20.ppm" --window "$w" --scale 1.5
+          done
+          ls -la /tmp/*.ppm
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gui-snapshots
+          path: /tmp/*.ppm
+
   arch-package:
     runs-on: ubuntu-latest
     container: archlinux:base-devel

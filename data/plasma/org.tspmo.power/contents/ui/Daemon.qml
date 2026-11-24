@@ -14,6 +14,7 @@ QtObject {
     readonly property string gpuMode: props.properties.GpuMode ?? ""
     readonly property string gpuSwitching: props.properties.GpuSwitching ?? ""
     readonly property bool onBattery: props.properties.OnBattery ?? false
+    readonly property bool dgpuAsleep: props.properties.DgpuAsleep ?? false
     // Last failure, one short line; cleared by the next call.
     property string error: ""
 

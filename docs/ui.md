@@ -1,43 +1,98 @@
-# UI design system
+# UI design
 
-Derived from the user's references (`~/Downloads/ui1-10`): G-Helper's main window (ui1-6, ui7,
-ui10) and Lenovo Legion Toolkit (ui8, ui9). The popup follows G-Helper: one flat, dense column.
+The reference is G-Helper (flat, dense, one column of labelled rows) and Lenovo Legion Toolkit for
+how a settings window should be organised. The goal is a tool that looks like it was made for this
+one job: crisp, aligned, with state shown the way an instrument shows it, not a card-and-icon
+dashboard.
 
-## Layout
+## Reasoning
 
-- One page, 468 x 640 logical px, 14 px padding, sections 12 px apart, 6 px inside a section.
-- Order: Mode, GPU Mode, Laptop Screen, Flicker-free Dimming / Visual Mode, Slash Lighting,
-  Laptop Keyboard, Battery Charge Limit, System, footer (`Fans + Power`, `Quit`).
-- A section exists only if the machine has the hardware. `Fans + Power` is a second page
-  (back arrow, mode, fan tabs, curve editor, Auto/Full/Reset, power limits).
-- Section header: 16 px icon, bold 14 px title that carries the state ("Mode: Balanced"), dim
-  12 px live status on the right (fan RPM, dGPU state, battery %, W).
+- **Popup = the day-to-day set, no scrolling.** Mode, GPU, screen (refresh, brightness),
+  keyboard backlight, charge limit, and four buttons. Everything else opens in its own window:
+  Fans & Power, Screen, Keyboard & Lid, System. A window is the right container for a curve
+  editor or a table of limits; a flyout that scrolls is not a flyout.
+- **Labels, not sentences.** A section is a dim caption, a hairline, and a mono readout:
+  `GPU ───────── dGPU asleep`. The hairline makes the caption and the value read as one record
+  and gives every section the same left and right edge without boxes around them.
+- **State is read, not decorated.** Live values (rpm, W, %, kelvin) are in the monospace face
+  of the system (kdeglobals `fixed`), right aligned, so digits do not jitter: Slint has no
+  tabular-figure feature, a fixed face is the honest substitute. There are no decorative icons.
+  The few glyphs left (check mark, stepper arrows, reset) carry a meaning.
+- **One accent, and it means something.** The accent is the colour of the mode in force
+  (Eco+ lime, Silent teal, Balanced blue, Turbo orange). It colours the selection bars, slider
+  fills, checkboxes and focus-adjacent marks everywhere, so the whole UI tells you the mode at
+  a glance. The four mode tiles also carry their own colour as a thin bar at the bottom, dim when
+  unchosen, so the colour coding is learned before it is needed. Nothing else is coloured, apart
+  from red for errors.
+- **Selection = neutral fill + accent bar.** The chosen tile gets the "selected" grey, a 3 px
+  bar in the accent on its bottom edge and bold text; the accent is never used as a wash, which
+  keeps light and dark themes free of tinted pastels. No outline that doubles as a focus ring,
+  no fill swap that reads as pressed. Focus is a 2 px ring in the text colour, drawn inside the control; hover and pressed
+  step the surface; disabled is 40 % opacity.
+- **No gradients, glow, blur, shadows or pastel.** Flat fills, a 1 px border, 3 px radius. The
+  flyout itself has an 8 px-ish corner (0.6 rem) drawn with anti-aliasing on a transparent
+  surface, so there is never a square behind a rounded shape; windows are square (the
+  compositor draws the frame).
+- **Everything is relative to the text.** All sizes are in `rem` (the system font size read from
+  kdeglobals) so layout grows with it; Wayland fractional scale is applied to the buffer. The
+  spacing unit is 0.6 rem, which is 8 px at the default 10 pt. Windows are as big as their layout
+  asks and cannot be resized, so nothing scrolls and nothing clips, from 100 % to 200 %.
+- **Keyboard first.** `1`-`4` choose the mode, `F` `S` `K` `Y` open the windows (hints are shown
+  on the buttons), Tab walks the controls, arrows move inside a control, Enter or Space apply,
+  Esc closes. Arrows in a tile row move a highlight and do not apply: a GPU mode switch should
+  never happen by passing over it.
 
-## Controls
+## Windows
 
-- Option row: equal flat buttons, 56 px (icon above label) for Mode and GPU, 34 px (label only)
-  for screen, colour and charge-limit rows. The chosen one has a 2 px coloured outline: the mode
-  accent for Mode, blue for the rest, neutral for the refresh row. No fill change.
-- Slider: 5 px track, 16 px round knob, accent fill when custom.
-- Checkbox: 16 px square, blue when on. Toggles only where a firmware switch is a switch.
-- Steppers (`<` value `>`) replace dropdowns for effect and mode choices.
+| Window | Content |
+|---|---|
+| Popup | Mode (4 tiles, wheel), GPU (4 tiles + dGPU state), Screen (Auto / 60 Hz / Max, brightness), keyboard backlight, charge limit steps, window buttons |
+| Fans & Power | mode tabs, fan tabs with live rpm, 8-point curve editor (drag, arrows), Auto / Full / Factory; AC / Battery limits with sliders and per-limit reset |
+| Screen | refresh policy, brightness, flicker-free, colour mode, eye care kelvin, panel overdrive and Mini-LED |
+| Keyboard & Lid | backlight, effect, colour, speed, power states, idle timeout; Slash enabled, brightness, mode, show-on; AniMe |
+| System | charge limit and charge once, battery table, Fn lock, firmware toggles, reboot, dGPU users |
+
+A section exists only if the machine has the hardware or the daemon exposes the interface.
 
 ## Tokens
 
+Sizes: `rem` = system font size (default 10 pt = 13.33 px). `u` = 0.6 rem.
+
 | | dark | light |
 |---|---|---|
-| page | `#1c1c1c` | `#f3f3f3` |
-| button | `#2d2d2d` | `#e6e6e6` |
-| hover | `#3d3d3d` | `#cfcfcf` |
-| line | `#3a3a3a` | `#c4c4c4` |
-| text / dim | `#f2f2f2` / `#a0a0a0` | `#1a1a1a` / `#606060` |
+| window | `#1b1c1e` | `#f4f4f5` |
+| raised (controls) | `#26282b` | `#e8e9eb` |
+| hover | `#303338` | `#dcdee1` |
+| pressed | `#464a50` | `#bfc3c8` |
+| selected | `#393d43` | `#cdd0d5` |
+| line | `#34373c` | `#cdd0d4` |
+| text | `#e9eaec` | `#16171a` |
+| dim | `#9a9fa6` | `#5b5f66` |
+| focus ring | `#f2f3f5` | `#16171a` |
+| error | `#ff7070` | `#c32f2f` |
+| on accent | `#0f1113` | `#ffffff` |
+| Eco+ | `#8cd44a` | `#4f9a14` |
+| Silent | `#35c9a6` | `#0e9d7e` |
+| Balanced (default) | `#4d9cf7` | `#1f74dc` |
+| Turbo | `#f2673b` | `#d6481c` |
 
-Mode accents: Eco+ `#8bd450`, Silent `#2fc77a`, Balanced `#3da5f5`, Turbo `#f0503c`. Blue
-`#3da5f5`, danger `#ff6b6b`.
+| Element | Size |
+|---|---|
+| control height | 2.4 rem (mode tiles 2.8 rem) |
+| radius | 3 px; flyout 0.6 rem |
+| text | 1 rem; captions and readouts 0.85 rem; key hints 0.7 rem |
+| slider | 0.3 rem track, 0.45 x 1.3 rem thumb, 2 rem hit height |
+| checkbox | 1.1 rem, 2 px radius |
+| flyout | min 26 rem wide, padding 1.2 rem, sections 1.1 rem apart, 0.4 rem inside a section |
+| tile gap | 0.3 rem |
 
-- Radius: 4 px everywhere (3 px checkbox, pill only for toggles). Square window: no transparent
-  corners, hence no corner artifacts.
-- Type: system sans; 14 px bold headers, 12.5-13 px labels, 12 px status, 10.5 px captions.
-- Motion: 120-200 ms ease for outline, background and accent colour; 90 ms scroll; nothing
-  animates while idle.
-- Wording: labels only, no sentences; errors are one short line at the bottom.
+Motion: 100 ms surface, 140 ms selection bar, nothing animates while idle. The theme (light or
+dark) comes from `kdeglobals`' window colour; the mode accent from the daemon.
+
+## Reference comparison
+
+G-Helper's main window is the layout model (mode, GPU, screen, lighting, battery, in that order)
+but it scrolls on a small display and mixes outline and fill selection. Here the same sections
+fit one 26 rem column, the selection language is one rule, and the long tail moved to windows
+like G-Helper's "Fans + Power" and "Extra". Legion Toolkit's two-column settings pages are the
+model for the windows (Keyboard & Lid, System).

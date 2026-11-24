@@ -297,25 +297,27 @@ fn run_call(c: &Call) -> zbus::Result<Option<Event>> {
 }
 
 /// Live readings that the daemon computes on each query (no signal): fan speeds and battery
-/// power. Everything comes from tspmod; the GUI reads no sysfs.
-pub fn read_live(iface: &'static str, prop: &'static str, emit: impl Fn(Event) + Send + 'static) {
+/// power. Everything comes from tspmod; the GUI reads no sysfs. One thread reads them all.
+pub fn read_live(what: Vec<(&'static str, &'static str)>, emit: impl Fn(Event) + Send + 'static) {
     std::thread::Builder::new()
         .name("live".into())
         .spawn(move || {
-            let r = (|| -> zbus::Result<V> {
-                let conn = connect()?;
-                let reply = zbus::block_on(conn.call_method(
-                    Some(SERVICE),
-                    PATH,
-                    Some("org.freedesktop.DBus.Properties"),
-                    "Get",
-                    &(format!("{PREFIX}{iface}"), prop),
-                ))?;
-                let v: OwnedValue = reply.body().deserialize()?;
-                Ok(V::from_value(&v))
-            })();
-            if let Ok(v) = r {
-                emit(Event::Props(iface.to_owned(), vec![(prop.to_owned(), v)]));
+            for (iface, prop) in what {
+                let r = (|| -> zbus::Result<V> {
+                    let conn = connect()?;
+                    let reply = zbus::block_on(conn.call_method(
+                        Some(SERVICE),
+                        PATH,
+                        Some("org.freedesktop.DBus.Properties"),
+                        "Get",
+                        &(format!("{PREFIX}{iface}"), prop),
+                    ))?;
+                    let v: OwnedValue = reply.body().deserialize()?;
+                    Ok(V::from_value(&v))
+                })();
+                if let Ok(v) = r {
+                    emit(Event::Props(iface.to_owned(), vec![(prop.to_owned(), v)]));
+                }
             }
         })
         .ok();
