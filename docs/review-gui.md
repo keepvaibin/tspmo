@@ -6,6 +6,31 @@ headless renders (`--snapshot`) of the real UI code; live checks were made on th
 uinput input against the mock daemon (`examples/mockd.rs`, session bus), so no hardware setting
 was touched. Measurements use the real `tspmod` on the system bus, read only.
 
+## Dense redesign (G-Helper layout), live checks
+
+Built `--release`, run directly on the live KDE session against the real daemon; uinput for
+input, `spectacle` cropped to the window. Screenshots in
+`/tmp/claude-1000/-home-keepvaibin/ed2a3f7b-7c8d-4097-90df-dbb2b3fd48b1/scratchpad/v/`
+(`side_by_side_ui1.png`, `live_popup.png`, `live_combo.png`, `live_ecoplus.png`,
+`live_tab5.png`, `osd_before_after.png`, `widget1.png`, `z_p14.png`, `z_p20.png`).
+
+| Check | Result |
+|---|---|
+| Size | 471 x 615 dp at 10 pt (reference about 470 x 650 with a title bar); 659 x 860 at 14 pt; 941 x 1229 at 20 pt, light and dark, no clipping |
+| Text | body 9 pt, headings 10 pt bold, live readings 8.5 pt mono; spacing 6 dp inside a section, 14 dp between |
+| Mode header | `CPU: 57°C  Fan: 1800RPM` from `Fans1.Temps` + `Rpm` (one read per second, no dGPU access) |
+| GPU header | `dGPU asleep  Fan: 1800RPM`; no GPU temperature (the daemon lists only CPU) |
+| Eco+ (key `1`) | live: header `GPU Mode: Eco (Eco+)`, Eco outlined, Standard/Ultimate/Optimized dimmed and inert, `dGPU off`; key `3` restores Balanced and the daemon's own GPU row (the daemon still reports `hybrid`, see handoff) |
+| Drop-down | live click on the Slash mode combo: 16 modes in two columns inside the window; Esc closes the list and leaves the window open |
+| Keyboard | Tab x5 reaches the visual-mode combo with a ring; arrows step a closed combo |
+| Empty effect | the daemon has no effect set: `Choose effect`, colour and speed disabled, nothing empty is ever sent (unit test `an_unset_effect_is_never_sent_empty`) |
+| OSD | live `--osd battery-profile-performance Turbo 60`: bottom centre, about 10 % of the height above the panel, first frame 38.9 ms after `main`, gone after 1.2 s, slimmed after feedback (225 x 78 px to 168 x 57 px at 1.5x) |
+| `--toggle` on an open popup | `WAYLAND_DEBUG` shows 0 lines for the toggling process; popup closes |
+| Toplevel | popup `WAYLAND_DEBUG`: no `xdg_surface`/`xdg_toplevel`, only the `xdg_wm_base` bind |
+| Taskbar (old desktop entry) | reproduced: `kglobalaccel ... invokeShortcut _launch` twice (open, close) leaves a launch-feedback placeholder (a green icon) in the task manager after the close |
+| Taskbar (new entries) | **not verified live**: installing the helper into `~/.local/share` or `/usr` was not done here; with the package installed run the two `invokeShortcut` calls and look at the taskbar (see handoff). Static checks: entries carry `NoDisplay`/`StartupNotify=false`/`X-KDE-StartupNotify=false` (unit tests) |
+| Plasma widget | `plasmawindowed` with `XDG_DATA_DIRS` pointing at the worktree, real daemon: icons, outline selection, Fans + Power tile |
+
 ## Windows and controls
 
 | Window / control | How verified | Result |
