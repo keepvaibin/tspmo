@@ -61,3 +61,7 @@ opt-level = "s"
 opt-level = "s"
 [profile.release.package.harfrust]
 opt-level = "s"
+
+# Idle cost: upstream's pool threads never exit and wake twice a second (see vendor/blocking).
+[patch.crates-io]
+blocking = { path = "vendor/blocking" }

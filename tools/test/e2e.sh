@@ -183,12 +183,12 @@ if has org.tspmo.Daemon1 && [ "$MODES" = 1 ]; then
   check "CycleProfile x4 returns" eq "$(prop org.tspmo.Daemon1 Profile | str)" "$s0"
   # The guard: a busy job outside the desktop moves to the efficiency cores in Eco+ and back.
   call org.tspmo.Daemon1 SetProfile s eco-plus >/dev/null; sleep 2
-  systemd-run --quiet --collect --unit=tspmo-e2e-burn --slice=tspmo-e2e.slice /usr/bin/tspmo bench --burn 4 2>/dev/null
+  sudo systemd-run --quiet --collect --unit=tspmo-e2e-burn --slice=tspmo-e2e.slice /usr/bin/tspmo bench --burn 4 2>/dev/null
   moved=0
   for _ in $(seq 1 14); do sleep 1.5; [ "$(wc -l < /sys/fs/cgroup/tspmobg.slice/cgroup.procs 2>/dev/null)" -gt 0 ] && { moved=1; break; }; done
   check "guard moves a busy job to tspmobg.slice" eq "$moved" 1
   call org.tspmo.Daemon1 SetProfile s balanced >/dev/null; sleep 3
-  systemctl stop tspmo-e2e-burn 2>/dev/null
+  sudo systemctl stop tspmo-e2e-burn 2>/dev/null
   check "guard: slice stopped after eco-plus" eq "$(systemctl is-active tspmobg.slice)" inactive
   check "guard: nothing left running" eq "$(pgrep -fc 'bench --burn 4' | awk '{print ($1 > 2) ? 1 : 0}')" 0
 fi
@@ -197,7 +197,7 @@ fi
 if has org.tspmo.Fans1 && [ "$MODES" = 1 ]; then
   cur=$(prop org.tspmo.Fans1 Mode | str); other=balanced; [ "$cur" = balanced ] && other=performance
   RESTORE+=("tspmo fans $other all auto")
-  tspmo fans $other cpu 30:0,40:0,50:0,60:5,70:20,80:60,90:90,100:100 >/dev/null 2>&1
+  tspmo fans $other cpu 30:0,40:0,50:0,60:5,70:20,75:70,80:85,100:100 >/dev/null 2>&1
   check "Fans1 SetCurve stored for $other" eq "$(tspmo fans | grep -A3 "^$other" | grep -c 'custom')" 1
   tspmo fans $other cpu 30:0,40:0,50:0,60:0,70:0,80:0,90:0,100:0 >/dev/null 2>&1 && record "Fans1 refuses a stopped fan at 90 C" FAIL "" || record "Fans1 refuses a stopped fan at 90 C" PASS ""
   tspmo fans $other all auto >/dev/null 2>&1
