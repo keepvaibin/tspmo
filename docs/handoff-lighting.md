@@ -71,4 +71,28 @@ See the commit log. Open items are under "Ask the user".
 
 ## Ask the user
 
-(none pending)
+The daemon with these changes is installed (checked: `tspmo light` shows `backlight
+single-zone-rgb`). The keyboard was left at static white, brightness 1/3 on AC and battery,
+power states boot on, awake on, sleep off, shutdown off. I cannot see LEDs, so:
+
+1. **Right now, without touching anything: is the keyboard backlight lit (dim white, level 1)?**
+2. Run this and say, per step, what you see. Expected in brackets.
+
+   ```
+   bash tools/test/lighting-demo.sh keyboard
+   ```
+   (from the repository root; `/home/keepvaibin/Documents/tspmo/.claude/worktrees/agent-af1245ba406d2c741`)
+   [dark; bright white; dim white; colours cycling; red/blue breathing; green strobing/pulsing;
+   dim white. The run ends on dim white at 1.]
+3. Slash (it is dark on battery by design; this turns "show on battery" on for the test and
+   back off at the end, and ends on the original animation `slash`, interval 0, brightness 255):
+
+   ```
+   bash tools/test/lighting-demo.sh slash
+   ```
+   [lit; a different animation each 4 s (static is a steady pattern); with interval 5 the
+   animation pauses about 5 s between runs, with 0 it runs without pause; three brightness
+   steps getting brighter; dark again at the end because of battery]
+
+If step 1 is "dark": run `tspmo light brightness 3` and say whether that lights it, then
+`tspmo light static ffffff`.
