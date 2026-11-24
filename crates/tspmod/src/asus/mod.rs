@@ -6,12 +6,16 @@
 mod battery;
 mod fans;
 mod hardware;
+mod hotkeys;
+mod lid;
+mod lighting;
 mod power;
 mod thermal;
 
-use crate::{events, polkit};
+use crate::{events, polkit, session};
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock, mpsc};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
+use tspmo_core::power::Profile;
 use tspmo_sys::SysRoot;
 use zbus::blocking::connection::Builder;
 use zbus::message::Header;
@@ -22,6 +26,8 @@ pub const SET_FANS: &str = "org.tspmo.set-fans";
 pub const SET_POWER: &str = "org.tspmo.set-power";
 pub const SET_BATTERY: &str = "org.tspmo.set-battery";
 pub const SET_HARDWARE: &str = "org.tspmo.set-hardware";
+pub const SET_LIGHTING: &str = "org.tspmo.set-lighting";
+pub const SET_LID: &str = "org.tspmo.set-lid";
 
 pub(crate) async fn authorize(
     conn: &zbus::Connection,
@@ -47,6 +53,11 @@ fn state_dir() -> PathBuf {
 
 /// What this machine has. Every part is optional.
 pub struct Asus {
+    root: SysRoot,
+    lighting: Option<Arc<lighting::Lighting>>,
+    lid: Option<Arc<lid::Lid>>,
+    /// The last thermal mode an OSD announced.
+    shown_mode: Mutex<Option<Profile>>,
     thermal: Option<Arc<thermal::Thermal>>,
     battery: Option<Arc<battery::Battery>>,
     hardware: Option<Arc<hardware::Hardware>>,
@@ -60,12 +71,44 @@ impl Asus {
         }
     }
 
+    /// Show the thermal mode on screen when it changes (Fn+F5 cycles it in the kernel).
+    fn announce_mode(&self, p: Profile) {
+        let mut last = shown(&self.shown_mode);
+        let first = last.is_none();
+        if *last != Some(p) {
+            *last = Some(p);
+            if !first {
+                let (icon, text) = match p {
+                    Profile::PowerSaver => ("power-profile-power-saver-symbolic", "Power saver"),
+                    Profile::Balanced => ("power-profile-balanced-symbolic", "Balanced"),
+                    Profile::Performance => ("power-profile-performance-symbolic", "Performance"),
+                };
+                session::osd(icon, text, None);
+            }
+        }
+    }
+
+    /// The Aura key: next (or previous) effect, or the next brightness on keyboards without effects.
+    fn aura_key(&self, forward: bool) {
+        let Some(l) = &self.lighting else { return };
+        match l.cycle_effect(forward) {
+            Ok(name) => session::osd("input-keyboard", name, None),
+            Err(_) => {
+                let level = l.cycle_brightness();
+                let pct = (u32::from(level) * 100 / u32::from(l.max().max(1))) as u8;
+                session::osd("input-keyboard", "Keyboard", Some(pct));
+            }
+        }
+        self.emit(lighting::changed);
+    }
+
     fn handle(&self, e: &events::Event) {
         use events::Event::*;
         match e {
             ProfileApplied {
                 profile, on_battery, ..
             } => {
+                self.announce_mode(*profile);
                 if let Some(t) = &self.thermal {
                     t.on_profile(*profile, *on_battery);
                     self.emit(async |c| {
@@ -75,6 +118,13 @@ impl Asus {
                 }
             }
             PowerSource { on_battery } => {
+                if let Some(l) = &self.lid {
+                    l.on_power_source(*on_battery);
+                }
+                if let Some(l) = &self.lighting {
+                    l.on_power_source(*on_battery);
+                    self.emit(lighting::changed);
+                }
                 if let Some(b) = &self.battery {
                     b.on_power_source(*on_battery);
                     self.emit(battery::changed);
@@ -96,6 +146,15 @@ impl Asus {
                     b.refresh();
                     self.emit(battery::changed);
                 }
+                if let Some(l) = &self.lighting {
+                    l.apply();
+                    self.emit(lighting::changed);
+                }
+                if let Some(l) = &self.lid {
+                    l.apply();
+                }
+                // The USB keyboard may have re-enumerated while asleep.
+                hotkeys::rearm();
             }
             Key(_) => {}
         }
@@ -106,6 +165,10 @@ impl Asus {
 pub fn init(root: &SysRoot) -> Arc<Asus> {
     let dir = state_dir();
     let asus = Arc::new(Asus {
+        root: root.clone(),
+        lighting: lighting::Lighting::new(root.clone(), dir.clone()).map(Arc::new),
+        lid: lid::Lid::new(root.clone(), dir.clone()).map(Arc::new),
+        shown_mode: Mutex::new(None),
         thermal: thermal::Thermal::new(root.clone(), dir.clone()).map(Arc::new),
         battery: battery::Battery::new(root.clone(), dir.clone()).map(Arc::new),
         hardware: hardware::Hardware::new(root.clone(), dir).map(Arc::new),
@@ -142,7 +205,17 @@ pub fn register<'a>(mut b: Builder<'a>, asus: &Asus) -> zbus::Result<Builder<'a>
     if let Some(h) = &asus.hardware {
         b = b.serve_at(PATH, hardware::Hardware1(Arc::clone(h)))?;
     }
+    if let Some(l) = &asus.lighting {
+        b = b.serve_at(PATH, lighting::Lighting1(Arc::clone(l)))?;
+    }
+    if let Some(l) = &asus.lid {
+        b = b.serve_at(PATH, lid::Lid1(Arc::clone(l)))?;
+    }
     Ok(b)
+}
+
+fn shown(m: &Mutex<Option<Profile>>) -> std::sync::MutexGuard<'_, Option<Profile>> {
+    m.lock().unwrap_or_else(|p| p.into_inner())
 }
 
 fn lock_limits_empty(t: &thermal::Thermal) -> bool {
@@ -159,4 +232,11 @@ pub fn start(conn: &zbus::blocking::Connection, asus: &Arc<Asus>) {
     if let Some(h) = &asus.hardware {
         h.reapply();
     }
+    if let Some(l) = &asus.lighting {
+        l.apply();
+    }
+    if let Some(l) = &asus.lid {
+        l.apply();
+    }
+    hotkeys::start(Arc::clone(asus));
 }

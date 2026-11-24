@@ -6,8 +6,11 @@ pub mod battery;
 pub mod fans;
 pub mod hardware;
 pub mod hid;
+pub mod hotkeys;
+pub mod lighting;
 pub mod limits;
 pub mod quirks;
+pub mod slash;
 
 /// Writable copy of the GU605MI fixture, for tests here and in `tspmod`.
 #[doc(hidden)]
