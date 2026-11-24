@@ -379,6 +379,32 @@ impl Tspmo {
         Ok(next.as_str().to_owned())
     }
 
+    /// What `tspmo doctor` prints: `(severity, topic, text)` for every finding, severity
+    /// `error`, `warn` or `info`. The text is the title and detail; a fix is appended as
+    /// `Fix: <command>` lines. Runs the checks on each call (a few milliseconds, no hardware
+    /// access beyond sysfs and `/proc`); never touches the NVIDIA GPU.
+    fn doctor(&self) -> Vec<(String, String, String)> {
+        let root = lock(&self.0).root.clone();
+        let m = tspmo_core::machine::Machine::probe(&root);
+        tspmo_core::doctor::run(&root, &m)
+            .into_iter()
+            .map(|f| {
+                let sev = match f.severity {
+                    tspmo_core::doctor::Severity::Error => "error",
+                    tspmo_core::doctor::Severity::Warn => "warn",
+                    tspmo_core::doctor::Severity::Info => "info",
+                };
+                let mut text = format!("{}. {}", f.title, f.detail);
+                if let Some(fix) = f.fix {
+                    for c in fix.commands {
+                        text.push_str(&format!("\nFix: {c}"));
+                    }
+                }
+                (sev.to_owned(), f.id.to_owned(), text)
+            })
+            .collect()
+    }
+
     /// Set the GPU policy: `eco`, `hybrid`, `ultimate` or `optimized`. Returns a message for the user.
     async fn set_gpu_mode(
         &self,
