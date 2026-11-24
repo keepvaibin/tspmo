@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Name=tspmo
+GenericName=Power and hardware control
+Comment=Modes, GPU, screen, battery, fans, lighting
+Exec=tspmo-gui --toggle
+Icon=preferences-system-power-management
+Terminal=false
+Categories=System;Settings;HardwareSettings;
+StartupWMClass=org.tspmo.gui
+# ROG / Armoury key: KEY_PROG1 (148) from hid-asus, xkb XF86Launch1.
+X-KDE-Shortcuts=Launch (1)
+Actions=Toggle;
+
+[Desktop Action Toggle]
+Name=Toggle
+Exec=tspmo-gui --toggle

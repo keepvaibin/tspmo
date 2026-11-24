@@ -1,0 +1,348 @@
+import { Th, Ic } from "theme.slint";
+import { Opt } from "bk.slint";
+
+export component Icon inherits Path {
+    in property <string> name;
+    in property <color> tint: Th.text;
+    in property <length> size: 18px;
+    width: size;
+    height: size;
+    viewbox-width: 24;
+    viewbox-height: 24;
+    commands: Ic.path(name);
+    fill: transparent;
+    stroke: tint;
+    stroke-width: 1.7px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    animate stroke { duration: 200ms; }
+}
+
+// Three-blade fan, the blades are one path rotated around the centre.
+export component FanIcon inherits Rectangle {
+    in property <color> tint: Th.text;
+    in property <length> size: 18px;
+    width: size;
+    height: size;
+    Icon { name: "fan"; tint: root.tint; size: root.size; }
+}
+
+export component Text13 inherits Text {
+    color: Th.text;
+    font-size: 13px;
+    vertical-alignment: center;
+}
+
+export component Dim inherits Text {
+    color: Th.dim;
+    font-size: 11.5px;
+    vertical-alignment: center;
+}
+
+export component Card inherits Rectangle {
+    background: Th.surface;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: Th.line;
+    in property <length> pad: 10px;
+    VerticalLayout {
+        padding: root.pad;
+        spacing: 8px;
+        @children
+    }
+}
+
+export component Btn inherits Rectangle {
+    in property <string> text;
+    in property <string> icon;
+    in property <bool> primary;
+    in property <bool> danger;
+    in property <bool> enabled: true;
+    in property <bool> active;
+    callback clicked();
+    height: 32px;
+    min-width: 32px;
+    border-radius: 9px;
+    opacity: enabled ? 1 : 0.4;
+    background: primary ? Th.accent : active ? Th.hover : ta.has-hover ? Th.hover : Th.surface2;
+    border-width: fs.has-focus ? 1.5px : 0;
+    border-color: Th.accent;
+    animate background { duration: 200ms; }
+    fs := FocusScope {
+        enabled: root.enabled;
+        key-pressed(e) => {
+            if (e.text == Key.Return || e.text == " ") {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+        HorizontalLayout {
+            padding-left: 10px;
+            padding-right: 10px;
+            spacing: 6px;
+            alignment: center;
+            if root.icon != "": Icon {
+                name: root.icon;
+                size: 16px;
+                tint: root.primary ? Th.on-accent : root.danger ? Th.danger : Th.text;
+                y: (parent.height - self.height) / 2;
+            }
+            if root.text != "": Text {
+                text: root.text;
+                font-size: 12.5px;
+                font-weight: 500;
+                color: root.primary ? Th.on-accent : root.danger ? Th.danger : Th.text;
+                vertical-alignment: center;
+            }
+        }
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            fs.focus();
+            root.clicked();
+        }
+    }
+}
+
+export component Toggle inherits Rectangle {
+    in property <bool> on;
+    in property <bool> enabled: true;
+    callback toggled(bool);
+    width: 38px;
+    height: 22px;
+    border-radius: 11px;
+    opacity: enabled ? 1 : 0.4;
+    background: on ? Th.accent : Th.surface2;
+    border-width: fs.has-focus ? 1.5px : 0;
+    border-color: Th.accent;
+    animate background { duration: 160ms; easing: ease-in-out; }
+    Rectangle {
+        x: root.on ? parent.width - self.width - 3px : 3px;
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        background: root.on ? Th.on-accent : Th.dim;
+        animate x { duration: 160ms; easing: ease-in-out; }
+    }
+    fs := FocusScope {
+        enabled: root.enabled;
+        key-pressed(e) => {
+            if (e.text == Key.Return || e.text == " ") {
+                root.toggled(!root.on);
+                return accept;
+            }
+            return reject;
+        }
+    }
+    TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            fs.focus();
+            root.toggled(!root.on);
+        }
+    }
+}
+
+// Segmented control. The caller owns the selection: `picked` asks for a change.
+export component Seg inherits Rectangle {
+    in property <[Opt]> opts;
+    in property <int> index;
+    in property <bool> enabled: true;
+    in property <bool> show-icons: true;
+    callback picked(int);
+    height: 34px;
+    border-radius: 10px;
+    background: Th.surface2;
+    border-width: fs.has-focus ? 1.5px : 0;
+    border-color: Th.accent;
+    opacity: enabled ? 1 : 0.5;
+    fs := FocusScope {
+        enabled: root.enabled;
+        key-pressed(e) => {
+            if (e.text == Key.LeftArrow && root.index > 0) {
+                root.picked(root.index - 1);
+                return accept;
+            }
+            if (e.text == Key.RightArrow && root.index < root.opts.length - 1) {
+                root.picked(root.index + 1);
+                return accept;
+            }
+            return reject;
+        }
+        HorizontalLayout {
+            padding: 3px;
+            spacing: 2px;
+            for o[i] in root.opts: Rectangle {
+                border-radius: 8px;
+                background: i == root.index ? Th.accent : ta.has-hover ? Th.hover : transparent;
+                animate background { duration: 160ms; easing: ease-in-out; }
+                HorizontalLayout {
+                    alignment: center;
+                    spacing: 5px;
+                    if root.show-icons && o.icon != "": Icon {
+                        name: o.icon;
+                        size: 15px;
+                        tint: i == root.index ? Th.on-accent : Th.dim;
+                        y: (parent.height - self.height) / 2;
+                    }
+                    if o.label != "": Text {
+                        text: o.label;
+                        font-size: 12.5px;
+                        font-weight: i == root.index ? 600 : 400;
+                        color: i == root.index ? Th.on-accent : Th.text;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+                }
+                ta := TouchArea {
+                    clicked => {
+                        fs.focus();
+                        root.picked(i);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// One line: icon and label on the left, the control on the right.
+export component Row inherits Rectangle {
+    in property <string> label;
+    in property <string> icon;
+    in property <string> value;
+    height: 36px;
+    HorizontalLayout {
+        spacing: 8px;
+        if root.icon != "": Icon {
+            name: root.icon;
+            tint: Th.dim;
+            y: (parent.height - self.height) / 2;
+        }
+        Text {
+            text: root.label;
+            color: Th.text;
+            font-size: 13px;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            overflow: elide;
+        }
+        if root.value != "": Text {
+            text: root.value;
+            color: Th.dim;
+            font-size: 12px;
+            vertical-alignment: center;
+        }
+        @children
+    }
+}
+
+// Horizontal slider. `moved` while dragging, `released` once the value settles.
+export component Slide inherits Rectangle {
+    in property <int> min: 0;
+    in property <int> max: 100;
+    in property <int> value;
+    in property <int> step: 1;
+    in property <bool> custom: true;
+    in property <bool> enabled: true;
+    callback moved(int);
+    callback released(int);
+    property <int> shown: ta.pressed ? drag : value;
+    property <int> drag: value;
+    property <int> pending: value;
+    property <float> frac: max > min ? clamp((shown - min) / (max - min), 0, 1) : 0;
+    height: 24px;
+    opacity: enabled ? 1 : 0.5;
+    function at(x: length) -> int {
+        root.min + round((clamp(x / root.width, 0, 1) * (root.max - root.min)) / root.step) * root.step
+    }
+    Rectangle {
+        y: (parent.height - self.height) / 2;
+        height: 5px;
+        border-radius: 3px;
+        background: Th.surface2;
+        Rectangle {
+            x: 0;
+            width: root.frac * parent.width;
+            border-radius: 3px;
+            background: root.custom ? Th.accent : Th.dim;
+            animate width { duration: ta.pressed ? 0ms : 120ms; }
+        }
+    }
+    knob := Rectangle {
+        x: root.frac * (root.width - self.width);
+        y: (parent.height - self.height) / 2;
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        background: Th.text;
+        border-width: fs.has-focus ? 2px : 0;
+        border-color: Th.accent;
+        animate x { duration: ta.pressed ? 0ms : 120ms; }
+    }
+    settle := Timer {
+        interval: 350ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            root.released(root.pending);
+        }
+    }
+    fs := FocusScope {
+        enabled: root.enabled;
+        key-pressed(e) => {
+            if (e.text == Key.LeftArrow || e.text == Key.RightArrow) {
+                let d = (e.text == Key.LeftArrow ? -1 : 1) * root.step * (e.modifiers.shift ? 5 : 1);
+                root.pending = clamp((settle.running ? root.pending : root.value) + d, root.min, root.max);
+                root.moved(root.pending);
+                settle.running = true;
+                return accept;
+            }
+            return reject;
+        }
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        pointer-event(e) => {
+            if (e.button == PointerEventButton.left) {
+                if (e.kind == PointerEventKind.down) {
+                    fs.focus();
+                    root.drag = root.at(self.mouse-x);
+                    root.moved(root.drag);
+                } else if (e.kind == PointerEventKind.up) {
+                    root.released(root.drag);
+                }
+            }
+        }
+        moved => {
+            if (self.pressed) {
+                root.drag = root.at(self.mouse-x);
+                root.moved(root.drag);
+            }
+        }
+    }
+}
+
+export component Stepper inherits Rectangle {
+    in property <string> text;
+    in property <bool> can-prev: true;
+    in property <bool> can-next: true;
+    callback prev();
+    callback next();
+    height: 30px;
+    HorizontalLayout {
+        spacing: 4px;
+        Btn { icon: "left"; enabled: root.can-prev; width: 30px; clicked => { root.prev(); } }
+        Text {
+            text: root.text;
+            color: Th.text;
+            font-size: 13px;
+            font-weight: 600;
+            min-width: 54px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        Btn { icon: "right"; enabled: root.can-next; width: 30px; clicked => { root.next(); } }
+    }
+}

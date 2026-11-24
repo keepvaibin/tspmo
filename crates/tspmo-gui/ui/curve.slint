@@ -1,0 +1,156 @@
+import { Th } from "theme.slint";
+import { Bk } from "bk.slint";
+
+// Fan curve: 8 draggable points, temperature 20-100 °C across, speed 0-100 % up.
+// Arrow keys move the selected point (Tab keeps its usual meaning), Shift is the fine step.
+export component CurveEditor inherits Rectangle {
+    in property <bool> editable: true;
+    in property <color> tint: Th.accent;
+    property <length> pad-l: 30px;
+    property <length> pad-b: 16px;
+    property <length> pw: self.width - pad-l - 8px;
+    property <length> ph: self.height - pad-b - 8px;
+    property <int> sel: 0;
+    height: 170px;
+
+    function px(t: int) -> length { root.pad-l + (t - 20) / 80 * root.pw }
+    function py(p: int) -> length { 8px + (100 - p) / 100 * root.ph }
+
+    // grid
+    for v in [0, 25, 50, 75, 100]: Rectangle {
+        x: root.pad-l;
+        y: root.py(v);
+        width: root.pw;
+        height: 1px;
+        background: Th.line;
+        Text {
+            x: -root.pad-l;
+            y: -7px;
+            width: root.pad-l - 6px;
+            text: v;
+            font-size: 10px;
+            color: Th.dim;
+            horizontal-alignment: right;
+        }
+    }
+    for t in [20, 40, 60, 80, 100]: Text {
+        x: root.px(t) - 15px;
+        y: root.height - root.pad-b + 3px;
+        width: 30px;
+        text: t;
+        font-size: 10px;
+        color: Th.dim;
+        horizontal-alignment: center;
+    }
+
+    Path {
+        x: root.pad-l;
+        y: 8px;
+        width: root.pw;
+        height: root.ph;
+        viewbox-width: 1000;
+        viewbox-height: 1000;
+        commands: Bk.curve-path;
+        stroke: root.tint;
+        stroke-width: 2px;
+        stroke-line-join: round;
+        stroke-line-cap: round;
+        fill: transparent;
+        animate stroke { duration: 200ms; }
+    }
+
+    fs := FocusScope {
+        enabled: root.editable;
+        key-pressed(e) => {
+            if (!root.editable || Bk.curve.length == 0) {
+                return reject;
+            }
+            let step = e.modifiers.shift ? 1 : 5;
+            let c = Bk.curve[root.sel];
+            if (e.text == Key.UpArrow) {
+                Bk.curve-move(root.sel, c.t, c.p + step);
+                return accept;
+            }
+            if (e.text == Key.DownArrow) {
+                Bk.curve-move(root.sel, c.t, c.p - step);
+                return accept;
+            }
+            if (e.text == "," || e.text == "<") {
+                root.sel = max(0, root.sel - 1);
+                return accept;
+            }
+            if (e.text == "." || e.text == ">") {
+                root.sel = min(Bk.curve.length - 1, root.sel + 1);
+                return accept;
+            }
+            if (e.text == Key.LeftArrow) {
+                if (e.modifiers.control) {
+                    root.sel = max(0, root.sel - 1);
+                } else {
+                    Bk.curve-move(root.sel, c.t - step, c.p);
+                }
+                return accept;
+            }
+            if (e.text == Key.RightArrow) {
+                if (e.modifiers.control) {
+                    root.sel = min(Bk.curve.length - 1, root.sel + 1);
+                } else {
+                    Bk.curve-move(root.sel, c.t + step, c.p);
+                }
+                return accept;
+            }
+            if (e.text == Key.Return) {
+                Bk.curve-commit();
+                return accept;
+            }
+            return reject;
+        }
+        changed has-focus => {
+            if (!self.has-focus) {
+                Bk.curve-commit();
+            }
+        }
+    }
+
+    for p[i] in Bk.curve: Rectangle {
+        x: root.px(p.t) - self.width / 2;
+        y: root.py(p.p) - self.height / 2;
+        width: 26px;
+        height: 26px;
+        property <bool> hot: ta.has-hover || ta.pressed || (fs.has-focus && root.sel == i);
+        Rectangle {
+            width: hot ? 14px : 10px;
+            height: self.width;
+            border-radius: self.width / 2;
+            background: hot ? root.tint : Th.surface;
+            border-width: 2px;
+            border-color: root.tint;
+            animate width { duration: 120ms; easing: ease-out; }
+        }
+        ta := TouchArea {
+            enabled: root.editable;
+            property <length> gx;
+            property <length> gy;
+            mouse-cursor: pointer;
+            pointer-event(e) => {
+                if (e.button == PointerEventButton.left) {
+                    if (e.kind == PointerEventKind.down) {
+                        fs.focus();
+                        root.sel = i;
+                        self.gx = self.mouse-x;
+                        self.gy = self.mouse-y;
+                    } else if (e.kind == PointerEventKind.up) {
+                        Bk.curve-commit();
+                    }
+                }
+            }
+            moved => {
+                if (self.pressed) {
+                    let t = p.t + round((self.mouse-x - self.gx) / root.pw * 80);
+                    let q = p.p - round((self.mouse-y - self.gy) / root.ph * 100);
+                    Bk.curve-move(i, t, q);
+                }
+            }
+        }
+    }
+}
