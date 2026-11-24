@@ -507,13 +507,21 @@ fn bench(args: &[String]) -> Result<(), String> {
     let charge = "/sys/class/power_supply/BAT1/charge_control_end_threshold";
     let on_ac = tspmo_sys::power_supply::on_ac(&SysRoot::default()) == Some(true);
     if hold && on_ac {
-        // The firmware accepts only some limits (60, 65, ... on ASUS): take the highest one the
-        // battery is already above, so charging stops.
+        // The firmware honours only some limits (60, 65, 70, 75, 80 on ASUS): take the highest
+        // one the battery is above, so charging stops.
         let cap = read_u64("/sys/class/power_supply/BAT1/capacity").unwrap_or(50);
         let orig = std::fs::read_to_string(charge).ok().map(|v| v.trim().to_owned());
-        let chosen = (20..cap)
-            .rev()
-            .find(|n| std::fs::write(charge, n.to_string()).is_ok() && read_u64(charge) == Some(*n));
+        let status = || std::fs::read_to_string("/sys/class/power_supply/BAT1/status").unwrap_or_default();
+        let chosen = (20..cap).rev().find(|n| {
+            if std::fs::write(charge, n.to_string()).is_err() || read_u64(charge) != Some(*n) {
+                return false;
+            }
+            // Some firmware takes any number but honours only a few: charging must really stop.
+            (0..6).any(|_| {
+                std::thread::sleep(Duration::from_millis(500));
+                status().trim() != "Charging"
+            })
+        });
         match (orig, chosen) {
             (Some(orig), Some(n)) => {
                 rig.restore.sysfs.insert(charge.to_owned(), orig);
