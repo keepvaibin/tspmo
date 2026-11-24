@@ -59,6 +59,11 @@ pub fn print(m: &Machine) {
     }
 
     for b in &m.backlights {
+        if !b.sampled {
+            // NVIDIA's backlight: reading it would wake the GPU.
+            println!("  backlight {} ({}): not read (NVIDIA)", b.name, b.kind);
+            continue;
+        }
         println!(
             "  backlight {} ({}): {}/{} ({:.1}%)",
             b.name,

@@ -106,8 +106,8 @@ pub fn dump(root: &SysRoot, out: &Path) -> io::Result<usize> {
         for logical in root.glob(pattern) {
             let src = root.path(&logical);
             let name = logical.rsplit('/').next().unwrap_or_default();
-            if DENY.iter().any(|d| name.contains(d)) {
-                continue;
+            if DENY.iter().any(|d| name.contains(d)) || tspmo_sys::pci::touches_dgpu(root, &logical) {
+                continue; // (the dGPU wakes when its attributes are read)
             }
             // Skip directories, write-only attributes, and anything unreadable.
             let Ok(meta) = fs::metadata(&src) else { continue };
@@ -154,7 +154,8 @@ fn scrub_cmdline(cmdline: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::scrub_cmdline;
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn scrubs_root_uuid() {
@@ -162,5 +163,50 @@ mod tests {
             scrub_cmdline("quiet root=UUID=2005-abc rw rootflags=subvol=/@\n"),
             "quiet root=REDACTED rw rootflags=subvol=/@\n"
         );
+    }
+
+    #[test]
+    fn dump_never_reads_nvidia_attributes() {
+        let d = std::env::temp_dir().join(format!("tspmo-dump-nv-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        let put = |p: &str, c: &str| {
+            let p = d.join("src").join(p.trim_start_matches('/'));
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(p, c).unwrap();
+        };
+        put("/sys/class/backlight/intel_backlight/brightness", "78\n");
+        put("/sys/class/backlight/nvidia_0/brightness", "99\n");
+        put("/sys/class/backlight/nvidia_0/actual_brightness", "99\n");
+        put("/sys/class/drm/card0-DP-5/status", "disconnected\n");
+        put("/sys/class/drm/card1-eDP-1/status", "connected\n");
+        put("/sys/bus/pci/devices/0000:01:00.0/class", "0x030200\n");
+        put("/sys/bus/pci/devices/0000:01:00.0/vendor", "0x10de\n");
+        let link = |from: &str, to: &str| {
+            let p = d.join("src").join(from.trim_start_matches('/'));
+            std::os::unix::fs::symlink(to, p).unwrap();
+        };
+        put("/sys/class/drm/card0/uevent", "");
+        link(
+            "/sys/class/drm/card0/device",
+            "../../../bus/pci/devices/0000:01:00.0",
+        );
+        // Poison: a read of these would fail.
+        for p in [
+            "sys/class/backlight/nvidia_0/brightness",
+            "sys/class/backlight/nvidia_0/actual_brightness",
+        ] {
+            fs::set_permissions(d.join("src").join(p), fs::Permissions::from_mode(0o000)).unwrap();
+        }
+        let out = d.join("out");
+        let n = dump(&SysRoot::new(d.join("src")), &out).unwrap();
+        assert!(
+            out.join("sys/class/backlight/intel_backlight/brightness")
+                .exists()
+        );
+        assert!(out.join("sys/class/drm/card1-eDP-1/status").exists());
+        assert!(!out.join("sys/class/backlight/nvidia_0").exists());
+        assert!(!out.join("sys/class/drm/card0-DP-5").exists());
+        assert!(n >= 4);
+        let _ = fs::remove_dir_all(&d);
     }
 }

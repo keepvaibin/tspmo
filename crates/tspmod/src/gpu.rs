@@ -31,6 +31,35 @@ const NVIDIA_MODULES: &[&str] = &["nvidia_drm", "nvidia_modeset", "nvidia_uvm", 
 pub const NEEDS_FRESH_SESSION: &str = "The desktop was started before tspmo was set up, so it still has the NVIDIA \
      driver loaded. Log out and back in once; after that Eco and Hybrid switch instantly.";
 
+/// Shown when a GPU change is asked for before the boot has settled (see `boot.rs`).
+pub const STILL_STARTING: &str = "The system is still starting; try again in a minute.";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn eco_plus_forces_eco_and_leaving_it_restores_the_policy() {
+        for policy in [
+            Policy::Optimized,
+            Policy::Fixed(Mode::Hybrid),
+            Policy::Fixed(Mode::Eco),
+        ] {
+            for battery in [true, false] {
+                assert_eq!(wanted_mode(policy, battery, true), Mode::Eco);
+                assert_eq!(wanted_mode(policy, battery, false), policy.target(battery));
+            }
+        }
+        // Optimized on AC is Hybrid again once Eco+ ends.
+        assert_eq!(wanted_mode(Policy::Optimized, false, false), Mode::Hybrid);
+        // Ultimate is a reboot-only choice that Eco+ leaves alone.
+        assert_eq!(
+            wanted_mode(Policy::Fixed(Mode::Ultimate), true, true),
+            Mode::Ultimate
+        );
+    }
+}
+
 #[derive(Debug)]
 pub enum Outcome {
     Done(String),
@@ -153,6 +182,9 @@ impl Drop for MuteDisplaySwitchKey {
 
 /// Fast checks for problems the user can act on, before any slow work starts.
 pub fn precheck(root: &SysRoot, st: &Status, target: Mode) -> Result<(), String> {
+    if !crate::boot::allowed() {
+        return Err(STILL_STARTING.into());
+    }
     match st.switcher {
         Switcher::None if target != Mode::Hybrid => {
             return Err("this laptop has no firmware GPU switch".into());
@@ -302,9 +334,24 @@ pub fn switch(root: &SysRoot, st: &Status, target: Mode) -> Result<Outcome, Stri
     }
 }
 
+/// The mode wanted now. Eco+ means the dGPU is off, whatever the policy says (a policy that
+/// fixes Ultimate stays: that one needs a reboot and is not Eco+'s to undo). Leaving Eco+ just
+/// goes back to the policy, which Eco+ never changed.
+pub fn wanted_mode(policy: Policy, on_battery: bool, eco_plus: bool) -> Mode {
+    if eco_plus && policy != Policy::Fixed(Mode::Ultimate) {
+        Mode::Eco
+    } else {
+        policy.target(on_battery)
+    }
+}
+
 /// What the policy wants right now, if it differs from the hardware and can be done live.
 pub fn policy_target(d: &crate::state::Daemon) -> Option<Mode> {
-    let target = d.gpu_policy.target(d.on_battery);
+    // Not while the boot is still bringing the display stack (and the NVIDIA driver) up.
+    if !crate::boot::allowed() {
+        return None;
+    }
+    let target = wanted_mode(d.gpu_policy, d.on_battery, d.effective().is_eco_plus());
     let st = d.gpu_status();
     let live = st.mode != Mode::Ultimate && target != Mode::Ultimate && st.pending.is_none();
     (live && st.mode != target).then_some(target)
@@ -329,7 +376,12 @@ pub fn begin(
         if let Err(e) = precheck(&d.root, &st, target) {
             if automatic {
                 d.gpu_waiting = e != NEEDS_FRESH_SESSION;
-                d.gpu_message = format!("Waiting to switch to {target}: {e}");
+                let msg = format!("Waiting to switch to {target}: {e}");
+                // Eco+ promises the dGPU off: say what is holding it (once, not on every retry).
+                if d.effective().is_eco_plus() && d.gpu_message != msg {
+                    crate::session::osd("video-card", &e, None);
+                }
+                d.gpu_message = msg;
             }
             return Err(e);
         }
@@ -387,20 +439,4 @@ pub fn enforce(conn: &zbus::Connection, shared: &Shared) {
         }
         None => lock(shared).gpu_waiting = false,
     }
-}
-
-/// At start-up, before D-Bus is up: apply the policy synchronously.
-pub fn enforce_at_boot(d: &mut crate::state::Daemon) {
-    let Some(target) = policy_target(d) else { return };
-    let st = d.gpu_status();
-    let result = switch(&d.root, &st, target);
-    d.gpu_cache = crate::state::Daemon::read_gpu_status(&d.root, d.boot_mux);
-    d.gpu_message = match result {
-        Ok(o) => o.message().to_owned(),
-        Err(e) => {
-            d.gpu_waiting = e != NEEDS_FRESH_SESSION;
-            format!("Waiting to switch to {target}: {e}")
-        }
-    };
-    eprintln!("tspmod: gpu: {}", d.gpu_message);
 }

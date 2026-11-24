@@ -3,8 +3,9 @@ Description=tspmo daemon (power profiles, GPU modes, hardware control)
 Documentation=https://github.com/keepvaibin/tspmo
 # tspmod provides the power-profiles API itself.
 Conflicts=power-profiles-daemon.service tuned-ppd.service
-# Before the login screen, so the GPU mode and compositor settings are in place before any
-# compositor opens a GPU.
+# Before the login screen, so the compositor settings (environment file) are in place before
+# any compositor starts. The GPU policy is NOT applied this early: tspmod waits for the boot to
+# settle (drm-module-load.target, else the display manager) before it touches the dGPU's power.
 Before=display-manager.service
 After=upower.service
 Wants=upower.service
@@ -13,6 +14,8 @@ Wants=upower.service
 Type=dbus
 BusName=org.freedesktop.UPower.PowerProfiles
 ExecStart=/usr/bin/tspmod
+# Eco+ caps the CPU's power limits: put them back whenever the daemon stops.
+ExecStopPost=/usr/bin/tspmod --restore-limits
 StateDirectory=tspmo
 RuntimeDirectory=tspmo
 RuntimeDirectoryPreserve=yes
@@ -22,7 +25,10 @@ RestartSec=1
 # Hardening. tspmod must write /sys and /proc/sys, load/unload the NVIDIA modules for GPU
 # switching and talk to systemd; everything else is locked down.
 ProtectSystem=strict
-ProtectHome=yes
+# The daemon runs short commands as the desktop user (display, OSD): they need the user's
+# runtime directory (Wayland and D-Bus sockets), and eye care edits the user's kwinrc.
+ProtectHome=no
+ReadWritePaths=-/home -/run/user
 PrivateTmp=yes
 NoNewPrivileges=yes
 RestrictRealtime=yes

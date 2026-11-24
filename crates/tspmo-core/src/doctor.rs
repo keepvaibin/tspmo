@@ -45,6 +45,9 @@ pub fn run(root: &SysRoot, m: &Machine) -> Vec<Finding> {
         tspmod_running,
         plymouth_stuck,
         charge_limit,
+        eco_plus_limits,
+        screen_tools,
+        oled_flicker_free,
     ];
     for check in checks {
         check(root, m, &mut out);
@@ -445,5 +448,143 @@ fn charge_limit(_root: &SysRoot, m: &Machine, out: &mut Vec<Finding>) {
                 fix: None,
             });
         }
+    }
+}
+
+/// Eco+ caps the CPU through RAPL. Intel kernels expose it as `intel-rapl`; without it Eco+
+/// still lowers clocks and refresh rate but cannot cap power.
+fn eco_plus_limits(root: &SysRoot, _m: &Machine, out: &mut Vec<Finding>) {
+    let intel = root.exists("/sys/devices/system/cpu/intel_pstate");
+    if !intel || !crate::power::rapl_zones(root).is_empty() {
+        return;
+    }
+    out.push(Finding {
+        id: "eco-plus-rapl",
+        severity: Severity::Info,
+        title: "Eco+ can't cap CPU power: no RAPL zones".into(),
+        detail: "/sys/class/powercap has no package or platform power zone. Eco+ still turns \
+                 turbo off, lowers the refresh rate and uses the power-saver settings."
+            .into(),
+        fix: Some(Fix {
+            summary: "Load the RAPL driver".into(),
+            commands: vec!["sudo modprobe intel_rapl_msr".into()],
+            needs_reboot: false,
+        }),
+    });
+}
+
+/// Refresh rate, flicker-free dimming and colour modes go through KDE's `kscreen-doctor`.
+fn screen_tools(root: &SysRoot, _m: &Machine, out: &mut Vec<Finding>) {
+    if !root.exists("/usr/bin/kwin_wayland") || root.exists("/usr/bin/kscreen-doctor") {
+        return;
+    }
+    out.push(Finding {
+        id: "kscreen-doctor",
+        severity: Severity::Warn,
+        title: "kscreen-doctor is missing".into(),
+        detail: "tspmo sets the refresh rate, dimming and colour mode of a KDE desktop through \
+                 kscreen-doctor (package libkscreen)."
+            .into(),
+        fix: Some(Fix {
+            summary: "Install libkscreen".into(),
+            commands: vec!["sudo pacman -S --needed libkscreen".into()],
+            needs_reboot: false,
+        }),
+    });
+}
+
+/// OLED panels flicker at low backlight levels; tspmo keeps the backlight above a floor and
+/// dims the picture instead. It is on by default for OLED: tell the user if it was turned off.
+fn oled_flicker_free(root: &SysRoot, m: &Machine, out: &mut Vec<Finding>) {
+    let panel = crate::display::internal_panel(root);
+    let oled = crate::display::edid::is_oled(panel.as_ref().and_then(|p| p.edid.as_ref()), m.dmi.model());
+    if !oled {
+        return;
+    }
+    let setting = root
+        .read_opt("/var/lib/tspmo/display")
+        .and_then(|t| {
+            t.lines()
+                .find_map(|l| l.strip_prefix("flicker_free=").map(|v| v.trim().to_owned()))
+        })
+        .unwrap_or_else(|| "auto".into());
+    if setting != "off" {
+        return;
+    }
+    out.push(Finding {
+        id: "flicker-free-off",
+        severity: Severity::Info,
+        title: "Flicker-free dimming is off on an OLED panel".into(),
+        detail: "At low brightness OLED panels dim with pulse-width modulation, which flickers. \
+                 With flicker-free dimming the backlight stays above the panel's floor and the \
+                 picture is darkened instead."
+            .into(),
+        fix: Some(Fix {
+            summary: "Turn it on".into(),
+            commands: vec!["tspmo display dimming auto".into()],
+            needs_reboot: false,
+        }),
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::machine::Machine;
+
+    fn fixture() -> SysRoot {
+        SysRoot::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/asus-gu605mi"
+        ))
+    }
+
+    fn ids(root: &SysRoot) -> Vec<&'static str> {
+        run(root, &Machine::probe(root)).iter().map(|f| f.id).collect()
+    }
+
+    #[test]
+    fn gu605_has_rapl_and_an_oled_with_flicker_free_on() {
+        let ids = ids(&fixture());
+        assert!(!ids.contains(&"eco-plus-rapl"));
+        assert!(!ids.contains(&"flicker-free-off"));
+    }
+
+    #[test]
+    fn missing_rapl_is_reported_on_intel() {
+        let d = std::env::temp_dir().join(format!("tspmo-doctor-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("sys/devices/system/cpu/intel_pstate")).unwrap();
+        let root = SysRoot::new(&d);
+        let m = Machine::probe(&root);
+        let mut out = Vec::new();
+        eco_plus_limits(&root, &m, &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].id, "eco-plus-rapl");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn flicker_free_off_is_reported_for_oled_only() {
+        let d = std::env::temp_dir().join(format!("tspmo-doctor-ff-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let f = fixture();
+        // A copy of the panel's connector with the setting file added.
+        let drm = d.join("sys/class/drm/card1-eDP-1");
+        std::fs::create_dir_all(&drm).unwrap();
+        std::fs::write(drm.join("status"), "connected\n").unwrap();
+        std::fs::copy(f.path("/sys/class/drm/card1-eDP-1/edid"), drm.join("edid")).unwrap();
+        std::fs::create_dir_all(d.join("var/lib/tspmo")).unwrap();
+        std::fs::write(d.join("var/lib/tspmo/display"), "flicker_free=off\n").unwrap();
+        let root = SysRoot::new(&d);
+        let m = Machine::probe(&root);
+        let mut out = Vec::new();
+        oled_flicker_free(&root, &m, &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(
+            out[0].fix.as_ref().unwrap().commands,
+            ["tspmo display dimming auto"]
+        );
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

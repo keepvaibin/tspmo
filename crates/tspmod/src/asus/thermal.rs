@@ -15,7 +15,8 @@ use tspmo_sys::{SysRoot, dmi::Dmi, power_supply};
 
 pub fn mode_index(p: Profile) -> usize {
     match p {
-        Profile::PowerSaver => 0,
+        // Eco+ is power-saver for the firmware's modes (and so for fan curves and limits).
+        Profile::PowerSaver | Profile::EcoPlus => 0,
         Profile::Balanced => 1,
         Profile::Performance => 2,
     }

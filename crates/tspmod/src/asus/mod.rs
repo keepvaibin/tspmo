@@ -79,7 +79,9 @@ impl Asus {
             *last = Some(p);
             if !first {
                 let (icon, text) = match p {
-                    Profile::PowerSaver => ("power-profile-power-saver-symbolic", "Power saver"),
+                    Profile::PowerSaver | Profile::EcoPlus => {
+                        ("power-profile-power-saver-symbolic", "Power saver")
+                    }
                     Profile::Balanced => ("power-profile-balanced-symbolic", "Balanced"),
                     Profile::Performance => ("power-profile-performance-symbolic", "Performance"),
                 };

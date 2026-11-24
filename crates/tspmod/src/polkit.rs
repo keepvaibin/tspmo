@@ -7,6 +7,7 @@ use zbus::zvariant::Value;
 pub const SWITCH_PROFILE: &str = "org.freedesktop.UPower.PowerProfiles.switch-profile";
 pub const HOLD_PROFILE: &str = "org.freedesktop.UPower.PowerProfiles.hold-profile";
 pub const SET_GPU: &str = "org.tspmo.set-gpu";
+pub const SET_DISPLAY: &str = "org.tspmo.set-display";
 
 /// `Ok(())` if the caller may perform `action`. Root is always allowed.
 pub async fn check(conn: &zbus::Connection, sender: Option<&str>, action: &str) -> zbus::fdo::Result<()> {

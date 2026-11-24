@@ -1,7 +1,9 @@
 //! `tspmo` — Thermal & System Power Management Optimizer, command line.
 
 mod asus_cli;
+mod bench;
 mod client;
+mod display;
 mod dump;
 mod info;
 mod session_env;
@@ -18,8 +20,11 @@ USAGE:
 COMMANDS:
     info              What this laptop is and which controls it exposes
     status            Current profile, power source and GPU mode (from tspmod)
-    profile [<name>]  Show or set the power profile: power-saver | balanced | performance
-    profile cycle     Next profile (what Fn+F5 does)
+    profile [<name>]  Show or set the power mode: eco-plus | power-saver | balanced | performance
+    profile cycle     Next mode
+    display ...       Screen: refresh rate, brightness, dimming, colour (tspmo display help)
+    bench ...         Measure what a setting costs or saves (tspmo bench help)
+    ping [N]          Time N (default 50) round trips to tspmod
     gpu [<mode>]      Show or set the GPU mode: eco | hybrid | ultimate | optimized
     gpu users         Apps keeping the NVIDIA GPU awake
     doctor            Find what breaks features or costs battery, with exact fixes
@@ -34,6 +39,20 @@ ENVIRONMENT:
 ";
 
 fn main() -> ExitCode {
+    // `tspmo status | head -1`: a closed pipe ends the program quietly, as other tools do.
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let msg = info
+            .payload()
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| info.payload().downcast_ref::<&str>().copied())
+            .unwrap_or_default();
+        if msg.contains("Broken pipe") {
+            std::process::exit(0);
+        }
+        default_hook(info);
+    }));
     let args: Vec<String> = std::env::args().skip(1).collect();
     let root = SysRoot::from_env();
     match args.first().map(String::as_str) {
@@ -64,6 +83,9 @@ fn main() -> ExitCode {
         Some("profile") => profile(args.get(1).map(String::as_str)),
         Some("gpu") => gpu(args.get(1).map(String::as_str)),
         Some(c) if asus_cli::handles(c) => asus_cli::run(c, &args[1..]),
+        Some("display") => display::run(&args[1..]),
+        Some("bench") => bench::run(&args[1..]),
+        Some("ping") => ping(args.get(1).and_then(|n| n.parse().ok()).unwrap_or(50)),
         Some("dump") => match args.get(1) {
             Some(dir) => match dump::dump(&root, dir.as_ref()) {
                 Ok(n) => {
@@ -115,6 +137,7 @@ fn status() -> ExitCode {
         s("ProfileBattery")
     );
     println!("power:    {}", if on_batt { "battery" } else { "AC" });
+    display::status_line();
     let pending = s("GpuPending");
     println!(
         "gpu:      {} (policy {}){}{}",
@@ -135,6 +158,25 @@ fn status() -> ExitCode {
     if !msg.is_empty() {
         println!("          {msg}");
     }
+    ExitCode::SUCCESS
+}
+
+/// Round-trip times to the daemon, over one connection (the cost the desktop sees).
+fn ping(n: usize) -> ExitCode {
+    let mut ms = Vec::with_capacity(n);
+    for _ in 0..n {
+        let t = std::time::Instant::now();
+        if let Err(e) = client::state() {
+            return fail(e);
+        }
+        ms.push(t.elapsed().as_secs_f64() * 1000.0);
+    }
+    println!(
+        "{n} calls: median {:.2} ms, p95 {:.2} ms, max {:.2} ms",
+        bench::median(&ms),
+        bench::percentile(&ms, 95.0),
+        bench::percentile(&ms, 100.0)
+    );
     ExitCode::SUCCESS
 }
 
@@ -163,7 +205,7 @@ fn profile(arg: Option<&str>) -> ExitCode {
                 Err(e) => fail(e),
             },
             None => fail(format!(
-                "unknown profile '{p}' (power-saver, balanced, performance)"
+                "unknown profile '{p}' (eco-plus, power-saver, balanced, performance)"
             )),
         },
     }

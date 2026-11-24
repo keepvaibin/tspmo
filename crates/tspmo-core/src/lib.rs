@@ -2,10 +2,12 @@
 //! how each power profile tunes it ([`power`]) and its GPU modes ([`gpu`]).
 
 pub mod asus;
+pub mod display;
 pub mod doctor;
 pub mod gpu;
 pub mod machine;
 pub mod power;
+pub mod topology;
 pub mod usbpm;
 
 pub use tspmo_sys::SysRoot;
