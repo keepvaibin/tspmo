@@ -289,7 +289,11 @@ impl Lid {
                 ])?;
                 // The firmware says what it took; a difference is worth a log line, not a retry.
                 if let Some(live) = d.read() {
-                    let lit = Self::lit(&c, on_battery);
+                    let lit = Self::lit(
+                        &c,
+                        on_battery,
+                        self.eco.load(std::sync::atomic::Ordering::Relaxed),
+                    );
                     if (live.enabled, live.brightness, live.interval, live.mode)
                         != (lit, c.brightness, c.interval, Some(c.mode))
                     {
@@ -654,7 +658,11 @@ impl Lid1 {
     #[zbus(property)]
     fn slash_lit(&self) -> bool {
         let st = lock(&self.0.st);
-        Lid::lit(&st.cfg, st.on_battery)
+        Lid::lit(
+            &st.cfg,
+            st.on_battery,
+            self.0.eco.load(std::sync::atomic::Ordering::Relaxed),
+        )
     }
 
     /// Pause between animations in seconds, 0 to `SlashIntervalMax` (0: none).
