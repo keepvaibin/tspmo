@@ -497,11 +497,15 @@ impl App {
     }
 
     fn tick(&mut self) {
+        let mut what = Vec::new();
         if self.store.has("Fans1") {
-            bus::read_live("Fans1", "Rpm", emit);
+            what.push(("Fans1", "Rpm"));
         }
         if self.store.has("Battery1") {
-            bus::read_live("Battery1", "Power", emit);
+            what.push(("Battery1", "Power"));
+        }
+        if !what.is_empty() {
+            bus::read_live(what, emit);
         }
     }
 

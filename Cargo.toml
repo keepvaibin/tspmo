@@ -31,6 +31,7 @@ opt-level = 3
 
 [profile.release.package.tspmo-gui]
 opt-level = "s"
+strip = "symbols"
 
 # The GUI's own dependencies (Slint, the Wayland client, text layout) also favour size. The
 # daemon does not use them, and zbus stays at opt-level 3 for both.

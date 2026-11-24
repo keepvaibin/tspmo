@@ -21,7 +21,7 @@ export component PopupBody inherits VerticalLayout {
     }
 
     // Mode
-    if Bk.loaded: VerticalLayout {
+    if Bk.loaded && Bk.mode != "": VerticalLayout {
         spacing: 0.4rem;
         Field { label: "Mode"; value: Bk.fan-text; }
         Seg {
@@ -121,7 +121,8 @@ export component PopupBody inherits VerticalLayout {
         text: Bk.error;
         color: Th.danger;
         font-size: 0.85rem;
-        overflow: elide;
+        wrap: word-wrap;
+        max-width: 23.6rem;
     }
 }
 

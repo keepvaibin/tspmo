@@ -105,8 +105,7 @@ fn gui(args: &[String]) -> Result<(), String> {
 /// Install the Wayland platform (layer-shell popup, or a plain window where that is missing).
 /// Without a Wayland compositor the winit backend takes over when it is built in.
 pub fn use_layer_shell() -> bool {
-    if std::env::var_os("TSPMO_NO_LAYER").is_none()
-        && let Some(p) = wl::connect(APP_ID)
+    if let Some(p) = wl::connect(APP_ID)
         && slint::platform::set_platform(Box::new(p)).is_ok()
     {
         LAYER.store(true, std::sync::atomic::Ordering::Relaxed);

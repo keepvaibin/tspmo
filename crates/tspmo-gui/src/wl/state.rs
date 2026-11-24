@@ -101,7 +101,12 @@ impl State {
         let (globals, queue) = registry_queue_init::<State>(&conn).ok()?;
         let qh = queue.handle();
         let compositor = CompositorState::bind(&globals, &qh).ok()?;
-        let layer_shell = LayerShell::bind(&globals, &qh).ok();
+        // TSPMO_NO_LAYER=1 pretends the compositor has no layer-shell (tests the plain-window popup).
+        let layer_shell = if std::env::var_os("TSPMO_NO_LAYER").is_some() {
+            None
+        } else {
+            LayerShell::bind(&globals, &qh).ok()
+        };
         let xdg_shell = XdgShell::bind(&globals, &qh).ok();
         if layer_shell.is_none() && xdg_shell.is_none() {
             return None;
