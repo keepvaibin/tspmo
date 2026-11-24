@@ -1,0 +1,383 @@
+import { Th } from "theme.slint";
+import { Bk, Item } from "bk.slint";
+import { Icon, Btn, Toggle, Row, Slide, Stepper, Dim, Head, OptRow, Check } from "controls.slint";
+import { CurveEditor } from "curve.slint";
+
+// One firmware item as a G-Helper checkbox (or a stepper for choices and numbers).
+component HwRow inherits Rectangle {
+    in property <Item> item;
+    height: 28px;
+    if root.item.kind == "toggle": Check {
+        label: root.item.label;
+        on: root.item.on;
+        enabled: root.item.writable;
+        toggled => { Bk.act("hw-toggle", root.item.name); }
+    }
+    if root.item.kind != "toggle": Row {
+        height: 28px;
+        label: root.item.label;
+        if root.item.kind != "text" && root.item.writable: Stepper {
+            text: root.item.text;
+            prev => { Bk.acti("hw-step:" + root.item.name, -1); }
+            next => { Bk.acti("hw-step:" + root.item.name, 1); }
+            y: (parent.height - self.height) / 2;
+        }
+        if root.item.kind == "text" || !root.item.writable: Text {
+            text: root.item.text;
+            color: Th.dim;
+            font-size: 12px;
+            vertical-alignment: center;
+        }
+    }
+}
+
+export component MainPage inherits VerticalLayout {
+    spacing: 12px;
+
+    // Mode
+    if Bk.loaded: VerticalLayout {
+        spacing: 6px;
+        Head {
+            icon: Bk.mode == "" ? "balanced" : Bk.mode;
+            title: "Mode: " + Bk.mode-label;
+            right: Bk.fan-text;
+        }
+        OptRow {
+            opts: [
+                { id: "eco-plus", label: "Eco+", icon: "eco-plus" },
+                { id: "power-saver", label: "Silent", icon: "power-saver" },
+                { id: "balanced", label: "Balanced", icon: "balanced" },
+                { id: "performance", label: "Turbo", icon: "performance" },
+            ];
+            index: Bk.mode == "eco-plus" ? 0 : Bk.mode == "power-saver" ? 1 : Bk.mode == "balanced" ? 2 : Bk.mode == "performance" ? 3 : -1;
+            tint: Th.mode-color(Bk.mode);
+            picked(i) => { Bk.act("mode", ["eco-plus", "power-saver", "balanced", "performance"][i]); }
+        }
+    }
+
+    // GPU
+    if Bk.loaded && Bk.has-gpu: VerticalLayout {
+        spacing: 6px;
+        Head {
+            icon: "gpu";
+            title: "GPU Mode: " + (Bk.gpu-switching != "" ? "→ " + Bk.gpu-switching : Bk.gpu-mode);
+            right: Bk.dgpu-asleep ? "dGPU off" : "dGPU on";
+        }
+        OptRow {
+            opts: [
+                { id: "eco", label: "Eco", icon: "eco-plus" },
+                { id: "hybrid", label: "Standard", icon: "hybrid" },
+                { id: "ultimate", label: "Ultimate", icon: "ultimate" },
+                { id: "optimized", label: "Optimized", icon: "auto" },
+            ];
+            index: Bk.gpu-policy == "eco" ? 0 : Bk.gpu-policy == "hybrid" ? 1 : Bk.gpu-policy == "ultimate" ? 2 : Bk.gpu-policy == "optimized" ? 3 : -1;
+            enabled: Bk.gpu-switching == "";
+            picked(i) => { Bk.act("gpu", ["eco", "hybrid", "ultimate", "optimized"][i]); }
+        }
+        if Bk.gpu-reboot: Row {
+            icon: "reboot";
+            label: Bk.gpu-pending;
+            Btn { text: "Reboot"; icon: "reboot"; primary: true; clicked => { Bk.act("reboot", ""); } }
+        }
+        if Bk.gpu-message != "": Dim { text: Bk.gpu-message; wrap: word-wrap; }
+        for u in Bk.gpu-users: Row { icon: "warn"; label: u.name; value: u.pid; height: 22px; }
+    }
+
+    // Screen
+    if Bk.loaded && Bk.has-refresh: VerticalLayout {
+        spacing: 6px;
+        Head { icon: "screen"; title: "Laptop Screen: " + Bk.refresh-now; }
+        OptRow {
+            h: 34px;
+            stacked: false;
+            tint: Th.text;
+            opts: [
+                { id: "auto", label: "Auto", icon: "" },
+                { id: "60", label: "60Hz", icon: "" },
+                { id: "max", label: "Max", icon: "" },
+            ];
+            index: Bk.refresh-policy == "auto" ? 0 : Bk.refresh-policy == "60" ? 1 : Bk.refresh-policy == "max" ? 2 : -1;
+            picked(i) => { Bk.act("refresh", ["auto", "60", "max"][i]); }
+        }
+    }
+    if Bk.loaded && (Bk.has-flicker || Bk.brightness >= 0 || Bk.color-modes.length > 0 || Bk.has-eye): VerticalLayout {
+        spacing: 6px;
+        Head {
+            icon: "sun";
+            title: "Flicker-free Dimming / Visual Mode";
+            right: Bk.brightness >= 0 ? Bk.brightness + "%" : "";
+        }
+        if Bk.brightness >= 0: Slide {
+            min: 1;
+            max: 100;
+            value: Bk.brightness;
+            released(v) => { Bk.acti("brightness", v); }
+        }
+        if Bk.color-modes.length > 0: OptRow {
+            h: 34px;
+            stacked: false;
+            tint: Th.text;
+            opts: Bk.color-modes;
+            index: Bk.color-idx;
+            picked(i) => { Bk.act("color", Bk.color-modes[i].id); }
+        }
+        if Bk.has-flicker: Check {
+            label: "Flicker-free";
+            on: Bk.flicker;
+            toggled(v) => { Bk.act("flicker", v ? "on" : "off"); }
+        }
+        if Bk.has-eye: Check {
+            label: "Eye care" + (Bk.eye-kelvin > 0 ? " " + Bk.eye-kelvin + " K" : "");
+            on: Bk.eye-kelvin > 0;
+            toggled(v) => { Bk.acti("eye", v ? 4500 : 0); }
+        }
+        if Bk.has-eye && Bk.eye-kelvin > 0: Slide {
+            min: 1000;
+            max: 6500;
+            step: 100;
+            value: Bk.eye-kelvin;
+            released(v) => { Bk.acti("eye", v); }
+        }
+        for it in Bk.screen-items: HwRow { item: it; }
+    }
+
+    // Lid
+    if Bk.loaded && Bk.has-lid && Bk.has-slash: VerticalLayout {
+        spacing: 6px;
+        Head { icon: "lid"; title: "Slash Lighting"; right: Bk.slash-on ? Bk.slash-level + "" : "Off"; }
+        Check { label: "Enabled"; on: Bk.slash-on; toggled(v) => { Bk.act("slash-on", v ? "on" : "off"); } }
+        Slide {
+            min: 0;
+            max: 255;
+            step: 5;
+            value: Bk.slash-level;
+            enabled: Bk.slash-on;
+            released(v) => { Bk.acti("slash-level", v); }
+        }
+        if Bk.slash-modes.length > 0: Row {
+            height: 30px;
+            label: "Mode";
+            Stepper {
+                text: Bk.slash-modes[Bk.slash-mode-idx];
+                prev => { Bk.acti("slash-mode-step", -1); }
+                next => { Bk.acti("slash-mode-step", 1); }
+                y: (parent.height - self.height) / 2;
+            }
+        }
+        for it in Bk.slash-show: HwRow { item: it; }
+    }
+    if Bk.loaded && Bk.has-lid && Bk.has-anime: VerticalLayout {
+        spacing: 6px;
+        Head { icon: "lid"; title: "AniMe Matrix"; }
+        Check { label: "Enabled"; on: Bk.anime-on; toggled(v) => { Bk.act("anime-on", v ? "on" : "off"); } }
+        Slide { min: 0; max: 3; value: Bk.anime-level; enabled: Bk.anime-on; released(v) => { Bk.acti("anime-level", v); } }
+    }
+
+    // Keyboard
+    if Bk.loaded && Bk.has-light: VerticalLayout {
+        spacing: 6px;
+        Head { icon: "light"; title: "Laptop Keyboard"; right: Bk.kb-level + "/" + Bk.kb-max; }
+        Slide {
+            min: 0;
+            max: max(Bk.kb-max, 1);
+            value: Bk.kb-level;
+            released(v) => { Bk.acti("kb-level", v); }
+        }
+        if Bk.kb-effects.length > 0: Row {
+            height: 30px;
+            label: "Effect";
+            Stepper {
+                text: Bk.kb-effect;
+                prev => { Bk.acti("kb-effect-step", -1); }
+                next => { Bk.acti("kb-effect-step", 1); }
+                y: (parent.height - self.height) / 2;
+            }
+        }
+        if Bk.kb-effects.length > 0: HorizontalLayout {
+            spacing: 6px;
+            alignment: start;
+            for c[i] in [#ffffff, #ff3b30, #ff9500, #ffd60a, #34c759, #0a84ff, #bf5af2, #ff2d92]: Rectangle {
+                width: 24px;
+                height: 24px;
+                border-radius: 2px;
+                background: c;
+                border-width: 2px;
+                border-color: Bk.kb-color == c ? Th.blue : transparent;
+                TouchArea { clicked => { Bk.acti("kb-color", i); } }
+            }
+        }
+        if Bk.kb-effects.length > 0: OptRow {
+            h: 30px;
+            stacked: false;
+            tint: Th.text;
+            opts: [{ id: "low", label: "Slow", icon: "" }, { id: "med", label: "Normal", icon: "" }, { id: "high", label: "Fast", icon: "" }];
+            index: Bk.kb-speed;
+            picked(i) => { Bk.acti("kb-speed", i); }
+        }
+        for s[i] in ["Boot", "Awake", "Sleep", "Shutdown"]: Check {
+            label: s;
+            on: Bk.kb-states.length > i && Bk.kb-states[i];
+            toggled(v) => { Bk.acti("kb-state:" + i, v ? 1 : 0); }
+        }
+    }
+
+    // Battery
+    if Bk.loaded && Bk.has-battery: VerticalLayout {
+        spacing: 6px;
+        Head {
+            icon: "battery";
+            title: "Battery Charge Limit: " + (Bk.bat-limit > 0 ? Bk.bat-limit + "%" : "-");
+            right: Bk.bat-percent >= 0 ? Bk.bat-percent + "% " + Bk.bat-status + (Bk.bat-power != "" ? " " + Bk.bat-power : "") : "";
+        }
+        if Bk.bat-opts.length > 0: OptRow {
+            h: 34px;
+            stacked: false;
+            tint: Th.blue;
+            opts: Bk.bat-opts;
+            index: Bk.bat-idx;
+            picked(i) => { Bk.acti("bat-limit", Bk.bat-values[i]); }
+        }
+        Check { label: "Charge to 100% once"; on: Bk.charge-once; toggled(v) => { Bk.act("charge-once", v ? "on" : "off"); } }
+        Dim { text: "Health " + Bk.bat-health + "   Cycles " + Bk.bat-cycles + (Bk.bat-left != "" ? "   " + Bk.bat-left : ""); }
+    }
+
+    // System
+    if Bk.loaded && (Bk.system-items.length > 0 || Bk.reboot-pending): VerticalLayout {
+        spacing: 4px;
+        Head { icon: "system"; title: "System"; }
+        for it in Bk.system-items: HwRow { item: it; }
+        if Bk.reboot-pending: Row {
+            icon: "reboot";
+            label: "Reboot";
+            Btn { text: "Reboot"; icon: "reboot"; primary: true; clicked => { Bk.act("reboot", ""); } }
+        }
+    }
+
+    if !Bk.loaded: VerticalLayout {
+        spacing: 12px;
+        for h in [26px, 56px, 26px, 56px, 26px, 34px]: Rectangle {
+            height: h;
+            border-radius: 4px;
+            background: Th.surface;
+        }
+    }
+
+    // Footer
+    HorizontalLayout {
+        spacing: 6px;
+        if Bk.has-fans || Bk.has-power: Btn {
+            horizontal-stretch: 1;
+            text: "Fans + Power";
+            icon: "fan";
+            clicked => { Bk.act("section", "fans"); }
+        }
+        Btn {
+            horizontal-stretch: 1;
+            text: "Quit";
+            icon: "close";
+            clicked => { Bk.quit(); }
+        }
+    }
+}
+
+export component FansPage inherits VerticalLayout {
+    spacing: 10px;
+    HorizontalLayout {
+        spacing: 8px;
+        Btn { icon: "left"; width: 34px; clicked => { Bk.act("section", "main"); } }
+        Head { icon: "fan"; title: "Fans + Power"; right: Bk.fan-text; horizontal-stretch: 1; }
+    }
+    if Bk.has-fans: VerticalLayout {
+        spacing: 6px;
+        OptRow {
+            h: 34px;
+            stacked: false;
+            tint: Th.blue;
+            opts: [
+                { id: "power-saver", label: "Silent", icon: "" },
+                { id: "balanced", label: "Balanced", icon: "" },
+                { id: "performance", label: "Turbo", icon: "" },
+            ];
+            index: Bk.fan-mode;
+            picked(i) => { Bk.acti("fan-mode", i); }
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            for f[i] in Bk.fans: Rectangle {
+                height: 46px;
+                horizontal-stretch: 1;
+                border-radius: 4px;
+                background: Th.surface;
+                border-width: i == Bk.fan-sel ? 2px : 0px;
+                border-color: Th.blue;
+                VerticalLayout {
+                    alignment: center;
+                    Text { text: f.rpm > 0 ? f.rpm : "-"; font-size: 16px; font-weight: 600; color: Th.text; horizontal-alignment: center; }
+                    Text { text: f.label + (f.kind == "custom" ? " •" : f.kind == "full" ? " ▲" : ""); font-size: 10.5px; color: Th.dim; horizontal-alignment: center; }
+                }
+                TouchArea { clicked => { Bk.acti("fan-sel", i); } }
+            }
+        }
+        Rectangle {
+            background: Th.surface;
+            border-radius: 4px;
+            height: 190px;
+            CurveEditor { x: 8px; y: 8px; width: parent.width - 16px; height: 174px; editable: Bk.fan-kind != "full"; }
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            Btn { horizontal-stretch: 1; text: "Auto"; icon: "auto"; active: Bk.fan-kind == "auto"; clicked => { Bk.act("fan-auto", ""); } }
+            Btn { horizontal-stretch: 1; text: "Full"; icon: "fan"; active: Bk.fan-kind == "full"; clicked => { Bk.act("fan-full", ""); } }
+            Btn { horizontal-stretch: 1; text: "Reset"; icon: "reset"; clicked => { Bk.act("fan-reset", ""); } }
+        }
+    }
+    if Bk.has-power: VerticalLayout {
+        spacing: 6px;
+        Head { icon: "power"; title: "Power Limits"; }
+        HorizontalLayout {
+            spacing: 6px;
+            OptRow {
+                horizontal-stretch: 3;
+                h: 30px;
+                stacked: false;
+                tint: Th.blue;
+                opts: [{ id: "power-saver", label: "Silent", icon: "" }, { id: "balanced", label: "Balanced", icon: "" }, { id: "performance", label: "Turbo", icon: "" }];
+                index: Bk.pw-mode;
+                picked(i) => { Bk.acti("pw-mode", i); }
+            }
+            OptRow {
+                horizontal-stretch: 2;
+                h: 30px;
+                stacked: false;
+                tint: Th.blue;
+                opts: [{ id: "ac", label: "AC", icon: "" }, { id: "battery", label: "Battery", icon: "" }];
+                index: Bk.pw-source;
+                picked(i) => { Bk.acti("pw-source", i); }
+            }
+        }
+        for l in Bk.limits: VerticalLayout {
+            spacing: 0px;
+            Row {
+                height: 24px;
+                label: l.label;
+                value: l.cur + " " + l.unit;
+                if l.custom: Btn {
+                    icon: "reset";
+                    width: 26px;
+                    height: 20px;
+                    clicked => { Bk.act("limit-default", l.name); }
+                    y: (parent.height - self.height) / 2;
+                }
+            }
+            Slide {
+                min: l.min;
+                max: l.max;
+                value: l.cur;
+                custom: l.custom;
+                enabled: l.max > l.min;
+                released(v) => { Bk.acti("limit:" + l.name, v); }
+            }
+        }
+        Btn { text: "Default"; icon: "reset"; clicked => { Bk.act("limit-reset", ""); } }
+    }
+}

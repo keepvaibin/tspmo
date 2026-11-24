@@ -197,7 +197,7 @@ impl App {
                     self.edit = None;
                 }
                 self.init_locals();
-                if switching && self.section == "gpu" {
+                if switching {
                     self.fetch_gpu_users();
                 }
             }
@@ -245,9 +245,8 @@ impl App {
     }
 
     fn select_default_section(&mut self) {
-        let secs = model::sections(&self.store);
-        if !secs.iter().any(|s| s.id == self.section) {
-            self.section = secs.first().map_or(String::new(), |s| s.id.to_owned());
+        if self.section != "fans" {
+            self.section = "main".to_owned();
         }
     }
 
@@ -278,18 +277,13 @@ impl App {
 
     /// Live readouts run only while the page that shows them is open.
     fn after_section_change(&mut self) {
-        if self.section == "gpu" {
-            self.fetch_gpu_users();
-        }
-        if matches!(self.section.as_str(), "fans" | "battery") {
-            self.tick();
-            self.live_timer
-                .start(TimerMode::Repeated, Duration::from_secs(1), || {
-                    with_app(|a| a.tick_and_push())
-                });
-        } else {
-            self.live_timer.stop();
-        }
+        self.fetch_gpu_users();
+        self.tick();
+        // Live readouts (fan speed, battery power): once a second while the window exists.
+        self.live_timer
+            .start(TimerMode::Repeated, Duration::from_secs(1), || {
+                with_app(|a| a.tick_and_push())
+            });
     }
 
     fn tick_and_push(&mut self) {
@@ -298,10 +292,11 @@ impl App {
     }
 
     fn tick(&mut self) {
-        match self.section.as_str() {
-            "fans" => bus::read_live("Fans1", "Rpm", emit),
-            "battery" => bus::read_live("Battery1", "Power", emit),
-            _ => {}
+        if self.store.has("Fans1") {
+            bus::read_live("Fans1", "Rpm", emit);
+        }
+        if self.store.has("Battery1") {
+            bus::read_live("Battery1", "Power", emit);
         }
     }
 
@@ -407,12 +402,8 @@ impl App {
                 self.send("Daemon1", "SetProfile", &[Arg::s(next)]);
             }
             "section-step" => {
-                let secs = model::sections(s);
-                if let Some(i) = secs.iter().position(|x| x.id == self.section) {
-                    let j = (i as i64 + n).rem_euclid(secs.len() as i64) as usize;
-                    self.section = secs[j].id.to_owned();
-                    self.after_section_change();
-                }
+                // Two pages: the main one and Fans + Power.
+                self.section = if self.section == "fans" { "main" } else { "fans" }.to_owned();
             }
             "brightness" => self.send(bindings::IFACE, bindings::SET_BRIGHTNESS, &[Arg::N(n)]),
             "eye" => self.send(bindings::IFACE, bindings::SET_EYE_CARE, &[Arg::N(n)]),
@@ -602,13 +593,39 @@ impl App {
             &self.m.sections,
             secs.iter().map(|x| opt(x.id, x.label, x.icon)).collect(),
         );
+        let has = |id: &str| secs.iter().any(|x| x.id == id);
+        bk.set_has_gpu(has("gpu"));
+        bk.set_has_battery(has("battery"));
+        bk.set_has_fans(has("fans"));
+        bk.set_has_power(has("power"));
+        bk.set_has_light(has("light"));
+        bk.set_has_lid(has("lid"));
 
         let mode = s.get("Daemon1", "Profile").str();
         bk.set_mode(ss(mode));
+        bk.set_mode_label(ss(match mode {
+            "eco-plus" => "Eco+",
+            "power-saver" => "Silent",
+            "balanced" => "Balanced",
+            "performance" => "Turbo",
+            _ => "",
+        }));
+        let rpm = s
+            .get("Fans1", "Rpm")
+            .list()
+            .iter()
+            .map(|e| e.at(1).int())
+            .max()
+            .unwrap_or(0);
+        bk.set_fan_text(ss(&if rpm > 0 {
+            format!("Fan: {rpm} RPM")
+        } else {
+            String::new()
+        }));
         bk.set_eco_available(!self.eco_missing);
         bk.set_on_battery(s.get("Daemon1", "OnBattery").bool());
         w.global::<Th>().set_accent_target(if mode.is_empty() {
-            slint::Color::from_rgb_u8(0x3d, 0xdc, 0x97)
+            slint::Color::from_rgb_u8(0x3d, 0xa5, 0xf5)
         } else {
             mode_color(mode)
         });
@@ -821,10 +838,10 @@ impl App {
 
 pub fn mode_color(mode: &str) -> slint::Color {
     match mode {
-        "eco-plus" => slint::Color::from_rgb_u8(0x3d, 0xdc, 0x97),
-        "power-saver" => slint::Color::from_rgb_u8(0x4e, 0xa8, 0xff),
-        "performance" => slint::Color::from_rgb_u8(0xff, 0x6a, 0x4d),
-        _ => slint::Color::from_rgb_u8(0xf5, 0xb9, 0x42),
+        "eco-plus" => slint::Color::from_rgb_u8(0x8b, 0xd4, 0x50),
+        "power-saver" => slint::Color::from_rgb_u8(0x2f, 0xc7, 0x7a),
+        "performance" => slint::Color::from_rgb_u8(0xf0, 0x50, 0x3c),
+        _ => slint::Color::from_rgb_u8(0x3d, 0xa5, 0xf5),
     }
 }
 

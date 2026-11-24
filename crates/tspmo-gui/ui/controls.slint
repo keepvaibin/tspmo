@@ -41,8 +41,8 @@ export component Dim inherits Text {
 
 export component Card inherits Rectangle {
     background: Th.surface;
-    border-radius: 12px;
-    border-width: 1px;
+    border-radius: 4px;
+    border-width: 0px;
     border-color: Th.line;
     in property <length> pad: 10px;
     VerticalLayout {
@@ -62,7 +62,7 @@ export component Btn inherits Rectangle {
     callback clicked();
     height: 32px;
     min-width: 32px;
-    border-radius: 9px;
+    border-radius: 4px;
     opacity: enabled ? 1 : 0.4;
     background: primary ? Th.accent : active ? Th.hover : ta.has-hover ? Th.hover : Th.surface2;
     border-width: fs.has-focus ? 1.5px : 0;
@@ -153,7 +153,7 @@ export component Seg inherits Rectangle {
     in property <bool> show-icons: true;
     callback picked(int);
     height: 34px;
-    border-radius: 10px;
+    border-radius: 4px;
     background: Th.surface2;
     border-width: fs.has-focus ? 1.5px : 0;
     border-color: Th.ring;
@@ -175,7 +175,7 @@ export component Seg inherits Rectangle {
             padding: 3px;
             spacing: 2px;
             for o[i] in root.opts: Rectangle {
-                border-radius: 8px;
+                border-radius: 3px;
                 background: i == root.index ? Th.accent : ta.has-hover ? Th.hover : transparent;
                 animate background { duration: 160ms; easing: ease-in-out; }
                 HorizontalLayout {
@@ -266,7 +266,7 @@ export component Slide inherits Rectangle {
             x: 0;
             width: root.frac * parent.width;
             border-radius: 3px;
-            background: root.custom ? Th.accent : Th.dim;
+            background: root.custom ? Th.blue : Th.dim;
             animate width { duration: ta.pressed ? 0ms : 120ms; }
         }
     }
@@ -345,4 +345,114 @@ export component Stepper inherits Rectangle {
         }
         Btn { icon: "right"; enabled: root.can-next; width: 30px; clicked => { root.next(); } }
     }
+}
+
+// Section header: icon and bold title on the left, live status on the right.
+export component Head inherits Rectangle {
+    in property <string> icon;
+    in property <string> title;
+    in property <string> right;
+    height: 26px;
+    HorizontalLayout {
+        spacing: 8px;
+        Icon { name: root.icon; size: 16px; tint: Th.text; y: (parent.height - self.height) / 2; }
+        Text { text: root.title; font-size: 14px; font-weight: 700; color: Th.text; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+        Text { text: root.right; font-size: 12px; color: Th.dim; vertical-alignment: center; }
+    }
+}
+
+// A row of equal flat buttons; the chosen one gets a coloured outline.
+export component OptRow inherits Rectangle {
+    in property <[Opt]> opts;
+    in property <int> index;
+    in property <color> tint: Th.blue;
+    in property <bool> enabled: true;
+    in property <length> h: 56px;
+    in property <bool> stacked: true;
+    callback picked(int);
+    height: h;
+    opacity: enabled ? 1 : 0.5;
+    fs := FocusScope {
+        enabled: root.enabled;
+        key-pressed(e) => {
+            if (e.text == Key.LeftArrow && root.index > 0) {
+                root.picked(root.index - 1);
+                return accept;
+            }
+            if (e.text == Key.RightArrow && root.index < root.opts.length - 1) {
+                root.picked(root.index + 1);
+                return accept;
+            }
+            return reject;
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            for o[i] in root.opts: Rectangle {
+                horizontal-stretch: 1;
+                border-radius: 4px;
+                background: ta.has-hover ? Th.hover : Th.surface;
+                border-width: i == root.index ? 2px : (fs.has-focus && i == root.index ? 2px : 0px);
+                border-color: root.tint;
+                animate background { duration: 120ms; }
+                animate border-color { duration: 160ms; }
+                if root.stacked: VerticalLayout {
+                    alignment: center;
+                    spacing: 4px;
+                    HorizontalLayout {
+                        alignment: center;
+                        if o.icon != "": Icon { name: o.icon; size: 18px; tint: Th.text; }
+                    }
+                    Text { text: o.label; font-size: 12.5px; color: Th.text; horizontal-alignment: center; overflow: elide; }
+                }
+                if !root.stacked: HorizontalLayout {
+                    alignment: center;
+                    spacing: 6px;
+                    if o.icon != "": Icon { name: o.icon; size: 16px; tint: Th.text; y: (parent.height - self.height) / 2; }
+                    Text { text: o.label; font-size: 12.5px; color: Th.text; vertical-alignment: center; overflow: elide; }
+                }
+                ta := TouchArea {
+                    clicked => {
+                        fs.focus();
+                        root.picked(i);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Checkbox row in the G-Helper style.
+export component Check inherits Rectangle {
+    in property <string> label;
+    in property <bool> on;
+    in property <bool> enabled: true;
+    callback toggled(bool);
+    height: 26px;
+    opacity: enabled ? 1 : 0.5;
+    fs := FocusScope {
+        enabled: root.enabled;
+        key-pressed(e) => {
+            if (e.text == Key.Return || e.text == " ") {
+                root.toggled(!root.on);
+                return accept;
+            }
+            return reject;
+        }
+        HorizontalLayout {
+            spacing: 8px;
+            Rectangle {
+                width: 16px;
+                height: 16px;
+                y: (parent.height - self.height) / 2;
+                border-radius: 3px;
+                background: root.on ? Th.blue : Th.surface;
+                border-width: fs.has-focus ? 1.5px : 0px;
+                border-color: Th.ring;
+                animate background { duration: 120ms; }
+                if root.on: Icon { name: "check"; size: 14px; tint: #ffffff; x: 1px; y: 1px; }
+            }
+            Text { text: root.label; font-size: 13px; color: Th.text; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+        }
+    }
+    TouchArea { clicked => { fs.focus(); root.toggled(!root.on); } }
 }

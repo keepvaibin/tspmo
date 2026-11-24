@@ -5,22 +5,24 @@ export global Th {
     in-out property <color> accent-target: #3ddc97;
     out property <color> accent: accent-target;
 
-    out property <color> bg: dark ? #15171c : #f3f4f7;
-    out property <color> surface: dark ? #1e2128 : #ffffff;
-    out property <color> surface2: dark ? #292d36 : #e8eaf0;
-    out property <color> hover: dark ? #343946 : #dde0e8;
-    out property <color> line: dark ? #2e323c : #dfe2e9;
-    out property <color> text: dark ? #eceef3 : #1b1d23;
-    out property <color> dim: dark ? #8a90a0 : #6b7182;
+    // G-Helper's flat language: near-black page, grey buttons, coloured outline for the selection.
+    out property <color> bg: dark ? #1c1c1c : #f3f3f3;
+    out property <color> surface: dark ? #2d2d2d : #e6e6e6;
+    out property <color> surface2: dark ? #383838 : #d9d9d9;
+    out property <color> hover: dark ? #3d3d3d : #cfcfcf;
+    out property <color> line: dark ? #3a3a3a : #c4c4c4;
+    out property <color> text: dark ? #f2f2f2 : #1a1a1a;
+    out property <color> dim: dark ? #a0a0a0 : #606060;
+    out property <color> blue: #3da5f5;
     out property <color> ring: dark ? #ffffffcc : #000000b0;
     out property <color> danger: dark ? #ff6b6b : #d93636;
     out property <color> on-accent: #0d1014;
 
     pure public function mode-color(m: string) -> color {
-        m == "eco-plus" ? #3ddc97
-        : m == "power-saver" ? #4ea8ff
-        : m == "performance" ? #ff6a4d
-        : #f5b942
+        m == "eco-plus" ? #8bd450
+        : m == "power-saver" ? #2fc77a
+        : m == "performance" ? #f0503c
+        : #3da5f5
     }
 }
 

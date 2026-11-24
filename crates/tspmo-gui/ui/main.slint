@@ -1,112 +1,17 @@
 import { Th } from "theme.slint";
 import { Bk, Opt, GpuUser, FanRow, Pt, LimitRow, Item } from "bk.slint";
 import { Icon, Btn } from "controls.slint";
-import { GpuSection, ScreenSection, BatterySection, FansSection, PowerSection, LightSection, LidSection, SystemSection, Skeleton } from "sections.slint";
+import { MainPage, FansPage } from "page.slint";
 
 export { Bk, Th, Opt, GpuUser, FanRow, Pt, LimitRow, Item }
 
-component ModeBtn inherits Rectangle {
-    in property <string> id;
-    in property <string> label;
-    in property <string> key;
-    in property <bool> selected;
-    callback clicked();
-    property <color> c: Th.mode-color(id);
-    height: 76px;
-    border-radius: 14px;
-    background: selected ? c.with-alpha(0.17) : ta.has-hover ? Th.hover : Th.surface;
-    border-width: 1.5px;
-    border-color: selected ? c : fs.has-focus ? Th.dim : Th.line;
-    animate background, border-color { duration: 180ms; easing: ease-in-out; }
-    fs := FocusScope {
-        key-pressed(e) => {
-            if (e.text == Key.Return || e.text == " ") {
-                root.clicked();
-                return accept;
-            }
-            if (e.text == Key.LeftArrow) {
-                Bk.acti("mode-step", -1);
-                return accept;
-            }
-            if (e.text == Key.RightArrow) {
-                Bk.acti("mode-step", 1);
-                return accept;
-            }
-            return reject;
-        }
-    }
-    VerticalLayout {
-        alignment: center;
-        spacing: 6px;
-        HorizontalLayout {
-            alignment: center;
-            Icon { name: root.id; size: 26px; tint: root.selected ? root.c : Th.dim; }
-        }
-        Text {
-            text: root.label;
-            font-size: 12.5px;
-            font-weight: root.selected ? 700 : 500;
-            color: root.selected ? root.c : Th.text;
-            horizontal-alignment: center;
-        }
-    }
-    Text {
-        x: parent.width - self.width - 7px;
-        y: 5px;
-        text: root.key;
-        font-size: 9.5px;
-        color: Th.dim;
-    }
-    ta := TouchArea {
-        clicked => {
-            fs.focus();
-            root.clicked();
-        }
-    }
-}
-
-component Tab inherits Rectangle {
-    in property <string> id;
-    in property <string> label;
-    in property <bool> selected;
-    callback clicked();
-    width: selected ? 96px : 38px;
-    height: 36px;
-    border-radius: 10px;
-    background: selected ? Th.accent.with-alpha(0.18) : ta.has-hover ? Th.hover : transparent;
-    animate width { duration: 200ms; easing: ease-in-out; }
-    animate background { duration: 160ms; }
-    clip: true;
-    HorizontalLayout {
-        alignment: center;
-        spacing: 6px;
-        padding-left: 8px;
-        padding-right: 8px;
-        Icon { name: root.id; tint: root.selected ? Th.accent : Th.dim; y: (parent.height - self.height) / 2; }
-        if root.selected: Text {
-            text: root.label;
-            font-size: 12.5px;
-            font-weight: 600;
-            color: Th.accent;
-            vertical-alignment: center;
-            overflow: elide;
-        }
-    }
-    ta := TouchArea { clicked => { root.clicked(); } }
-}
-
 export component Main inherits Window {
     no-frame: true;
-    background: transparent;
-    width: 440px;
-    height: 600px;
+    background: Th.bg;
+    width: 468px;
+    height: 640px;
     title: "tspmo";
     default-font-size: 13px;
-
-    function section-step(d: int) {
-        // Rust owns the list of sections; it moves the selection.
-        Bk.acti("section-step", d);
-    }
 
     root-focus := FocusScope {
         key-pressed(e) => {
@@ -118,103 +23,22 @@ export component Main inherits Window {
             if (e.text == "2") { Bk.act("mode", "power-saver"); return accept; }
             if (e.text == "3") { Bk.act("mode", "balanced"); return accept; }
             if (e.text == "4") { Bk.act("mode", "performance"); return accept; }
-            if (e.text == Key.PageDown) { root.section-step(1); return accept; }
-            if (e.text == Key.PageUp) { root.section-step(-1); return accept; }
+            if (e.text == Key.PageDown || e.text == Key.PageUp) { Bk.acti("section-step", 1); return accept; }
             return reject;
         }
         init => { self.focus(); }
 
         Rectangle {
             background: Th.bg;
-            border-radius: 18px;
             border-width: 1px;
             border-color: Th.line;
             clip: true;
 
             VerticalLayout {
-                padding: 12px;
-                spacing: 10px;
+                padding: 14px;
+                padding-bottom: 8px;
+                spacing: 8px;
 
-                // header
-                HorizontalLayout {
-                    height: 24px;
-                    spacing: 8px;
-                    Icon { name: Bk.on-battery ? "battery" : "ac"; tint: Th.dim; y: (parent.height - self.height) / 2; }
-                    Text {
-                        text: Bk.head-text;
-                        color: Th.dim;
-                        font-size: 12.5px;
-                        vertical-alignment: center;
-                        horizontal-stretch: 1;
-                    }
-                    Rectangle {
-                        width: 24px;
-                        height: 24px;
-                        border-radius: 12px;
-                        background: closer.has-hover ? Th.hover : transparent;
-                        Icon { name: "close"; size: 14px; tint: Th.dim; x: 5px; y: 5px; }
-                        closer := TouchArea { clicked => { Bk.quit(); } }
-                    }
-                }
-
-                // modes
-                HorizontalLayout {
-                    spacing: 8px;
-                    if Bk.eco-available: ModeBtn {
-                        horizontal-stretch: 1;
-                        id: "eco-plus";
-                        label: "Eco+";
-                        key: "1";
-                        selected: Bk.mode == "eco-plus";
-                        clicked => { Bk.act("mode", "eco-plus"); }
-                    }
-                    ModeBtn {
-                        horizontal-stretch: 1;
-                        id: "power-saver";
-                        label: "Silent";
-                        key: "2";
-                        selected: Bk.mode == "power-saver";
-                        clicked => { Bk.act("mode", "power-saver"); }
-                    }
-                    ModeBtn {
-                        horizontal-stretch: 1;
-                        id: "balanced";
-                        label: "Balanced";
-                        key: "3";
-                        selected: Bk.mode == "balanced";
-                        clicked => { Bk.act("mode", "balanced"); }
-                    }
-                    ModeBtn {
-                        horizontal-stretch: 1;
-                        id: "performance";
-                        label: "Turbo";
-                        key: "4";
-                        selected: Bk.mode == "performance";
-                        clicked => { Bk.act("mode", "performance"); }
-                    }
-                }
-
-                // sections
-                tabs := FocusScope {
-                    height: 36px;
-                    key-pressed(e) => {
-                        if (e.text == Key.LeftArrow) { root.section-step(-1); return accept; }
-                        if (e.text == Key.RightArrow) { root.section-step(1); return accept; }
-                        return reject;
-                    }
-                    HorizontalLayout {
-                        spacing: 2px;
-                        alignment: start;
-                        for s in Bk.sections: Tab {
-                            id: s.icon;
-                            label: s.label;
-                            selected: s.id == Bk.section;
-                            clicked => { Bk.act("section", s.id); tabs.focus(); }
-                        }
-                    }
-                }
-
-                // content
                 Rectangle {
                     vertical-stretch: 1;
                     clip: true;
@@ -230,17 +54,10 @@ export component Main inherits Window {
                         interactive: false;
                         animate content-y { duration: 90ms; easing: ease-out; }
                         content := VerticalLayout {
-                            width: parent.width;
+                            width: parent.width - 14px;
                             alignment: start;
-                            if !Bk.loaded: Skeleton { }
-                            if Bk.loaded && Bk.section == "gpu": GpuSection { }
-                            if Bk.loaded && Bk.section == "screen": ScreenSection { }
-                            if Bk.loaded && Bk.section == "battery": BatterySection { }
-                            if Bk.loaded && Bk.section == "fans": FansSection { }
-                            if Bk.loaded && Bk.section == "power": PowerSection { }
-                            if Bk.loaded && Bk.section == "light": LightSection { }
-                            if Bk.loaded && Bk.section == "lid": LidSection { }
-                            if Bk.loaded && Bk.section == "system": SystemSection { }
+                            if Bk.section != "fans": MainPage { }
+                            if Bk.section == "fans": FansPage { }
                         }
                     }
                     if flick.content-height > flick.height: Rectangle {

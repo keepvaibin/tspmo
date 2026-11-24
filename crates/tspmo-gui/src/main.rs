@@ -15,6 +15,7 @@ mod instance;
 mod model;
 mod osd;
 mod shortcut;
+mod snapshot;
 mod theme;
 mod value;
 
@@ -33,6 +34,7 @@ fn main() -> std::process::ExitCode {
     let r = match args.first().map(String::as_str) {
         Some("--osd") => osd::run(&args[1..]),
         Some("--install-shortcut") => shortcut::install(),
+        Some("--snapshot") => snapshot::run(&args[1..]),
         Some("--help" | "-h") => {
             println!(
                 "tspmo-gui [--toggle] [--section <id>] | --osd <icon> <text> [0-100] | --install-shortcut"
