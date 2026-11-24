@@ -64,7 +64,7 @@ pub fn run(args: &[String]) -> ExitCode {
                 .and_then(|k| client::display_set_num("SetEyeCare", k)),
         ),
         _ => {
-            eprint!("{USAGE}");
+            eprintln!("tspmo: display: unknown or incomplete command (tspmo display help)");
             ExitCode::from(2)
         }
     }

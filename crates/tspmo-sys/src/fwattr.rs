@@ -53,6 +53,14 @@ impl fmt::Display for SetError {
 
 impl std::error::Error for SetError {}
 
+/// A kernel attribute or driver name: letters, digits, `_`, `-`, `.` inside (never a path).
+fn is_plain_name(n: &str) -> bool {
+    !n.is_empty()
+        && !n.starts_with('.')
+        && n.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.'))
+}
+
 fn attr_dir(driver: &str, name: &str) -> String {
     format!("{CLASS}/{driver}/attributes/{name}")
 }
@@ -75,6 +83,10 @@ pub fn enumerate(root: &SysRoot, driver: &str) -> Vec<Attribute> {
 
 /// Read one attribute's description and current value.
 pub fn read(root: &SysRoot, driver: &str, name: &str) -> Option<Attribute> {
+    // Names reach here from D-Bus clients: one path component, never `..` or a separator.
+    if !is_plain_name(name) || !is_plain_name(driver) {
+        return None;
+    }
     let dir = attr_dir(driver, name);
     if !root.exists(&dir) {
         return None;
@@ -187,6 +199,17 @@ mod tests {
             .file(&format!("{a}/gpu_mux_mode/current_value"), "1\n")
             .file(&format!("{a}/gpu_mux_mode/possible_values"), "0;1\n");
         f
+    }
+
+    #[test]
+    fn names_are_never_paths() {
+        let f = fake();
+        let root = f.root();
+        for bad in ["", "..", "../attributes/gpu_mux_mode", "a/b", ".hidden", "x y"] {
+            assert!(read(&root, "asus-armoury", bad).is_none(), "{bad}");
+        }
+        assert!(read(&root, "../asus-armoury", "gpu_mux_mode").is_none());
+        assert!(read(&root, "asus-armoury", "gpu_mux_mode").is_some());
     }
 
     #[test]

@@ -133,7 +133,16 @@ fn run(a: &Asus) {
                 fds.push(PollFd::new(f, PollFlags::PRI | PollFlags::ERR));
             }
             let hw_slots = fds.len();
-            fds.extend(devs.iter().map(|d| PollFd::new(&d.fd, PollFlags::IN)));
+            // The touchpad only matters as activity for the idle timeout (and to undo it): while
+            // that timer is neither running nor holding the light dark, its events are not read.
+            let pads = a
+                .lighting
+                .as_ref()
+                .is_some_and(|l| l.idle_armed().is_some() || l.is_dimmed());
+            let polled: Vec<usize> = (0..devs.len())
+                .filter(|i| pads || devs[*i].source.is_some())
+                .collect();
+            fds.extend(polled.iter().map(|i| PollFd::new(&devs[*i].fd, PollFlags::IN)));
 
             let timeout = a
                 .lighting
@@ -185,7 +194,7 @@ fn run(a: &Asus) {
                 .iter()
                 .enumerate()
                 .filter(|(_, f)| !f.revents().is_empty())
-                .map(|(i, _)| i)
+                .map(|(i, _)| polled[i])
                 .collect();
             drop(fds);
 

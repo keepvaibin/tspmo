@@ -19,7 +19,8 @@ fn source_arg(s: &str) -> zbus::fdo::Result<bool> {
 }
 
 fn mode_arg(s: &str) -> zbus::fdo::Result<Profile> {
-    Profile::parse(s).ok_or_else(|| {
+    // Eco+ has no settings of its own: it is the power-saver mode's.
+    Profile::parse(s).map(Profile::ppd).ok_or_else(|| {
         zbus::fdo::Error::InvalidArgs(format!("unknown mode '{s}' (power-saver, balanced, performance)"))
     })
 }

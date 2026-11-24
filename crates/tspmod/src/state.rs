@@ -223,18 +223,37 @@ impl Daemon {
         true
     }
 
-    pub fn hold(&mut self, profile: Profile, reason: String, app_id: String, owner: String) -> u32 {
-        let cookie = self.next_cookie;
-        self.next_cookie = self.next_cookie.wrapping_add(1).max(1);
+    /// Holds one client may keep, and the longest reason or application id kept: a hold is
+    /// cheap to ask for, and a message may carry megabytes.
+    pub const MAX_HOLDS_PER_CLIENT: usize = 32;
+    pub const MAX_HOLD_TEXT: usize = 256;
+
+    pub fn hold(
+        &mut self,
+        profile: Profile,
+        reason: String,
+        app_id: String,
+        owner: String,
+    ) -> Result<u32, String> {
+        if self.holds.iter().filter(|h| h.owner == owner).count() >= Self::MAX_HOLDS_PER_CLIENT {
+            return Err(format!("too many holds ({})", Self::MAX_HOLDS_PER_CLIENT));
+        }
+        // Cookies are unique among live holds even after the counter wraps.
+        let mut cookie = self.next_cookie;
+        while self.holds.iter().any(|h| h.cookie == cookie) {
+            cookie = cookie.wrapping_add(1).max(1);
+        }
+        self.next_cookie = cookie.wrapping_add(1).max(1);
+        let clip = |s: String| -> String { s.chars().take(Self::MAX_HOLD_TEXT).collect() };
         self.holds.push(Hold {
             cookie,
             profile,
-            reason,
-            app_id,
+            reason: clip(reason),
+            app_id: clip(app_id),
             owner,
         });
         self.apply(false);
-        cookie
+        Ok(cookie)
     }
 
     pub fn release(&mut self, cookie: u32) -> bool {
@@ -485,7 +504,7 @@ mod tests {
     const PKG: &str = "/sys/class/powercap/intel-rapl:0/constraint_0_power_limit_uw";
 
     fn hold(d: &mut Daemon, p: Profile) -> u32 {
-        d.hold(p, "test".into(), "test".into(), ":1.1".into())
+        d.hold(p, "test".into(), "test".into(), ":1.1".into()).unwrap()
     }
 
     #[test]
@@ -557,6 +576,31 @@ mod tests {
         // Fn+F5 to balanced is a real change.
         assert!(d.platform_changed("balanced"));
         assert_eq!(d.effective(), Profile::Balanced);
+    }
+
+    #[test]
+    fn holds_are_bounded_per_client_and_clipped() {
+        let env = Env::new("holdcap");
+        let mut d = env.daemon();
+        let long = "x".repeat(10_000);
+        let c = d
+            .hold(Profile::PowerSaver, long.clone(), long, ":1.9".into())
+            .unwrap();
+        assert_eq!(d.holds[0].reason.len(), Daemon::MAX_HOLD_TEXT);
+        assert_eq!(d.holds[0].cookie, c);
+        for _ in 1..Daemon::MAX_HOLDS_PER_CLIENT {
+            d.hold(Profile::PowerSaver, "r".into(), "a".into(), ":1.9".into())
+                .unwrap();
+        }
+        assert!(
+            d.hold(Profile::PowerSaver, "r".into(), "a".into(), ":1.9".into())
+                .is_err()
+        );
+        // Another client is unaffected.
+        assert!(
+            d.hold(Profile::PowerSaver, "r".into(), "a".into(), ":1.10".into())
+                .is_ok()
+        );
     }
 
     #[test]

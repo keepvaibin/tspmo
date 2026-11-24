@@ -23,8 +23,13 @@ fn main() {
     // not outlive the daemon that set them.
     if std::env::args().nth(1).as_deref() == Some("--restore-limits") {
         let root = SysRoot::from_env();
+        let eco = root.exists(state::ECO_SAVED);
         state::restore_saved(&root);
         guard::shutdown(&root);
+        asus::restore_on_stop(&root, eco);
+        if eco {
+            display::restore_on_stop(&root);
+        }
         return;
     }
     if let Err(e) = run() {

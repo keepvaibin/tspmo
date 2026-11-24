@@ -392,7 +392,16 @@ fn background_cpus(root: &SysRoot) -> String {
     tspmo_core::topology::format_cpulist(&[t.efficiency, t.low_power].concat())
 }
 
+/// Held for the whole life of a guard thread: a new one waits for the old one to finish putting
+/// everything back (and stopping the slice) before it starts the slice again.
+static LIFE: Mutex<()> = Mutex::new(());
+
 fn run(root: SysRoot, stop: &mpsc::Receiver<()>) {
+    let _life = LIFE.lock().unwrap_or_else(|p| p.into_inner());
+    // Eco+ ended while this thread was waiting for its predecessor.
+    if matches!(stop.try_recv(), Err(mpsc::TryRecvError::Disconnected)) {
+        return;
+    }
     let cpus = background_cpus(&root);
     systemctl(&["start", SLICE]);
     if !cpus.is_empty() {
@@ -461,7 +470,13 @@ pub fn set_active(root: &SysRoot, active: bool) {
 
 /// The daemon stops: put everything back before leaving (blocks briefly).
 pub fn shutdown(root: &SysRoot) {
-    Guard::new(root.clone()).restore();
+    let _life = LIFE.lock().unwrap_or_else(|p| p.into_inner());
+    let mut g = Guard::new(root.clone());
+    let used = !g.moved.is_empty() || root.exists(g.slice.join("cgroup.procs"));
+    g.restore();
+    if used {
+        systemctl(&["stop", SLICE]);
+    }
 }
 
 #[cfg(test)]

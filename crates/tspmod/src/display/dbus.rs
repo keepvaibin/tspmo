@@ -70,7 +70,9 @@ fn failed(msg: String) -> zbus::fdo::Error {
 
 /// Run blocking compositor work on its own thread and await it, so the D-Bus executor keeps
 /// answering other callers (power-profile queries must stay fast while a mode switch runs).
-async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, String> {
     use std::future::Future;
     use std::pin::Pin;
     use std::task::{Context, Poll, Waker};
@@ -103,7 +105,9 @@ async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> 
                 w.wake();
             }
         });
-    spawned.expect("thread spawn");
+    if spawned.is_err() {
+        return Err("busy; try again".into());
+    }
     Wait(slot).await
 }
 

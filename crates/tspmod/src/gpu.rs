@@ -362,13 +362,21 @@ pub fn begin(
     policy: Option<Policy>,
     automatic: bool,
 ) -> Result<(), String> {
+    // The precheck scans /proc: not under the daemon lock.
     let (root, st) = {
+        let d = lock(&shared);
+        if let Some(t) = d.gpu_switching {
+            return Err(format!("already switching to {t}; one moment"));
+        }
+        (d.root.clone(), d.gpu_status())
+    };
+    let checked = precheck(&root, &st, target);
+    {
         let mut d = lock(&shared);
         if let Some(t) = d.gpu_switching {
             return Err(format!("already switching to {t}; one moment"));
         }
-        let st = d.gpu_status();
-        if let Err(e) = precheck(&d.root, &st, target) {
+        if let Err(e) = checked {
             if automatic {
                 d.gpu_waiting = e != NEEDS_FRESH_SESSION;
                 let msg = format!("Waiting to switch to {target}: {e}");
@@ -382,8 +390,7 @@ pub fn begin(
         }
         d.gpu_switching = Some(target);
         d.gpu_message = format!("Switching to {target}…");
-        (d.root.clone(), st)
-    };
+    }
     let worker_conn = conn.clone();
     let worker_shared = shared.clone();
     std::thread::Builder::new()
@@ -419,6 +426,12 @@ pub fn begin(
             drop(mute); // restores after a settle time, off the critical path
             if automatic {
                 crate::watch::gpu_retry(&worker_conn, &worker_shared);
+            }
+            // The policy may have changed while this switch ran (Eco+ ended, a plug event): that
+            // request found a switch in progress and was dropped. Look again; after a failure the
+            // retry thread owns the next attempt.
+            if result.is_ok() && policy_target(&lock(&worker_shared)).is_some_and(|t| t != target) {
+                enforce(&worker_conn, &worker_shared);
             }
         })
         .map_err(|e| e.to_string())?;

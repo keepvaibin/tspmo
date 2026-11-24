@@ -170,6 +170,23 @@ pub fn lock(s: &Shared) -> std::sync::MutexGuard<'_, State> {
     s.lock().unwrap_or_else(|p| p.into_inner())
 }
 
+/// The daemon is stopping after Eco+: the panel goes back to the rate its policy wants (not at
+/// shutdown, when there is no desktop left to ask).
+pub fn restore_on_stop(root: &SysRoot) {
+    let stopping = std::process::Command::new("systemctl")
+        .arg("is-system-running")
+        .output()
+        .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim() == "stopping");
+    if stopping {
+        return;
+    }
+    let on_battery = tspmo_sys::power_supply::on_ac(root) == Some(false);
+    let shared: Shared = Arc::new(Mutex::new(State::new(root.clone(), on_battery)));
+    if let Err(e) = apply_refresh(&shared) {
+        eprintln!("tspmod: can't restore the refresh rate: {e}");
+    }
+}
+
 // --- compositor access ----------------------------------------------------------------------
 
 /// Run `kscreen-doctor args...` in the user's session.

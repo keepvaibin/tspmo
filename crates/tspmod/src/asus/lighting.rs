@@ -43,8 +43,23 @@ struct State {
     eco: bool,
 }
 
+/// The level to bring back while the idle timeout has the keyboard dark (in `/run`: a daemon
+/// that stops, or crashes, in that state puts the light back, see [`restore_dimmed`]).
+const DIMMED: &str = "/run/tspmo/kbd-dimmed";
+
 /// Idle time after which Eco+ darkens the keyboard, seconds.
 pub const ECO_IDLE: u32 = 10;
+
+/// The daemon is stopping: a keyboard it left dark goes back to its level.
+pub fn restore_dimmed(root: &SysRoot) {
+    let Some(level) = root.read_parse::<u8>(DIMMED) else {
+        return;
+    };
+    if let Some(bl) = lighting::backlight(root) {
+        let _ = bl.set(root, level.min(bl.max));
+    }
+    let _ = std::fs::remove_file(root.path(DIMMED));
+}
 
 pub struct Lighting {
     root: SysRoot,
@@ -248,6 +263,7 @@ impl Lighting {
         let level = p.brightness.unwrap_or(live).min(self.max());
         self.write_brightness(level);
         lock(&self.st).brightness = level;
+        super::hotkeys::rearm();
     }
 
     pub fn on_power_source(&self, on_battery: bool) {
@@ -295,6 +311,9 @@ impl Lighting {
             let mut st = lock(&self.st);
             st.brightness = level;
             st.dimmed_from = None;
+            drop(st);
+            // The idle timer runs only while the keyboard is lit.
+            super::hotkeys::rearm();
         }
         Ok(())
     }
@@ -429,8 +448,20 @@ impl Lighting {
         if st.dimmed_from.is_some() || st.brightness == 0 {
             return;
         }
-        st.dimmed_from = Some(st.brightness);
+        let level = st.brightness;
+        st.dimmed_from = Some(level);
+        // A restart while dark must find the level again: the live level is 0 by then.
+        let i = src_index(st.on_battery);
+        if st.profiles[i].brightness.is_none() {
+            st.profiles[i].brightness = Some(level);
+            self.save(&st);
+        }
         drop(st);
+        let path = self.root.path(DIMMED);
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(path, level.to_string());
         self.write_brightness(0);
     }
 
@@ -439,8 +470,14 @@ impl Lighting {
         let Some(level) = lock(&self.st).dimmed_from.take() else {
             return false;
         };
+        let _ = std::fs::remove_file(self.root.path(DIMMED));
         self.write_brightness(level);
         true
+    }
+
+    /// The idle timeout has darkened the keyboard (input brings it back).
+    pub fn is_dimmed(&self) -> bool {
+        lock(&self.st).dimmed_from.is_some()
     }
 
     /// Whether the idle timer should run: enabled and the keyboard is lit and not yet dimmed.
@@ -971,6 +1008,31 @@ mod tests {
         assert!(l.idle_wake());
         assert_eq!(fx.get(BR), "2");
         assert!(!l.idle_wake());
+    }
+
+    #[test]
+    fn a_stop_or_restart_while_dark_brings_the_level_back() {
+        let fx = Fix::new("light-dark-stop");
+        fx.set(BR, "2\n");
+        let l = light(&fx);
+        l.set_idle(30);
+        l.idle_dim();
+        assert_eq!(fx.get(BR), "0");
+        // The daemon stops (or crashes) while the keyboard is dark: the stop hook lights it.
+        restore_dimmed(&fx.root());
+        assert_eq!(fx.get(BR), "2");
+        restore_dimmed(&fx.root()); // nothing left to restore
+        assert_eq!(fx.get(BR), "2");
+
+        // A new daemon that finds the keyboard dark and no saved level still knows the user's.
+        let fx = Fix::new("light-dark-restart");
+        fx.set(BR, "3\n");
+        let l = light(&fx);
+        l.idle_dim();
+        drop(l);
+        let l = light(&fx);
+        l.apply();
+        assert_eq!(fx.get(BR), "3");
     }
 
     #[test]

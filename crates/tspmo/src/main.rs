@@ -55,12 +55,22 @@ fn main() -> ExitCode {
     }));
     let args: Vec<String> = std::env::args().skip(1).collect();
     let root = SysRoot::from_env();
+    // `tspmo <command> -h`: the lines about that command.
+    if let [cmd, flag] = &args[..] {
+        if matches!(flag.as_str(), "-h" | "--help") && !matches!(cmd.as_str(), "display" | "bench") {
+            return command_help(cmd);
+        }
+    }
     match args.first().map(String::as_str) {
         Some("info") => {
             info::print(&Machine::probe(&root));
             ExitCode::SUCCESS
         }
-        Some("doctor") => run_doctor(&root, args.iter().any(|a| a == "--apply")),
+        Some("doctor") => match &args[1..] {
+            [] => run_doctor(&root, false),
+            [a] if a == "--apply" => run_doctor(&root, true),
+            [a, ..] => usage_error(&format!("doctor: unexpected '{a}'")),
+        },
         Some("status") => status(),
         // systemd-sleep hook: keep the internal USB chips powered across sleep (some keyboard
         // firmware corrupts its USB state when resumed from autosuspend after a long sleep).
@@ -85,7 +95,11 @@ fn main() -> ExitCode {
         Some(c) if asus_cli::handles(c) => asus_cli::run(c, &args[1..]),
         Some("display") => display::run(&args[1..]),
         Some("bench") => bench::run(&args[1..]),
-        Some("ping") => ping(args.get(1).and_then(|n| n.parse().ok()).unwrap_or(50)),
+        Some("ping") => match args.get(1).map(|n| n.parse::<usize>()) {
+            None => ping(50),
+            Some(Ok(n)) if n > 0 => ping(n),
+            Some(_) => usage_error("ping: N is a positive number"),
+        },
         Some("dump") => match args.get(1) {
             Some(dir) => match dump::dump(&root, dir.as_ref()) {
                 Ok(n) => {
@@ -111,11 +125,37 @@ fn main() -> ExitCode {
             println!("tspmo {}", env!("CARGO_PKG_VERSION"));
             ExitCode::SUCCESS
         }
-        Some(other) => {
-            eprintln!("tspmo: unknown command '{other}'\n\n{USAGE}");
-            ExitCode::from(2)
+        Some(other) => usage_error(&format!("unknown command '{other}'")),
+    }
+}
+
+/// One line and exit 2: the command line was wrong.
+fn usage_error(what: &str) -> ExitCode {
+    eprintln!("tspmo: {what} (tspmo help)");
+    ExitCode::from(2)
+}
+
+/// The lines of the usage text that belong to `cmd` (a command, then its indented continuations).
+fn command_help(cmd: &str) -> ExitCode {
+    let text = format!("{USAGE}\n{}", asus_cli::USAGE);
+    let mut out = String::new();
+    let mut inside = false;
+    for line in text.lines() {
+        match line.len() - line.trim_start().len() {
+            0 => inside = false,
+            4 => inside = line.split_whitespace().next() == Some(cmd),
+            _ => {}
+        }
+        if inside {
+            out.push_str(line);
+            out.push('\n');
         }
     }
+    if out.is_empty() {
+        return usage_error(&format!("unknown command '{cmd}'"));
+    }
+    print!("{out}");
+    ExitCode::SUCCESS
 }
 
 fn fail(e: String) -> ExitCode {

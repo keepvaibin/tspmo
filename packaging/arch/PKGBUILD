@@ -30,8 +30,11 @@ check() {
 package_tspmo-git() {
   pkgdesc="Thermal & System Power Management Optimizer for ASUS and Lenovo laptops (power profiles, GPU modes, fans, lighting)"
   depends=('dbus' 'polkit' 'upower' 'kmod' 'systemd' 'fontconfig' 'libxkbcommon' 'wayland')
+  install=tspmo.install
   optdepends=('nvidia-utils: NVIDIA GPU mode switching'
               'plasma-workspace: Plasma power-mode widget and ROG-key shortcut'
+              'libkscreen: refresh rate, flicker-free dimming and colour modes (kscreen-doctor)'
+              'kconfig: eye care (kreadconfig6, kwriteconfig6)'
               'tspmo-hid-asus-dkms: lets ASUS keyboard/lighting chips sleep (~0.6 W)')
   # tspmod implements the power-profiles D-Bus API itself.
   provides=('tspmo' 'power-profiles-daemon')
