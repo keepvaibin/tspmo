@@ -221,6 +221,25 @@ if has org.tspmo.Display1 && [ "$MODES" = 1 ]; then
   call org.tspmo.Display1 SetRefreshPolicy s "$pol" >/dev/null; sleep 2.5
   check "Display1 policy restored ($pol)" eq "$(prop org.tspmo.Display1 RefreshPolicy | str)" "$pol"
   call org.tspmo.Display1 SetRefreshPolicy s warp >/dev/null 2>&1 && record "Display1 rejects policy 'warp'" FAIL "" || record "Display1 rejects policy 'warp'" PASS ""
+  # Colour mode, eye care and dimming: set, read back, put back.
+  cm=$(prop org.tspmo.Display1 ColorMode | str)
+  RESTORE+=("busctl --system call $SVC $OBJ org.tspmo.Display1 SetColorMode s $cm")
+  call org.tspmo.Display1 SetColorMode s srgb >/dev/null; sleep 1.5
+  check "Display1 colour srgb" eq "$(prop org.tspmo.Display1 ColorMode | str)" srgb
+  call org.tspmo.Display1 SetColorMode s "$cm" >/dev/null; sleep 1.5
+  check "Display1 colour restored ($cm)" eq "$(prop org.tspmo.Display1 ColorMode | str)" "$cm"
+  call org.tspmo.Display1 SetColorMode s neon >/dev/null 2>&1 && record "Display1 rejects colour 'neon'" FAIL "" || record "Display1 rejects colour 'neon'" PASS ""
+  ec=$(prop org.tspmo.Display1 EyeCare | awk '{print $2}')
+  RESTORE+=("busctl --system call $SVC $OBJ org.tspmo.Display1 SetEyeCare u $ec")
+  call org.tspmo.Display1 SetEyeCare u 4500 >/dev/null; sleep 1.5
+  check "Display1 eye care 4500 K" eq "$(prop org.tspmo.Display1 EyeCare | awk '{print $2}')" 4500
+  call org.tspmo.Display1 SetEyeCare u "$ec" >/dev/null; sleep 1.5
+  check "Display1 eye care restored ($ec)" eq "$(prop org.tspmo.Display1 EyeCare | awk '{print $2}')" "$ec"
+  br=$(prop org.tspmo.Display1 Brightness | awk '{print $2}')
+  RESTORE+=("busctl --system call $SVC $OBJ org.tspmo.Display1 SetBrightness u $br")
+  call org.tspmo.Display1 SetBrightness u "$br" >/dev/null; sleep 1
+  check "Display1 brightness unchanged by its own value" eq "$(prop org.tspmo.Display1 Brightness | awk '{print $2}')" "$br"
+  call org.tspmo.Display1 SetBrightness u 0 >/dev/null 2>&1 && record "Display1 rejects brightness 0" FAIL "" || record "Display1 rejects brightness 0" PASS ""
 fi
 
 # --- Lid1 / Lighting1 / Battery1: settings that reach hardware, flipped and restored
@@ -262,16 +281,31 @@ pid=$(systemctl show -p MainPID --value tspmod)
 rt() { sudo cat $DGPU/power/runtime_active_time 2>/dev/null; }
 cpu() { awk '{print $14+$15}' /proc/$pid/stat; }
 rs0=$(sudo cat $DGPU/power/runtime_status 2>/dev/null)
-a0=$(rt); c0=$(cpu)
+sw() { for t in /proc/$pid/task/*; do awk '/voluntary_ctxt_switches/{s+=$2} END{print s+0}' $t/status 2>/dev/null; done | awk '{s+=$1} END{print s+0}'; }
+# Every runtime resume of the dGPU in the window, by the task that asked (kernel rpm events;
+# nothing of the dGPU is read).
+TR=/sys/kernel/tracing
+sudo sh -c "echo 0 > $TR/tracing_on; echo > $TR/trace; echo 'name == \"0000:01:00.0\"' > $TR/events/rpm/rpm_resume/filter; echo 1 > $TR/events/rpm/rpm_resume/enable; echo 1 > $TR/tracing_on" 2>/dev/null
+a0=$(rt); c0=$(cpu); w0=$(sw)
 sleep "$IDLE"
-a1=$(rt); c1=$(cpu)
+a1=$(rt); c1=$(cpu); w1=$(sw)
+resumes=$(sudo cat $TR/trace 2>/dev/null | grep "rpm_resume:")
+sudo sh -c "echo 0 > $TR/tracing_on; echo 0 > $TR/events/rpm/rpm_resume/enable; echo 0 > $TR/events/rpm/rpm_resume/filter; echo > $TR/trace" 2>/dev/null
 tck=$(getconf CLK_TCK)
 cpu_ms=$(( (c1 - c0) * 1000 / tck ))
-record "tspmod CPU over ${IDLE}s idle" "$([ $cpu_ms -le 50 ] && echo PASS || echo FAIL)" "${cpu_ms} ms"
-if [ "$rs0" = suspended ]; then
-  record "dGPU runtime_active_time over ${IDLE}s" "$([ "$a1" = "$a0" ] && echo PASS || echo FAIL)" "${a0} -> ${a1} (was $rs0)"
+wk=$(awk -v d=$((w1 - w0)) -v s=$IDLE 'BEGIN{printf "%.2f", d / s}')
+if pgrep -x tspmo-gui >/dev/null; then
+  # A running window polls the daemon (fan speed, temperature): that is its cost, not idle.
+  record "tspmod CPU and wake-ups over ${IDLE}s" SKIP "tspmo-gui running: ${cpu_ms} ms, ${wk}/s"
 else
-  record "dGPU runtime_active_time over ${IDLE}s" SKIP "dGPU was $rs0 at start"
+  record "tspmod CPU over ${IDLE}s idle" "$([ $cpu_ms -le 50 ] && echo PASS || echo FAIL)" "${cpu_ms} ms"
+  record "tspmod wake-ups over ${IDLE}s idle" "$(awk -v w=$wk 'BEGIN{print (w <= 0.5) ? "PASS" : "FAIL"}')" "${wk}/s"
+fi
+n=$(echo "$resumes" | grep -c "rpm_resume:")
+mine=$(echo "$resumes" | grep -c -E '^ *(tspmod|tspmo|asus-|eco-|gpu-|fan-key|platform-profil|battery|upower|logind|name-owners|display|backlight|zbus|async-io|blocking)')
+record "dGPU resumes not caused by tspmod (${IDLE}s)" "$([ "$mine" = 0 ] && echo PASS || echo FAIL)" "$n resumes, $mine from tspmod"
+if [ "$rs0" = suspended ] && [ "$n" = 0 ]; then
+  record "dGPU runtime_active_time over ${IDLE}s" "$([ "$a1" = "$a0" ] && echo PASS || echo FAIL)" "${a0} -> ${a1}"
 fi
 rss=$(awk '/VmRSS/{print $2}' /proc/$pid/status)
 record "tspmod RSS" "$([ "${rss:-0}" -le 20000 ] && echo PASS || echo FAIL)" "${rss} kB"

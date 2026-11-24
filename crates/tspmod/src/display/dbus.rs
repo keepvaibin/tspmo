@@ -247,11 +247,13 @@ impl Display1 {
         #[zbus(connection)] conn: &zbus::Connection,
     ) -> zbus::fdo::Result<String> {
         authorize(&hdr, conn).await?;
+        if !(1..=100).contains(&percent) {
+            return Err(zbus::fdo::Error::InvalidArgs("brightness is 1-100".into()));
+        }
         let shared = self.0.clone();
-        let r = blocking(move || {
-            super::events::exclusive(|| flicker::set_level(&shared, f64::from(percent.clamp(1, 100))))
-        })
-        .await;
+        let r =
+            blocking(move || super::events::exclusive(|| flicker::set_level(&shared, f64::from(percent))))
+                .await;
         emit_changed(conn, &self.0).await;
         r.map_err(failed)
     }
