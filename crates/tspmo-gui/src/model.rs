@@ -5,7 +5,6 @@ use crate::value::V;
 use std::collections::HashMap;
 use zbus::zvariant::Value;
 
-pub const MODES: [&str; 4] = ["eco-plus", "power-saver", "balanced", "performance"];
 /// Thermal modes (Eco+ is a power-saver variant for fans and power limits).
 pub const THERMAL: [&str; 3] = ["power-saver", "balanced", "performance"];
 pub const SOURCES: [&str; 2] = ["ac", "battery"];

@@ -1,0 +1,395 @@
+import { Th } from "theme.slint";
+import { Bk, Item } from "bk.slint";
+import { Btn, IconBtn, Seg, Check, Slide, SlideRow, Stepper, Row, Field, Cap, Mono, Rule } from "controls.slint";
+import { CurveEditor } from "curve.slint";
+
+// One firmware item: a checkbox, a stepper for choices and numbers, or plain text.
+component HwRow inherits Rectangle {
+    in property <Item> item;
+    height: root.item.kind == "toggle" ? 1.8rem : Th.control;
+    if root.item.kind == "toggle": Check {
+        label: root.item.label;
+        on: root.item.on;
+        enabled: root.item.writable;
+        toggled => { Bk.act("hw-toggle", root.item.name); }
+    }
+    if root.item.kind != "toggle": Row {
+        label: root.item.label;
+        if root.item.kind != "text" && root.item.writable: Stepper {
+            width: 10rem;
+            text: root.item.text;
+            prev => { Bk.acti("hw-step:" + root.item.name, -1); }
+            next => { Bk.acti("hw-step:" + root.item.name, 1); }
+        }
+        if root.item.kind == "text" || !root.item.writable: Mono { text: root.item.text; }
+    }
+}
+
+// A titled group inside a window.
+component Group inherits VerticalLayout {
+    in property <string> title;
+    in property <string> value;
+    spacing: 0.4rem;
+    Field { label: root.title; value: root.value; }
+    @children
+}
+
+component WinFrame inherits Window {
+    background: Th.bg;
+    default-font-size: Th.font-size;
+    default-font-family: Th.font-family;
+    FocusScope {
+        init => { self.focus(); }
+        key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                Bk.close();
+                return accept;
+            }
+            return reject;
+        }
+        VerticalLayout {
+            padding: 1.2rem;
+            spacing: 0.8rem;
+            @children
+            if Bk.error != "": Text {
+                text: Bk.error;
+                color: Th.danger;
+                font-size: 0.85rem;
+                overflow: elide;
+            }
+        }
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+// Fans & Power
+
+export component FansWin inherits WinFrame {
+    title: "Fans & Power";
+    HorizontalLayout {
+        spacing: 1.2rem;
+        if Bk.has-fans: VerticalLayout {
+            spacing: 0.4rem;
+            min-width: 28rem;
+            Seg {
+                opts: [
+                    { id: "power-saver", label: "Silent", tint: Th.mode-color("power-saver"), keyed: true },
+                    { id: "balanced", label: "Balanced", tint: Th.mode-color("balanced"), keyed: true },
+                    { id: "performance", label: "Turbo", tint: Th.mode-color("performance"), keyed: true },
+                ];
+                index: Bk.fan-mode;
+                tint: Th.mode-color(["power-saver", "balanced", "performance"][clamp(Bk.fan-mode, 0, 2)]);
+                picked(i) => { Bk.acti("fan-mode", i); }
+            }
+            Rectangle { height: 0.4rem; }
+            Field { label: "Fan"; value: Bk.fan-kind == "custom" ? "custom curve" : Bk.fan-kind == "full" ? "full speed" : "firmware curve"; }
+            HorizontalLayout {
+                spacing: 0.3rem;
+                for f[i] in Bk.fans: Rectangle {
+                    height: Th.control;
+                    horizontal-stretch: 1;
+                    border-radius: Th.radius;
+                    background: ta.pressed ? Th.pressed : ta.has-hover ? Th.hover : Th.raised;
+                    Rectangle {
+                        border-radius: Th.radius;
+                        background: i == Bk.fan-sel ? Th.accent.with-alpha(Th.dark ? 0.2 : 0.16) : transparent;
+                    }
+                    Rectangle {
+                        y: parent.height - self.height;
+                        height: i == Bk.fan-sel ? 3px : 0px;
+                        background: Th.accent;
+                    }
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: 0.5rem;
+                        Text { text: f.label; color: Th.text; font-weight: i == Bk.fan-sel ? 700 : 400; vertical-alignment: center; }
+                        Mono { text: f.rpm > 0 ? f.rpm : "-"; }
+                    }
+                    ta := TouchArea { clicked => { Bk.acti("fan-sel", i); } }
+                }
+            }
+            CurveEditor {
+                height: 14rem;
+                editable: Bk.fan-kind != "full";
+            }
+            HorizontalLayout {
+                spacing: 0.3rem;
+                Btn { horizontal-stretch: 1; text: "Auto"; active: Bk.fan-kind == "auto"; clicked => { Bk.act("fan-auto", ""); } }
+                Btn { horizontal-stretch: 1; text: "Full"; active: Bk.fan-kind == "full"; clicked => { Bk.act("fan-full", ""); } }
+                Btn { horizontal-stretch: 1; text: "Factory"; clicked => { Bk.act("fan-reset", ""); } }
+            }
+        }
+        if Bk.has-power: VerticalLayout {
+            spacing: 0.4rem;
+            min-width: 28rem;
+            Seg {
+                opts: [{ id: "ac", label: "AC", tint: Th.accent }, { id: "battery", label: "Battery", tint: Th.accent }];
+                index: Bk.pw-source;
+                picked(i) => { Bk.acti("pw-source", i); }
+            }
+            Rectangle { height: 0.4rem; }
+            Field { label: "Power limits"; value: Bk.pw-needs-fan ? "needs fan curve" : ""; }
+            for l in Bk.limits: HorizontalLayout {
+                spacing: 0.3rem;
+                SlideRow {
+                    horizontal-stretch: 1;
+                    label: l.label;
+                    label-width: 10rem;
+                    value-width: 4.6rem;
+                    min: l.min;
+                    max: l.max;
+                    value-int: l.cur;
+                    value: l.cur + " " + l.unit;
+                    custom: l.custom;
+                    enabled: l.max > l.min;
+                    released(v) => { Bk.acti("limit:" + l.name, v); }
+                }
+                IconBtn {
+                    icon: "reset";
+                    side: 2rem;
+                    enabled: l.custom;
+                    opacity: l.custom ? 1 : 0;
+                    clicked => { Bk.act("limit-default", l.name); }
+                }
+            }
+            Btn { text: "Firmware defaults"; clicked => { Bk.act("limit-reset", ""); } }
+        }
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+// Screen
+
+export component ScreenWin inherits WinFrame {
+    title: "Screen";
+    VerticalLayout {
+        spacing: 1.1rem;
+        min-width: 26rem;
+        if Bk.has-refresh: Group {
+            title: "Refresh rate";
+            value: Bk.refresh-now;
+            Seg {
+                wheel: true;
+                opts: [{ id: "auto", label: "Auto", tint: Th.accent }, { id: "60", label: "60 Hz", tint: Th.accent }, { id: "max", label: "Max", tint: Th.accent }];
+                index: Bk.refresh-policy == "auto" ? 0 : Bk.refresh-policy == "60" ? 1 : Bk.refresh-policy == "max" ? 2 : -1;
+                picked(i) => { Bk.act("refresh", ["auto", "60", "max"][i]); }
+            }
+        }
+        if Bk.brightness >= 0 || Bk.has-flicker: Group {
+            title: "Brightness";
+            value: Bk.brightness >= 0 ? Bk.brightness + " %" : "";
+            if Bk.brightness >= 0: Slide {
+                min: 1;
+                max: 100;
+                value: Bk.brightness;
+                released(v) => { Bk.acti("brightness", v); }
+            }
+            if Bk.has-flicker: Check {
+                label: "Flicker-free dimming";
+                on: Bk.flicker;
+                toggled(v) => { Bk.act("flicker", v ? "on" : "off"); }
+            }
+        }
+        if Bk.color-modes.length > 0: Group {
+            title: "Colour";
+            Seg {
+                opts: Bk.color-modes;
+                index: Bk.color-idx;
+                picked(i) => { Bk.act("color", Bk.color-modes[i].id); }
+            }
+        }
+        if Bk.has-eye: Group {
+            title: "Eye care";
+            value: Bk.eye-kelvin > 0 ? Bk.eye-kelvin + " K" : "off";
+            Check {
+                label: "Warm white point";
+                on: Bk.eye-kelvin > 0;
+                toggled(v) => { Bk.acti("eye", v ? 4500 : 0); }
+            }
+            if Bk.eye-kelvin > 0: Slide {
+                min: 1000;
+                max: 6500;
+                step: 100;
+                value: Bk.eye-kelvin;
+                released(v) => { Bk.acti("eye", v); }
+            }
+        }
+        if Bk.screen-items.length > 0: Group {
+            title: "Panel";
+            for it in Bk.screen-items: HwRow { item: it; }
+        }
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+// Keyboard & Lid
+
+export component KeysWin inherits WinFrame {
+    title: "Keyboard & Lid";
+    HorizontalLayout {
+        spacing: 1.4rem;
+        if Bk.has-light: VerticalLayout {
+            spacing: 1.1rem;
+            min-width: 24rem;
+            alignment: start;
+            Group {
+                title: "Keyboard";
+                value: Bk.kb-level + " / " + Bk.kb-max;
+                Slide {
+                    min: 0;
+                    max: max(Bk.kb-max, 1);
+                    value: Bk.kb-level;
+                    released(v) => { Bk.acti("kb-level", v); }
+                }
+            }
+            if Bk.kb-effects.length > 0: Group {
+                title: "Effect";
+                Stepper {
+                    text: Bk.kb-effect;
+                    prev => { Bk.acti("kb-effect-step", -1); }
+                    next => { Bk.acti("kb-effect-step", 1); }
+                }
+                HorizontalLayout {
+                    spacing: 0.3rem;
+                    for c[i] in [#ffffff, #ff3b30, #ff9500, #ffd60a, #34c759, #0a84ff, #bf5af2, #ff2d92]: Rectangle {
+                        horizontal-stretch: 1;
+                        height: 1.8rem;
+                        border-radius: 2px;
+                        background: c;
+                        border-width: Bk.kb-color-idx == i ? 3px : 1px;
+                        border-color: Bk.kb-color-idx == i ? Th.focus : Th.line;
+                        TouchArea { clicked => { Bk.acti("kb-color", i); } }
+                    }
+                }
+                Seg {
+                    opts: [{ id: "low", label: "Slow", tint: Th.accent }, { id: "med", label: "Normal", tint: Th.accent }, { id: "high", label: "Fast", tint: Th.accent }];
+                    index: Bk.kb-speed;
+                    picked(i) => { Bk.acti("kb-speed", i); }
+                }
+            }
+            Group {
+                title: "Backlight on";
+                GridLayout {
+                    spacing: 0.2rem;
+                    for s[i] in ["Boot", "Awake", "Sleep", "Shutdown"]: Check {
+                        row: floor(i / 2);
+                        col: mod(i, 2);
+                        label: s;
+                        on: Bk.kb-states.length > i && Bk.kb-states[i];
+                        toggled(v) => { Bk.acti("kb-state:" + i, v ? 1 : 0); }
+                    }
+                }
+            }
+            Group {
+                title: "Off after idle";
+                value: Bk.kb-idle;
+                Stepper {
+                    text: Bk.kb-idle;
+                    prev => { Bk.acti("kb-idle-step", -1); }
+                    next => { Bk.acti("kb-idle-step", 1); }
+                }
+            }
+        }
+        if Bk.has-slash || Bk.has-anime: VerticalLayout {
+            spacing: 1.1rem;
+            min-width: 24rem;
+            alignment: start;
+            if Bk.has-slash: Group {
+                title: "Slash";
+                value: Bk.slash-on ? Bk.slash-level + "" : "off";
+                Check { label: "Enabled"; on: Bk.slash-on; toggled(v) => { Bk.act("slash-on", v ? "on" : "off"); } }
+                Slide {
+                    min: 0;
+                    max: 255;
+                    step: 5;
+                    value: Bk.slash-level;
+                    enabled: Bk.slash-on;
+                    released(v) => { Bk.acti("slash-level", v); }
+                }
+                if Bk.slash-modes.length > 0: Stepper {
+                    text: Bk.slash-modes[Bk.slash-mode-idx];
+                    prev => { Bk.acti("slash-mode-step", -1); }
+                    next => { Bk.acti("slash-mode-step", 1); }
+                }
+            }
+            if Bk.has-slash && Bk.slash-show.length > 0: Group {
+                title: "Slash shows on";
+                GridLayout {
+                    spacing: 0.2rem;
+                    for it[i] in Bk.slash-show: Check {
+                        row: floor(i / 2);
+                        col: mod(i, 2);
+                        label: it.label;
+                        on: it.on;
+                        toggled => { Bk.act("hw-toggle", it.name); }
+                    }
+                }
+            }
+            if Bk.has-anime: Group {
+                title: "AniMe Matrix";
+                value: Bk.anime-on ? Bk.anime-level + "" : "off";
+                Check { label: "Enabled"; on: Bk.anime-on; toggled(v) => { Bk.act("anime-on", v ? "on" : "off"); } }
+                Slide { min: 0; max: 3; value: Bk.anime-level; enabled: Bk.anime-on; released(v) => { Bk.acti("anime-level", v); } }
+            }
+        }
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+// System
+
+export component SystemWin inherits WinFrame {
+    title: "System";
+    HorizontalLayout {
+        spacing: 1.4rem;
+        if Bk.has-battery: VerticalLayout {
+            spacing: 1.1rem;
+            min-width: 24rem;
+            alignment: start;
+            Group {
+                title: "Charge limit";
+                value: Bk.bat-limit > 0 ? Bk.bat-limit + " %" : "none";
+                if Bk.bat-opts.length > 0: Seg {
+                    opts: Bk.bat-opts;
+                    index: Bk.bat-idx;
+                    picked(i) => { Bk.acti("bat-limit", Bk.bat-values[i]); }
+                }
+                Check { label: "Charge to 100 % once"; on: Bk.charge-once; toggled(v) => { Bk.act("charge-once", v ? "on" : "off"); } }
+            }
+            Group {
+                title: "Battery";
+                value: Bk.bat-percent >= 0 ? Bk.bat-percent + " %  " + Bk.bat-status : "";
+                for r in [["Health", Bk.bat-health], ["Cycles", Bk.bat-cycles], ["Power", Bk.bat-power], ["Time left", Bk.bat-left]]: HorizontalLayout {
+                    height: 1.5rem;
+                    Cap { text: r[0]; horizontal-stretch: 1; }
+                    Mono { text: r[1] == "" ? "-" : r[1]; }
+                }
+            }
+        }
+        VerticalLayout {
+            spacing: 1.1rem;
+            min-width: 24rem;
+            alignment: start;
+            if Bk.has-fnlock || Bk.system-items.length > 0: Group {
+                title: "Hardware";
+                if Bk.has-fnlock: Check { label: "Fn lock"; on: Bk.fnlock; toggled(v) => { Bk.act("fnlock", v ? "on" : "off"); } }
+                for it in Bk.system-items: HwRow { item: it; }
+            }
+            if Bk.reboot-pending: Group {
+                title: "Reboot to apply";
+                Btn { text: "Reboot"; danger: true; clicked => { Bk.act("reboot", ""); } }
+            }
+            if Bk.has-gpu: Group {
+                title: "dGPU";
+                value: Bk.gpu-state;
+                if Bk.gpu-users.length == 0: Cap { text: "no apps"; }
+                for u in Bk.gpu-users: HorizontalLayout {
+                    height: 1.5rem;
+                    Text { text: u.name; color: Th.text; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                    Mono { text: u.pid; }
+                }
+                if Bk.gpu-message != "": Cap { text: Bk.gpu-message; wrap: word-wrap; }
+            }
+        }
+    }
+}

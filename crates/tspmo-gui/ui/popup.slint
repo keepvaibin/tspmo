@@ -1,0 +1,158 @@
+import { Th } from "theme.slint";
+import { Bk, Opt } from "bk.slint";
+import { Btn, Seg, Field, SlideRow, Row, Cap, Mono } from "controls.slint";
+
+// The flyout: everything needed day to day, no scrolling. The rest opens in its own window.
+export component PopupBody inherits VerticalLayout {
+    padding: 1.2rem;
+    spacing: 1.1rem;
+    min-width: 26rem;
+
+    if !Bk.loaded: Rectangle {
+        height: 26rem;
+        VerticalLayout {
+            spacing: 1.1rem;
+            for h in [4.3rem, 3.9rem, 6.2rem, 2rem, 3.9rem]: Rectangle {
+                height: h;
+                border-radius: Th.radius;
+                background: Th.raised.with-alpha(0.5);
+            }
+        }
+    }
+
+    // Mode
+    if Bk.loaded: VerticalLayout {
+        spacing: 0.4rem;
+        Field { label: "Mode"; value: Bk.fan-text; }
+        Seg {
+            h: 2.8rem;
+            wheel: true;
+            opts: [
+                { id: "eco-plus", label: "Eco+", hint: "1", tint: Th.mode-color("eco-plus"), keyed: true },
+                { id: "power-saver", label: "Silent", hint: "2", tint: Th.mode-color("power-saver"), keyed: true },
+                { id: "balanced", label: "Balanced", hint: "3", tint: Th.mode-color("balanced"), keyed: true },
+                { id: "performance", label: "Turbo", hint: "4", tint: Th.mode-color("performance"), keyed: true },
+            ];
+            index: Bk.mode == "eco-plus" ? 0 : Bk.mode == "power-saver" ? 1 : Bk.mode == "balanced" ? 2 : Bk.mode == "performance" ? 3 : -1;
+            picked(i) => { Bk.act("mode", ["eco-plus", "power-saver", "balanced", "performance"][i]); }
+        }
+    }
+
+    // GPU
+    if Bk.loaded && Bk.has-gpu: VerticalLayout {
+        spacing: 0.4rem;
+        Field { label: "GPU"; value: Bk.gpu-switching != "" ? "switching" : Bk.gpu-state; }
+        Seg {
+            opts: [
+                { id: "eco", label: "Eco", tint: Th.accent },
+                { id: "hybrid", label: "Standard", tint: Th.accent },
+                { id: "ultimate", label: "Ultimate", tint: Th.accent },
+                { id: "optimized", label: "Optimized", tint: Th.accent },
+            ];
+            index: Bk.gpu-policy == "eco" ? 0 : Bk.gpu-policy == "hybrid" ? 1 : Bk.gpu-policy == "ultimate" ? 2 : Bk.gpu-policy == "optimized" ? 3 : -1;
+            enabled: Bk.gpu-switching == "";
+            picked(i) => { Bk.act("gpu", ["eco", "hybrid", "ultimate", "optimized"][i]); }
+        }
+        if Bk.gpu-reboot: Row {
+            h: 2rem;
+            label: "Reboot for " + Bk.gpu-pending;
+            Btn { text: "Reboot"; danger: true; clicked => { Bk.act("reboot", ""); } }
+        }
+    }
+
+    // Screen
+    if Bk.loaded && (Bk.has-refresh || Bk.brightness >= 0 || Bk.has-light): VerticalLayout {
+        spacing: 0.4rem;
+        if Bk.has-refresh: Field { label: "Screen"; value: Bk.refresh-now; }
+        if Bk.has-refresh: Seg {
+            wheel: true;
+            opts: [{ id: "auto", label: "Auto", tint: Th.accent }, { id: "60", label: "60 Hz", tint: Th.accent }, { id: "max", label: "Max", tint: Th.accent }];
+            index: Bk.refresh-policy == "auto" ? 0 : Bk.refresh-policy == "60" ? 1 : Bk.refresh-policy == "max" ? 2 : -1;
+            picked(i) => { Bk.act("refresh", ["auto", "60", "max"][i]); }
+        }
+        if Bk.brightness >= 0: SlideRow {
+            label: "Brightness";
+            min: 1;
+            max: 100;
+            value-int: Bk.brightness;
+            value: Bk.brightness + " %";
+            released(v) => { Bk.acti("brightness", v); }
+        }
+        if Bk.has-light: SlideRow {
+            label: "Keyboard";
+            min: 0;
+            max: max(Bk.kb-max, 1);
+            value-int: Bk.kb-level;
+            value: Bk.kb-level + " / " + Bk.kb-max;
+            released(v) => { Bk.acti("kb-level", v); }
+        }
+    }
+
+    // Battery
+    if Bk.loaded && Bk.has-battery: VerticalLayout {
+        spacing: 0.4rem;
+        Field {
+            label: "Charge limit";
+            value: Bk.bat-percent >= 0 ? Bk.bat-percent + " % " + Bk.bat-status + (Bk.bat-power != "" ? "  " + Bk.bat-power : "") : "";
+        }
+        if Bk.bat-opts.length > 0: Seg {
+            opts: Bk.bat-opts;
+            index: Bk.bat-idx;
+            picked(i) => { Bk.acti("bat-limit", Bk.bat-values[i]); }
+        }
+    }
+
+    // The rest
+    if Bk.loaded && (Bk.win-fans || Bk.win-screen || Bk.win-keys || Bk.win-system): VerticalLayout {
+        spacing: 0.3rem;
+        if Bk.win-fans || Bk.win-screen: HorizontalLayout {
+            spacing: 0.3rem;
+            if Bk.win-fans: Btn { text: "Fans & Power"; hint: "F"; clicked => { Bk.open("fans"); } }
+            if Bk.win-screen: Btn { text: "Screen"; hint: "S"; clicked => { Bk.open("screen"); } }
+        }
+        if Bk.win-keys || Bk.win-system: HorizontalLayout {
+            spacing: 0.3rem;
+            if Bk.win-keys: Btn { text: "Keyboard & Lid"; hint: "K"; clicked => { Bk.open("keys"); } }
+            if Bk.win-system: Btn { text: "System"; hint: "Y"; clicked => { Bk.open("system"); } }
+        }
+    }
+
+    if Bk.error != "": Text {
+        text: Bk.error;
+        color: Th.danger;
+        font-size: 0.85rem;
+        overflow: elide;
+    }
+}
+
+export component Popup inherits Window {
+    no-frame: true;
+    background: transparent;
+    title: "tspmo";
+    default-font-size: Th.font-size;
+    default-font-family: Th.font-family;
+
+    FocusScope {
+        init => { self.focus(); }
+        key-pressed(e) => {
+            if (e.text == Key.Escape) { Bk.close(); return accept; }
+            if (e.modifiers.control || e.modifiers.alt || e.modifiers.meta) { return reject; }
+            if (e.text == "1") { Bk.act("mode", "eco-plus"); return accept; }
+            if (e.text == "2") { Bk.act("mode", "power-saver"); return accept; }
+            if (e.text == "3") { Bk.act("mode", "balanced"); return accept; }
+            if (e.text == "4") { Bk.act("mode", "performance"); return accept; }
+            if (e.text == "f" && Bk.win-fans) { Bk.open("fans"); return accept; }
+            if (e.text == "s" && Bk.win-screen) { Bk.open("screen"); return accept; }
+            if (e.text == "k" && Bk.win-keys) { Bk.open("keys"); return accept; }
+            if (e.text == "y" && Bk.win-system) { Bk.open("system"); return accept; }
+            return reject;
+        }
+        Rectangle {
+            background: Th.bg;
+            border-radius: 0.6rem;
+            border-width: 1px;
+            border-color: Th.line;
+            PopupBody { }
+        }
+    }
+}

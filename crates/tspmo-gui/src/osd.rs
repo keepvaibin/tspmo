@@ -5,6 +5,8 @@ use slint::ComponentHandle;
 use std::time::Duration;
 
 pub struct Args {
+    /// A mode id (`eco-plus`, `performance`, ...) picks the accent; anything else keeps the
+    /// default.
     pub icon: String,
     pub text: String,
     /// 0.0 to 1.0.
@@ -24,12 +26,20 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
 
 pub fn run(args: &[String]) -> Result<(), String> {
     let a = parse(args)?;
+    let layer = crate::use_layer_shell();
+    crate::wl::next_kind(crate::wl::Kind::Osd);
     let win = Osd::new().map_err(|e| e.to_string())?;
-    slint::set_xdg_app_id("org.tspmo.osd").map_err(|e| e.to_string())?;
+    if !layer {
+        slint::set_xdg_app_id("org.tspmo.osd").map_err(|e| e.to_string())?;
+    }
+    let dark = theme::is_dark();
+    let f = theme::fonts();
     let th = win.global::<Th>();
-    th.set_dark(theme::is_dark());
-    th.set_accent_target(crate::app::mode_color(&a.icon));
-    win.set_glyph(a.icon.into());
+    th.set_dark(dark);
+    th.set_font_size(f.px);
+    th.set_font_family(f.family.into());
+    th.set_mono(f.mono.into());
+    th.set_accent_target(crate::app::mode_color(&a.icon, dark));
     win.set_text(a.text.into());
     win.set_value(a.value.unwrap_or(-1.0));
     win.show().map_err(|e| e.to_string())?;

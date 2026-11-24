@@ -1,117 +1,42 @@
 import { Th } from "theme.slint";
 import { Bk, Opt, GpuUser, FanRow, Pt, LimitRow, Item } from "bk.slint";
-import { Icon, Btn } from "controls.slint";
-import { MainPage, FansPage } from "page.slint";
+import { Popup } from "popup.slint";
+import { FansWin, ScreenWin, KeysWin, SystemWin } from "windows.slint";
+import { Cap, Mono } from "controls.slint";
 
-export { Bk, Th, Opt, GpuUser, FanRow, Pt, LimitRow, Item }
+export { Bk, Th, Opt, GpuUser, FanRow, Pt, LimitRow, Item, Popup, FansWin, ScreenWin, KeysWin, SystemWin }
 
-export component Main inherits Window {
-    no-frame: true;
-    background: Th.bg;
-    width: 468px;
-    height: 640px;
-    title: "tspmo";
-    default-font-size: 13px;
-
-    root-focus := FocusScope {
-        key-pressed(e) => {
-            if (e.text == Key.Escape) {
-                Bk.quit();
-                return accept;
-            }
-            if (e.text == "1") { Bk.act("mode", "eco-plus"); return accept; }
-            if (e.text == "2") { Bk.act("mode", "power-saver"); return accept; }
-            if (e.text == "3") { Bk.act("mode", "balanced"); return accept; }
-            if (e.text == "4") { Bk.act("mode", "performance"); return accept; }
-            if (e.text == Key.PageDown || e.text == Key.PageUp) { Bk.acti("section-step", 1); return accept; }
-            return reject;
-        }
-        init => { self.focus(); }
-
-        Rectangle {
-            background: Th.bg;
-            border-width: 1px;
-            border-color: Th.line;
-            clip: true;
-
-            VerticalLayout {
-                padding: 14px;
-                padding-bottom: 8px;
-                spacing: 8px;
-
-                Rectangle {
-                    vertical-stretch: 1;
-                    clip: true;
-                    // The wheel scrolls; dragging does not, so sliders and curve points keep their drags.
-                    TouchArea {
-                        scroll-event(e) => {
-                            flick.content-y = clamp(flick.content-y + e.delta-y, min(0px, flick.height - flick.content-height), 0px);
-                            accept
-                        }
-                    }
-                    flick := Flickable {
-                        content-height: content.preferred-height;
-                        interactive: false;
-                        animate content-y { duration: 90ms; easing: ease-out; }
-                        content := VerticalLayout {
-                            width: parent.width - 14px;
-                            alignment: start;
-                            if Bk.section != "fans": MainPage { }
-                            if Bk.section == "fans": FansPage { }
-                        }
-                    }
-                    if flick.content-height > flick.height: Rectangle {
-                        x: parent.width - 4px;
-                        width: 3px;
-                        y: -flick.content-y / flick.content-height * parent.height;
-                        height: flick.height / flick.content-height * parent.height;
-                        border-radius: 2px;
-                        background: Th.dim.with-alpha(0.5);
-                    }
-                }
-
-                if Bk.error != "": Text {
-                    text: Bk.error;
-                    color: Th.danger;
-                    font-size: 12px;
-                    height: 18px;
-                    overflow: elide;
-                }
-            }
-        }
-    }
-}
-
+// A short note for desktops without their own OSD: text, an optional bar.
 export component Osd inherits Window {
     no-frame: true;
     background: transparent;
-    width: 300px;
-    height: 76px;
     title: "tspmo osd";
-    in property <string> glyph;
+    default-font-size: Th.font-size;
+    default-font-family: Th.font-family;
     in property <string> text;
-    in property <float> value: -1;    Rectangle {
-        background: Th.surface.with-alpha(0.92);
-        border-radius: 20px;
+    in property <float> value: -1;
+    Rectangle {
+        background: Th.bg;
+        border-radius: 0.6rem;
         border-width: 1px;
         border-color: Th.line;
+        min-width: 14rem;
         VerticalLayout {
-            padding: 14px;
-            spacing: 8px;
+            padding: 1rem;
+            spacing: 0.6rem;
             alignment: center;
-            HorizontalLayout {
-                spacing: 10px;
-                alignment: center;
-                Icon { name: root.glyph; size: 24px; tint: Th.accent; y: (parent.height - self.height) / 2; }
-                Text { text: root.text; color: Th.text; font-size: 16px; font-weight: 600; vertical-alignment: center; }
+            Text {
+                text: root.text;
+                color: Th.text;
+                font-size: 1.15rem;
+                font-weight: 600;
+                horizontal-alignment: center;
             }
             if root.value >= 0: Rectangle {
-                height: 6px;
-                border-radius: 3px;
-                background: Th.surface2;
+                height: 0.35rem;
+                background: Th.raised;
                 Rectangle {
                     width: parent.width * clamp(root.value, 0, 1);
-                    border-radius: 3px;
                     background: Th.accent;
                 }
             }

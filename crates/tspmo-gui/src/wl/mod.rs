@@ -346,6 +346,7 @@ impl WindowAdapter for Win {
             h = h.min(m.height);
         }
         let new = (w.ceil().max(1.0) as u32, h.ceil().max(1.0) as u32);
+        if std::env::var_os("TSPMO_DEBUG").is_some() { eprintln!("props {new:?}"); }
         if self.want.get() != Some(new) {
             self.want.set(Some(new));
             self.redraw.set(true);
