@@ -392,6 +392,26 @@ pub fn effect(s: &Store) -> Effect {
 }
 
 impl Effect {
+    /// What can be sent: `None` while no effect is chosen (the daemon reports an empty mode for
+    /// "never set", and an empty string is not an effect). Unset speed, direction and colour
+    /// fall back to medium, right and white, so picking an effect always sends a full value.
+    pub fn completed(&self) -> Option<Effect> {
+        if self.mode.is_empty() {
+            return None;
+        }
+        let mut e = self.clone();
+        if e.speed.is_empty() {
+            e.speed = "med".to_owned();
+        }
+        if e.direction.is_empty() {
+            e.direction = "right".to_owned();
+        }
+        if e.color == (0, 0, 0) {
+            e.color = (255, 255, 255);
+        }
+        Some(e)
+    }
+
     /// The D-Bus argument `(s(yyy)(yyy)ss)`.
     pub fn to_value(&self) -> Value<'static> {
         use zbus::zvariant::StructureBuilder;
@@ -517,6 +537,117 @@ pub fn screen(s: &Store) -> Screen {
     }
 }
 
+/// "rainbow-cycle" to "Rainbow cycle".
+pub fn nice(id: &str) -> String {
+    color_label(&id.replace('-', " "))
+}
+
+/// A mode as the tiles name it.
+pub fn mode_label(mode: &str) -> &'static str {
+    match mode {
+        "eco-plus" => "Eco+",
+        "power-saver" => "Silent",
+        "performance" => "Turbo",
+        _ => "Balanced",
+    }
+}
+
+/// Speed of the fan with this label (`CPU`, `GPU`, `Mid`), 0 if unknown or stopped.
+pub fn fan_rpm(s: &Store, label: &str) -> u32 {
+    s.get("Fans1", "Fans")
+        .list()
+        .iter()
+        .find(|f| f.at(1).str().eq_ignore_ascii_case(label))
+        .map_or(0, |f| rpm_of(s, f.at(0).int() as u32))
+}
+
+/// A temperature the daemon reports (`Fans1.Temps`, `(celsius, label)`); the daemon only lists
+/// sensors that cannot wake a sleeping device.
+pub fn temp_of(s: &Store, label: &str) -> Option<i64> {
+    s.get("Fans1", "Temps")
+        .list()
+        .iter()
+        .find(|t| t.at(1).str().eq_ignore_ascii_case(label))
+        .map(|t| t.at(0).int())
+}
+
+/// `CPU: 52°C  Fan: 2100RPM`, whatever of it is known.
+pub fn mode_info(s: &Store) -> String {
+    let mut v = Vec::new();
+    if let Some(t) = temp_of(s, "CPU") {
+        v.push(format!("CPU: {t}°C"));
+    }
+    let rpm = fan_rpm(s, "CPU");
+    if rpm > 0 {
+        v.push(format!("Fan: {rpm}RPM"));
+    }
+    v.join("  ")
+}
+
+/// What the GPU row shows. Eco+ forces the dGPU off, so while it is the mode in force the row
+/// reads Eco and the other modes are out of reach; otherwise the daemon's own state.
+#[derive(Debug, PartialEq)]
+pub struct GpuView {
+    pub title: String,
+    pub info: String,
+    /// Index into Eco, Standard, Ultimate, Optimized (-1: none).
+    pub index: i32,
+    pub locked: bool,
+}
+
+pub fn gpu_view(s: &Store) -> GpuView {
+    let mode = s.get("Daemon1", "GpuMode").str();
+    let policy = s.get("Daemon1", "GpuPolicy").str();
+    let eco_plus = s.get("Daemon1", "Profile").str() == "eco-plus";
+    let asleep = s.get("Daemon1", "DgpuAsleep").bool();
+    let switching = !s.get("Daemon1", "GpuSwitching").str().is_empty();
+    let title = if eco_plus {
+        "GPU Mode: Eco (Eco+)".to_owned()
+    } else if switching {
+        "GPU Mode: switching".to_owned()
+    } else {
+        match mode {
+            "eco" => "GPU Mode: Eco (iGPU only)".to_owned(),
+            "hybrid" => "GPU Mode: iGPU + dGPU".to_owned(),
+            "ultimate" => "GPU Mode: Ultimate (dGPU only)".to_owned(),
+            m => format!("GPU Mode: {}", color_label(m)),
+        }
+    };
+    let state = if eco_plus || mode == "eco" {
+        "dGPU off"
+    } else if asleep {
+        "dGPU asleep"
+    } else {
+        "dGPU active"
+    };
+    let mut info = vec![state.to_owned()];
+    // Only readings that cannot wake the dGPU: its fan, and a temperature if the daemon offers one.
+    if !eco_plus
+        && !asleep
+        && let Some(t) = temp_of(s, "GPU")
+    {
+        info.insert(0, format!("GPU: {t}°C"));
+    }
+    let rpm = fan_rpm(s, "GPU");
+    if rpm > 0 {
+        info.push(format!("Fan: {rpm}RPM"));
+    }
+    let index = if eco_plus {
+        0
+    } else {
+        ["eco", "hybrid", "ultimate", "optimized"]
+            .iter()
+            .position(|p| *p == policy)
+            .map_or(-1, |i| i as i32)
+    };
+    GpuView {
+        title,
+        info: info.join("  "),
+        index,
+        locked: eco_plus,
+    }
+}
+
 pub fn color_label(id: &str) -> String {
     match id {
         "srgb" => "sRGB".into(),
@@ -533,6 +664,102 @@ pub fn color_label(id: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn dstore(profile: &str, mode: &str, policy: &str, asleep: bool) -> Store {
+        let mut s = Store::default();
+        s.merge(
+            "Daemon1",
+            vec![
+                ("Profile".to_owned(), V::S(profile.into())),
+                ("GpuMode".to_owned(), V::S(mode.into())),
+                ("GpuPolicy".to_owned(), V::S(policy.into())),
+                ("DgpuAsleep".to_owned(), V::B(asleep)),
+            ],
+        );
+        s
+    }
+
+    #[test]
+    fn eco_plus_forces_the_eco_tile() {
+        let v = gpu_view(&dstore("eco-plus", "hybrid", "optimized", true));
+        assert_eq!((v.index, v.locked), (0, true));
+        assert_eq!(v.title, "GPU Mode: Eco (Eco+)");
+        assert_eq!(v.info, "dGPU off");
+    }
+
+    #[test]
+    fn leaving_eco_plus_shows_the_daemon() {
+        let v = gpu_view(&dstore("balanced", "hybrid", "optimized", true));
+        assert_eq!((v.index, v.locked), (3, false));
+        assert_eq!(v.title, "GPU Mode: iGPU + dGPU");
+        assert_eq!(v.info, "dGPU asleep");
+        let v = gpu_view(&dstore("performance", "ultimate", "ultimate", false));
+        assert_eq!((v.index, v.info.as_str()), (2, "dGPU active"));
+    }
+
+    #[test]
+    fn readings_never_include_a_sleeping_gpu() {
+        let mut s = dstore("balanced", "hybrid", "hybrid", true);
+        s.merge(
+            "Fans1",
+            vec![
+                (
+                    "Fans".to_owned(),
+                    V::L(vec![
+                        V::L(vec![V::I(1), V::S("CPU".into())]),
+                        V::L(vec![V::I(2), V::S("GPU".into())]),
+                    ]),
+                ),
+                (
+                    "Rpm".to_owned(),
+                    V::L(vec![
+                        V::L(vec![V::I(1), V::I(2100)]),
+                        V::L(vec![V::I(2), V::I(2300)]),
+                    ]),
+                ),
+                (
+                    "Temps".to_owned(),
+                    V::L(vec![
+                        V::L(vec![V::I(52), V::S("CPU".into())]),
+                        V::L(vec![V::I(40), V::S("GPU".into())]),
+                    ]),
+                ),
+            ],
+        );
+        assert_eq!(mode_info(&s), "CPU: 52°C  Fan: 2100RPM");
+        assert_eq!(gpu_view(&s).info, "dGPU asleep  Fan: 2300RPM");
+        let mut awake = s;
+        awake.merge("Daemon1", vec![("DgpuAsleep".to_owned(), V::B(false))]);
+        assert_eq!(gpu_view(&awake).info, "GPU: 40°C  dGPU active  Fan: 2300RPM");
+    }
+
+    #[test]
+    fn an_unset_effect_is_never_sent_empty() {
+        let unset = Effect {
+            mode: String::new(),
+            color: (0, 0, 0),
+            color2: (0, 0, 0),
+            speed: String::new(),
+            direction: String::new(),
+        };
+        assert!(unset.completed().is_none());
+        let e = Effect {
+            mode: "pulse".into(),
+            ..unset
+        }
+        .completed()
+        .unwrap();
+        assert_eq!(
+            (e.speed.as_str(), e.direction.as_str(), e.color),
+            ("med", "right", (255, 255, 255))
+        );
+    }
+
+    #[test]
+    fn nice_names() {
+        assert_eq!(nice("rainbow-cycle"), "Rainbow cycle");
+        assert_eq!(nice("static"), "Static");
+    }
 
     fn st(iface: &str, props: Vec<(&str, V)>) -> Store {
         let mut s = Store::default();

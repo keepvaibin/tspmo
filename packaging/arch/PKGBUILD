@@ -41,9 +41,11 @@ package_tspmo-git() {
   install -Dm755 "$srcdir/target/release/tspmod" "$pkgdir/usr/bin/tspmod"
   install -Dm755 "$srcdir/target/release/tspmo-gui" "$pkgdir/usr/bin/tspmo-gui"
 
-  # The popup and its ROG-key shortcut: KDE reads X-KDE-Shortcuts from both directories.
+  # The launcher, and the hidden helper that carries the ROG-key shortcut (silent: no launch
+  # feedback); KDE reads X-KDE-Shortcuts from both directories.
   install -Dm644 "$r/data/applications/org.tspmo.gui.desktop" "$pkgdir/usr/share/applications/org.tspmo.gui.desktop"
-  install -Dm644 "$r/data/applications/org.tspmo.gui.desktop" "$pkgdir/usr/share/kglobalaccel/org.tspmo.gui.desktop"
+  install -Dm644 "$r/data/applications/org.tspmo.gui-toggle.desktop" "$pkgdir/usr/share/applications/org.tspmo.gui-toggle.desktop"
+  install -Dm644 "$r/data/applications/org.tspmo.gui-toggle.desktop" "$pkgdir/usr/share/kglobalaccel/org.tspmo.gui-toggle.desktop"
   # Plasma 6 widget.
   install -d "$pkgdir/usr/share/plasma/plasmoids"
   cp -r "$r/data/plasma/org.tspmo.power" "$pkgdir/usr/share/plasma/plasmoids/"

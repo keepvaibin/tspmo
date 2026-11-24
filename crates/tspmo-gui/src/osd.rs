@@ -1,4 +1,5 @@
-//! `tspmo-gui --osd <icon> <text> [value]`: a small overlay for desktops without their own OSD.
+//! `tspmo-gui --osd <icon> <text> [value]`: the on-screen note (bottom centre, 10 % of the screen
+//! height up, click-through, about 1.2 s). The daemon calls it instead of the desktop's own OSD.
 
 use crate::{Osd, Th, theme};
 use slint::ComponentHandle;
@@ -24,7 +25,7 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
     Ok(Args { icon, text, value })
 }
 
-/// The daemon passes theme icon names; the profile ones pick the matching accent.
+/// The daemon passes theme icon names (or mode ids); the profile ones pick the matching accent.
 fn mode_of(icon: &str) -> &str {
     if icon.contains("performance") {
         "performance"
@@ -36,6 +37,41 @@ fn mode_of(icon: &str) -> &str {
         icon
     }
 }
+
+/// One of the UI's own line icons for a theme icon name.
+pub fn icon_of(icon: &str) -> &'static str {
+    let i = icon.to_ascii_lowercase();
+    let has = |w: &[&str]| w.iter().any(|w| i.contains(w));
+    if has(&["performance", "turbo"]) {
+        "performance"
+    } else if has(&["powersave", "eco-plus", "eco+"]) {
+        "eco-plus"
+    } else if has(&["power-saver", "night", "silent"]) {
+        "power-saver"
+    } else if has(&["balanced", "profile"]) {
+        "balanced"
+    } else if has(&["keyboard", "kbd", "aura", "light"]) {
+        "keyboard"
+    } else if has(&["battery", "charge"]) {
+        "battery"
+    } else if has(&["brightness", "display-brightness", "sun"]) {
+        "sun"
+    } else if has(&["gpu", "chip", "graphics"]) {
+        "chip"
+    } else if has(&["screen", "display", "monitor", "refresh"]) {
+        "screen"
+    } else if has(&["fan", "tune"]) {
+        "tune"
+    } else if has(&["slash"]) {
+        "slash"
+    } else {
+        "gauge"
+    }
+}
+
+/// Fade in, hold, fade out: gone after this long.
+const TOTAL: Duration = Duration::from_millis(1200);
+const FADE_OUT_AT: Duration = Duration::from_millis(950);
 
 pub fn run(args: &[String]) -> Result<(), String> {
     let a = parse(args)?;
@@ -58,9 +94,17 @@ pub fn run(args: &[String]) -> Result<(), String> {
     th.set_mono(f.mono.into());
     th.set_accent_target(crate::app::mode_color(mode_of(&a.icon), dark));
     win.set_text(a.text.into());
+    win.set_glyph(icon_of(&a.icon).into());
     win.set_value(a.value.unwrap_or(-1.0));
     win.show().map_err(|e| e.to_string())?;
-    slint::Timer::single_shot(Duration::from_millis(1500), || {
+    win.set_shown(true);
+    let weak = win.as_weak();
+    slint::Timer::single_shot(FADE_OUT_AT, move || {
+        if let Some(w) = weak.upgrade() {
+            w.set_shown(false);
+        }
+    });
+    slint::Timer::single_shot(TOTAL, || {
         let _ = slint::quit_event_loop();
     });
     slint::run_event_loop().map_err(|e| e.to_string())
@@ -72,6 +116,15 @@ mod tests {
 
     fn v(a: &[&str]) -> Vec<String> {
         a.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn theme_icons_become_line_icons() {
+        assert_eq!(icon_of("battery-profile-performance"), "performance");
+        assert_eq!(icon_of("battery-profile-powersave"), "eco-plus");
+        assert_eq!(icon_of("input-keyboard"), "keyboard");
+        assert_eq!(icon_of("display-brightness"), "sun");
+        assert_eq!(icon_of("whatever"), "gauge");
     }
 
     #[test]
