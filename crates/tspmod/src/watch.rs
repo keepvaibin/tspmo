@@ -104,6 +104,7 @@ pub fn resume(conn: Connection, shared: Shared) {
                 d.apply(true);
                 tspmo_core::usbpm::apply(&d.root);
                 drop(d);
+                crate::events::publish(&crate::events::Event::Resumed);
                 emit_changed_blocking(&conn, &shared);
             }
         }

@@ -134,6 +134,11 @@ impl Daemon {
             );
         }
         self.applied = Some(key);
+        crate::events::publish(&crate::events::Event::ProfileApplied {
+            profile: key.0,
+            eco_plus: false,
+            on_battery: key.1,
+        });
     }
 
     /// The user picked a profile (from KDE/GNOME, the GUI, the CLI or a hotkey).
@@ -165,6 +170,7 @@ impl Daemon {
             return false;
         }
         self.on_battery = on_battery;
+        crate::events::publish(&crate::events::Event::PowerSource { on_battery });
         self.apply(false);
         true
     }

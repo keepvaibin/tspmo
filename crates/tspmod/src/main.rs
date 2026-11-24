@@ -4,8 +4,10 @@
 //! power-profiles-daemon) and `org.tspmo.Daemon1`.
 
 mod dbus;
+mod events;
 mod gpu;
 mod polkit;
+mod session;
 mod state;
 mod watch;
 
