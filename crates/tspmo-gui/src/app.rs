@@ -611,7 +611,7 @@ impl App {
                     );
                 }
             }
-            "kb-effect" => {
+            "kb-effect" if !arg.is_empty() => {
                 let mut e = model::effect(s);
                 e.mode = arg.to_owned();
                 self.set_effect(&e);
@@ -640,7 +640,12 @@ impl App {
             "pw-source" => self.pw_source = n.clamp(0, 1) as usize,
             "kb-level" => self.send("Lighting1", "SetBrightness", &[Arg::s(""), Arg::N(n)]),
             "kb-effect-step" => {
-                let modes = s.get("Lighting1", "Modes").strings();
+                let modes: Vec<String> = s
+                    .get("Lighting1", "Modes")
+                    .strings()
+                    .into_iter()
+                    .filter(|m| !m.is_empty())
+                    .collect();
                 let mut e = model::effect(s);
                 if let Some(next) = model::cycle(&modes, &e.mode, n) {
                     e.mode = next.clone();
@@ -675,7 +680,7 @@ impl App {
                 }
             }
             "slash-mode-set" => {
-                let modes = s.get("Lid1", "SlashModes").strings();
+                let modes = slash_modes(s);
                 if let Some(m) = modes.get(n.max(0) as usize) {
                     self.send("Lid1", "SetSlashMode", &[Arg::s(m)]);
                 }
@@ -683,7 +688,7 @@ impl App {
             "slash-interval" => self.send("Lid1", "SetSlashInterval", &[Arg::N(n.clamp(0, 255))]),
             "slash-level" => self.send("Lid1", "SetSlashBrightness", &[Arg::N(n)]),
             "slash-mode-step" => {
-                let modes = s.get("Lid1", "SlashModes").strings();
+                let modes = slash_modes(s);
                 if let Some(m) = model::cycle(&modes, s.get("Lid1", "SlashMode").str(), n) {
                     self.send("Lid1", "SetSlashMode", &[Arg::s(m)]);
                 }
@@ -738,6 +743,7 @@ impl App {
     }
 
     fn set_effect(&self, e: &model::Effect) {
+        let Some(e) = e.completed() else { return };
         self.call(Call::new(
             "Lighting1",
             "SetEffect",
@@ -1121,7 +1127,7 @@ impl App {
                 .collect(),
         );
         let ef = model::effect(s);
-        let kmodes = s.get(k, "Modes").strings();
+        let kmodes: Vec<String> = s.get(k, "Modes").strings().into_iter().filter(|m| !m.is_empty()).collect();
         sync(
             &self.m.kb_effect_labels,
             kmodes.iter().map(|m| ss(&model::nice(m))).collect(),
@@ -1134,7 +1140,7 @@ impl App {
         }));
         sync(
             &self.m.kb_effects,
-            s.get(k, "Modes").strings().iter().map(|m| opt(m, m)).collect(),
+            kmodes.iter().map(|m| opt(m, m)).collect(),
         );
         bk.set_kb_effect(ss(&if ef.mode.is_empty() {
             "Firmware".to_owned()
@@ -1193,7 +1199,7 @@ impl App {
         };
         bk.set_slash_batt(shows("battery"));
         bk.set_slash_lid(shows("lid"));
-        let modes = s.get(l, "SlashModes").strings();
+        let modes = slash_modes(s);
         bk.set_slash_mode_idx(
             modes
                 .iter()
@@ -1263,6 +1269,15 @@ pub fn mode_color(mode: &str, dark: bool) -> slint::Color {
 
 /// Slash brightness behind Low, Medium and High (0-255).
 const SLASH_LEVELS: [i64; 3] = [85, 170, 255];
+
+/// Every Slash mode the daemon lists (never an empty one).
+fn slash_modes(s: &Store) -> Vec<String> {
+    s.get("Lid1", "SlashModes")
+        .strings()
+        .into_iter()
+        .filter(|m| !m.is_empty())
+        .collect()
+}
 
 fn idle_label(secs: i64) -> String {
     match secs {

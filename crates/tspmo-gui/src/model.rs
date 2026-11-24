@@ -392,6 +392,26 @@ pub fn effect(s: &Store) -> Effect {
 }
 
 impl Effect {
+    /// What can be sent: `None` while no effect is chosen (the daemon reports an empty mode for
+    /// "never set", and an empty string is not an effect). Unset speed, direction and colour
+    /// fall back to medium, right and white, so picking an effect always sends a full value.
+    pub fn completed(&self) -> Option<Effect> {
+        if self.mode.is_empty() {
+            return None;
+        }
+        let mut e = self.clone();
+        if e.speed.is_empty() {
+            e.speed = "med".to_owned();
+        }
+        if e.direction.is_empty() {
+            e.direction = "right".to_owned();
+        }
+        if e.color == (0, 0, 0) {
+            e.color = (255, 255, 255);
+        }
+        Some(e)
+    }
+
     /// The D-Bus argument `(s(yyy)(yyy)ss)`.
     pub fn to_value(&self) -> Value<'static> {
         use zbus::zvariant::StructureBuilder;
@@ -708,6 +728,28 @@ mod tests {
         let mut awake = s;
         awake.merge("Daemon1", vec![("DgpuAsleep".to_owned(), V::B(false))]);
         assert_eq!(gpu_view(&awake).info, "GPU: 40°C  dGPU active  Fan: 2300RPM");
+    }
+
+    #[test]
+    fn an_unset_effect_is_never_sent_empty() {
+        let unset = Effect {
+            mode: String::new(),
+            color: (0, 0, 0),
+            color2: (0, 0, 0),
+            speed: String::new(),
+            direction: String::new(),
+        };
+        assert!(unset.completed().is_none());
+        let e = Effect {
+            mode: "pulse".into(),
+            ..unset
+        }
+        .completed()
+        .unwrap();
+        assert_eq!(
+            (e.speed.as_str(), e.direction.as_str(), e.color),
+            ("med", "right", (255, 255, 255))
+        );
     }
 
     #[test]

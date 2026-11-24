@@ -485,9 +485,11 @@ export component ColorBtn inherits Rectangle {
     in property <int> index;
     in property <bool> right: true;
     in property <bool> up: true;
+    in property <bool> enabled: true;
     callback picked(int);
     height: Th.control - 2 * Th.dp;
     border-radius: Th.radius;
+    opacity: enabled ? 1 : 0.4;
     background: ta.pressed ? Th.pressed : ta.has-hover ? Th.hover : Th.raised;
     animate background { duration: 100ms; }
     HorizontalLayout {
@@ -534,6 +536,7 @@ export component ColorBtn inherits Rectangle {
         }
     }
     fs := FocusScope {
+        enabled: root.enabled;
         key-pressed(e) => {
             Nav.keys = true;
             if (e.text == Key.LeftArrow || e.text == Key.UpArrow) {
@@ -552,6 +555,7 @@ export component ColorBtn inherits Rectangle {
         }
     }
     ta := TouchArea {
+        enabled: root.enabled;
         clicked => {
             fs.focus();
             Nav.keys = false;

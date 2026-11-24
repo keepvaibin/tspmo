@@ -1,6 +1,6 @@
 import { Th, Nav } from "theme.slint";
 import { Bk, Item } from "bk.slint";
-import { Btn, IconBtn, Seg, Check, Slide, SlideRow, Stepper, Row, Head, Cap, Mono, Rule } from "controls.slint";
+import { Btn, IconBtn, Combo, Seg, Check, Slide, SlideRow, Stepper, Row, Head, Cap, Mono, Rule } from "controls.slint";
 import { CurveEditor } from "curve.slint";
 
 // One firmware item: a checkbox, a stepper for choices and numbers, or plain text.
@@ -30,10 +30,13 @@ component HwRow inherits Rectangle {
 component Swatches inherits Rectangle {
     in property <[color]> colors;
     in property <int> index;
+    in property <bool> enabled: true;
     callback picked(int);
     property <int> cur: index;
     height: 20 * Th.dp;
+    opacity: enabled ? 1 : 0.4;
     fs := FocusScope {
+        enabled: root.enabled;
         changed has-focus => {
             if (self.has-focus && Nav.keys) {
                 root.cur = max(root.index, 0);
@@ -282,11 +285,12 @@ export component KeysWin inherits WinFrame {
             if Bk.kb-effects.length > 0: Group {
                 title: "Effect";
                 Stepper {
-                    text: Bk.kb-effect;
+                    text: Bk.kb-effect-idx < 0 ? "Choose effect" : Bk.kb-effect;
                     prev => { Bk.acti("kb-effect-step", -1); }
                     next => { Bk.acti("kb-effect-step", 1); }
                 }
                 Swatches {
+                    enabled: Bk.kb-effect-idx >= 0;
                     colors: [#ffffff, #ff3b30, #ff9500, #ffd60a, #34c759, #0a84ff, #bf5af2, #ff2d92];
                     index: Bk.kb-color-idx;
                     picked(i) => { Bk.acti("kb-color", i); }
@@ -294,6 +298,7 @@ export component KeysWin inherits WinFrame {
                 Seg {
                     opts: [{ id: "low", label: "Slow", tint: Th.accent }, { id: "med", label: "Normal", tint: Th.accent }, { id: "high", label: "Fast", tint: Th.accent }];
                     index: Bk.kb-speed;
+                    enabled: Bk.kb-effect-idx >= 0;
                     picked(i) => { Bk.acti("kb-speed", i); }
                 }
             }
@@ -335,10 +340,29 @@ export component KeysWin inherits WinFrame {
                     enabled: Bk.slash-on;
                     released(v) => { Bk.acti("slash-level", v); }
                 }
-                if Bk.slash-modes.length > 0: Stepper {
-                    text: Bk.slash-modes[Bk.slash-mode-idx];
-                    prev => { Bk.acti("slash-mode-step", -1); }
-                    next => { Bk.acti("slash-mode-step", 1); }
+                if Bk.slash-modes.length > 0: Combo {
+                    items: Bk.slash-modes;
+                    index: Bk.slash-mode-idx;
+                    picked(i) => { Bk.acti("slash-mode-set", i); }
+                }
+                HorizontalLayout {
+                    spacing: 6 * Th.dp;
+                    Combo {
+                        horizontal-stretch: 1;
+                        preferred-width: 0px;
+                        items: ["Off", "Low", "Medium", "High"];
+                        index: Bk.slash-bright-idx;
+                        picked(i) => { Bk.acti("slash-bright", i); }
+                    }
+                    Combo {
+                        horizontal-stretch: 1;
+                        preferred-width: 0px;
+                        right: true;
+                        items: ["Interval Off", "Interval 1", "Interval 2", "Interval 3", "Interval 4", "Interval 5"];
+                        index: Bk.slash-interval;
+                        text: Bk.slash-interval > 5 ? "Interval " + Bk.slash-interval : "";
+                        picked(i) => { Bk.acti("slash-interval", i); }
+                    }
                 }
             }
             if Bk.has-slash && Bk.slash-show.length > 0: Group {

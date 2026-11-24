@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Name=tspmo (ROG key)
+Comment=Open or close the tspmo window
+Exec=tspmo-gui --toggle
+Icon=preferences-system-power-management
+Terminal=false
+# Helper for the global shortcut only: not in menus, never a launch of the application.
+NoDisplay=true
+StartupNotify=false
+X-KDE-StartupNotify=false
+# ROG / Armoury key: KEY_PROG1 (148) from hid-asus, xkb XF86Launch1.
+X-KDE-Shortcuts=Launch (1)
