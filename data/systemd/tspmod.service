@@ -3,8 +3,9 @@ Description=tspmo daemon (power profiles, GPU modes, hardware control)
 Documentation=https://github.com/tspmo/tspmo
 # tspmod provides the power-profiles API itself.
 Conflicts=power-profiles-daemon.service tuned-ppd.service
-# Before the login screen, so the GPU mode and compositor settings are in place before any
-# compositor opens a GPU.
+# Before the login screen, so the compositor settings (environment file) are in place before
+# any compositor starts. The GPU policy is NOT applied this early: tspmod waits for the boot to
+# settle (drm-module-load.target, else the display manager) before it touches the dGPU's power.
 Before=display-manager.service
 After=upower.service
 Wants=upower.service

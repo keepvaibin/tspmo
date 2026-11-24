@@ -88,3 +88,42 @@ eco_uncore_mhz=1600  # or "off"
 `tspmo_core::topology` classifies cores as performance, efficiency and low-power efficiency (no L3)
 from `/sys/devices/cpu_core` and `cpu_atom` on Intel hybrid CPUs, and by maximum clock on others.
 The bench uses it for `cpus=e|lpe|p`.
+
+## Known hazards
+
+Two incidents on the GU605MI, both caused by tspmo touching the NVIDIA GPU at the wrong time.
+Both are fixed; the rules stay.
+
+**1. Reading the dGPU wakes it, and a wake at the wrong moment kills it.** Reading
+`/sys/class/backlight/nvidia_0/brightness` (or `actual_brightness`) goes through
+`nvkms_get_backlight_brightness` and runtime-resumes the GPU. At 03:18 such a read coincided with
+a power-source event; the driver's GSP timed out (Xid 119/154) and the RTX 4070 was gone until
+reboot. Rules now:
+
+- `tspmo_sys::backlight::list` lists NVIDIA backlights by name and type only (`sampled = false`,
+  values never read); `hwmon::list` skips hwmon devices that sit on an NVIDIA GPU;
+  `display::internal_panel` reads only the connectors of the GPU that drives the panel;
+  `tspmo dump` copies nothing from NVIDIA backlights, hwmon, DRM connectors or `/proc/driver/nvidia`
+  (`pci::touches_dgpu`).
+- Of an NVIDIA PCI device only `vendor`, `device`, `class`, `boot_vga`, `power_state`,
+  `power/control` and `power/runtime_status` are read, and `/proc/<pid>/fd` links. Nothing
+  reads `/proc/driver/nvidia/*`, the dGPU's `hwmon`, or its connectors' `status`, `edid`, `modes`.
+- Tests: a poisoned (mode 000) `nvidia_0/brightness`, hwmon `name` and dump source must not be read.
+
+**2. Emergency mode at boot.** CachyOS's `drm-module-awaiter-generator` creates
+`drm-module-load.target` (`JobTimeoutSec=60`, `OnFailure=emergency.target`,
+`Before=display-manager.service`) whenever an NVIDIA GPU exists at generator time; it waits for
+`sys-module-nvidia_drm.device`. On battery with policy Optimized, `tspmod` switched to Eco at
+start-up, before `nvidia_drm` had loaded: "NVRM: No NVIDIA GPU found", the target timed out, the
+system went to emergency mode. Rules now:
+
+- At start-up `tspmod` applies the power profile and the compositor environment at once, but not
+  the GPU policy (`boot.rs`). It waits on systemd's `JobRemoved` signals (no polling) for
+  `drm-module-load.target` to be `active` (or `failed`), else `display-manager.service`, else
+  `graphical.target`, then runs the normal live switch. The upper bound is 5 minutes.
+- Never while the driver is still loading: with an NVIDIA GPU present and `nvidia_drm` not loaded,
+  and the awaiter target or the `nvidia` module present, the policy is held back even after the
+  bound.
+- GPU changes asked for before then (`SetGpuMode`) get "The system is still starting; try again
+  in a minute."
+- The unit keeps `Before=display-manager.service` for the compositor environment only.

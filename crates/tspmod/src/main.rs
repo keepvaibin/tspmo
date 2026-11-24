@@ -3,6 +3,7 @@
 //! Runs as root under systemd. Owns the power-profiles D-Bus API (replacing
 //! power-profiles-daemon) and `org.tspmo.Daemon1`.
 
+mod boot;
 mod dbus;
 mod display;
 mod events;
@@ -38,7 +39,6 @@ fn run() -> zbus::Result<()> {
         eprintln!("tspmod: internal USB devices allowed to sleep: {n}");
     }
     daemon.write_compositor_env();
-    gpu::enforce_at_boot(&mut daemon);
     // The screen starts from the power state the daemon just applied (its event fired before
     // the display could listen).
     let mut screen_state = display::State::new(daemon.root.clone(), daemon.on_battery);
@@ -80,6 +80,8 @@ fn run() -> zbus::Result<()> {
     // The display listens before the watchers can publish anything.
     display::start(conn.inner(), &screen);
     watch::all(&conn, &shared);
+    // The GPU policy waits for the boot to settle (see boot.rs).
+    boot::start(conn.inner(), &shared);
 
     // All work happens on the D-Bus executor and the watcher threads.
     loop {

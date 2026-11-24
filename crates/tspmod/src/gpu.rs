@@ -31,6 +31,9 @@ const NVIDIA_MODULES: &[&str] = &["nvidia_drm", "nvidia_modeset", "nvidia_uvm", 
 pub const NEEDS_FRESH_SESSION: &str = "The desktop was started before tspmo was set up, so it still has the NVIDIA \
      driver loaded. Log out and back in once; after that Eco and Hybrid switch instantly.";
 
+/// Shown when a GPU change is asked for before the boot has settled (see `boot.rs`).
+pub const STILL_STARTING: &str = "The system is still starting; try again in a minute.";
+
 #[derive(Debug)]
 pub enum Outcome {
     Done(String),
@@ -153,6 +156,9 @@ impl Drop for MuteDisplaySwitchKey {
 
 /// Fast checks for problems the user can act on, before any slow work starts.
 pub fn precheck(root: &SysRoot, st: &Status, target: Mode) -> Result<(), String> {
+    if !crate::boot::allowed() {
+        return Err(STILL_STARTING.into());
+    }
     match st.switcher {
         Switcher::None if target != Mode::Hybrid => {
             return Err("this laptop has no firmware GPU switch".into());
@@ -304,6 +310,10 @@ pub fn switch(root: &SysRoot, st: &Status, target: Mode) -> Result<Outcome, Stri
 
 /// What the policy wants right now, if it differs from the hardware and can be done live.
 pub fn policy_target(d: &crate::state::Daemon) -> Option<Mode> {
+    // Not while the boot is still bringing the display stack (and the NVIDIA driver) up.
+    if !crate::boot::allowed() {
+        return None;
+    }
     let target = d.gpu_policy.target(d.on_battery);
     let st = d.gpu_status();
     let live = st.mode != Mode::Ultimate && target != Mode::Ultimate && st.pending.is_none();
@@ -387,20 +397,4 @@ pub fn enforce(conn: &zbus::Connection, shared: &Shared) {
         }
         None => lock(shared).gpu_waiting = false,
     }
-}
-
-/// At start-up, before D-Bus is up: apply the policy synchronously.
-pub fn enforce_at_boot(d: &mut crate::state::Daemon) {
-    let Some(target) = policy_target(d) else { return };
-    let st = d.gpu_status();
-    let result = switch(&d.root, &st, target);
-    d.gpu_cache = crate::state::Daemon::read_gpu_status(&d.root, d.boot_mux);
-    d.gpu_message = match result {
-        Ok(o) => o.message().to_owned(),
-        Err(e) => {
-            d.gpu_waiting = e != NEEDS_FRESH_SESSION;
-            format!("Waiting to switch to {target}: {e}")
-        }
-    };
-    eprintln!("tspmod: gpu: {}", d.gpu_message);
 }
