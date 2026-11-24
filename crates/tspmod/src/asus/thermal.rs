@@ -601,8 +601,16 @@ mod tests {
         t.on_profile(Profile::PowerSaver, false);
         for fan in 1..=3 {
             assert_eq!(fx.get(&format!("{HW}/pwm{fan}_enable")), "1");
-            assert_eq!(fx.get(&format!("{HW}/pwm{fan}_auto_point1_pwm")), "0", "fan {fan}");
-            assert_eq!(fx.get(&format!("{HW}/pwm{fan}_auto_point2_pwm")), "0", "fan {fan}");
+            assert_eq!(
+                fx.get(&format!("{HW}/pwm{fan}_auto_point1_pwm")),
+                "0",
+                "fan {fan}"
+            );
+            assert_eq!(
+                fx.get(&format!("{HW}/pwm{fan}_auto_point2_pwm")),
+                "0",
+                "fan {fan}"
+            );
         }
         // ... and is back, not Eco+'s curve, when Eco+ ends.
         t.set_eco(false);
