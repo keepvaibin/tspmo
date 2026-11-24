@@ -101,7 +101,8 @@ impl Platform for Headless {
             scale,
             resized: Cell::new(false),
         });
-        w.window.dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor: scale });
+        w.window
+            .dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor: scale });
         SNAP.with(|s| *s.borrow_mut() = Some(w.clone()));
         Ok(w)
     }
@@ -111,7 +112,10 @@ impl Platform for Headless {
 }
 
 fn arg(args: &[String], name: &str) -> Option<String> {
-    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
+    args.iter()
+        .position(|a| a == name)
+        .and_then(|i| args.get(i + 1))
+        .cloned()
 }
 
 pub fn run(args: &[String]) -> Result<(), String> {
@@ -139,7 +143,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
             && w.resized.replace(false)
         {
             let (lw, lh) = w.want.get();
-            w.window.dispatch_event(WindowEvent::Resized { size: LogicalSize::new(lw, lh) });
+            w.window.dispatch_event(WindowEvent::Resized {
+                size: LogicalSize::new(lw, lh),
+            });
         }
         // Drawing is what keeps Slint's layout tracking alive, as in a real window.
         if let Some(w) = SNAP.with(|s| s.borrow().clone()) {

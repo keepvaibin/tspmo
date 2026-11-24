@@ -11,9 +11,7 @@ use smithay_client_toolkit::reexports::client::globals::{GlobalList, registry_qu
 use smithay_client_toolkit::reexports::client::protocol::{
     wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface,
 };
-use smithay_client_toolkit::reexports::client::{
-    Connection, Dispatch, QueueHandle, delegate_noop,
-};
+use smithay_client_toolkit::reexports::client::{Connection, Dispatch, QueueHandle, delegate_noop};
 use smithay_client_toolkit::reexports::protocols::wp::cursor_shape::v1::client::{
     wp_cursor_shape_device_v1::{Shape, WpCursorShapeDeviceV1},
     wp_cursor_shape_manager_v1::WpCursorShapeManagerV1,
@@ -26,15 +24,12 @@ use smithay_client_toolkit::reexports::protocols::wp::viewporter::client::{
     wp_viewport::WpViewport, wp_viewporter::WpViewporter,
 };
 use smithay_client_toolkit::registry::{ProvidesRegistryState, RegistryState};
-use smithay_client_toolkit::seat::keyboard::{
-    KeyEvent, KeyboardHandler, Keysym, Modifiers,
-};
+use smithay_client_toolkit::seat::keyboard::{KeyEvent, KeyboardHandler, Keysym, Modifiers};
 use smithay_client_toolkit::seat::pointer::{PointerEvent, PointerEventKind, PointerHandler};
 use smithay_client_toolkit::seat::{Capability, SeatHandler, SeatState};
 use smithay_client_toolkit::shell::WaylandSurface;
 use smithay_client_toolkit::shell::wlr_layer::{
-    Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
-    LayerSurfaceConfigure,
+    Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface, LayerSurfaceConfigure,
 };
 use smithay_client_toolkit::shell::xdg::XdgShell;
 use smithay_client_toolkit::shell::xdg::window::{
@@ -80,7 +75,7 @@ pub struct State {
     shm: Shm,
     pool: SlotPool,
     compositor: CompositorState,
-    layer_shell: LayerShell,
+    layer_shell: Option<LayerShell>,
     xdg_shell: Option<XdgShell>,
     viewporter: Option<WpViewporter>,
     frac_mgr: Option<WpFractionalScaleManagerV1>,
@@ -106,12 +101,18 @@ impl State {
         let (globals, queue) = registry_queue_init::<State>(&conn).ok()?;
         let qh = queue.handle();
         let compositor = CompositorState::bind(&globals, &qh).ok()?;
-        let layer_shell = LayerShell::bind(&globals, &qh).ok()?;
+        let layer_shell = LayerShell::bind(&globals, &qh).ok();
+        let xdg_shell = XdgShell::bind(&globals, &qh).ok();
+        if layer_shell.is_none() && xdg_shell.is_none() {
+            return None;
+        }
         let shm = Shm::bind(&globals, &qh).ok()?;
         let pool = SlotPool::new(1 << 20, &shm).ok()?;
         let ev: EventLoop<'static, State> = EventLoop::try_new().ok()?;
         let loop_handle = ev.handle();
-        WaylandSource::new(conn.clone(), queue).insert(loop_handle.clone()).ok()?;
+        WaylandSource::new(conn.clone(), queue)
+            .insert(loop_handle.clone())
+            .ok()?;
         let bind = |g: &GlobalList| {
             (
                 g.bind::<WpViewporter, _, _>(&qh, 1..=1, ()).ok(),
@@ -124,7 +125,7 @@ impl State {
             registry: RegistryState::new(&globals),
             seats: SeatState::new(&globals, &qh),
             outputs: OutputState::new(&globals, &qh),
-            xdg_shell: XdgShell::bind(&globals, &qh).ok(),
+            xdg_shell,
             qh,
             shm,
             pool,
@@ -163,7 +164,9 @@ impl State {
     }
 
     pub fn can_draw(&self, id: usize) -> bool {
-        self.surfs.get(&id).is_some_and(|s| s.configured && !s.frame_pending)
+        self.surfs
+            .get(&id)
+            .is_some_and(|s| s.configured && !s.frame_pending)
     }
 
     pub fn set_title(&mut self, id: usize, title: &str) {
@@ -174,7 +177,10 @@ impl State {
 
     pub fn create(&mut self, id: usize, kind: Kind, size: (u32, u32), title: &str, app_id: &str) {
         let wl = self.compositor.create_surface(&self.qh);
-        let viewport = self.viewporter.as_ref().map(|v| v.get_viewport(&wl, &self.qh, ()));
+        let viewport = self
+            .viewporter
+            .as_ref()
+            .map(|v| v.get_viewport(&wl, &self.qh, ()));
         let frac = self
             .frac_mgr
             .as_ref()
@@ -191,12 +197,23 @@ impl State {
             frame_pending: false,
             logical: size,
         };
-        match kind {
-            Kind::Popup | Kind::Osd => {
-                let layer = self.layer_shell.create_layer_surface(
+        // Without layer-shell the popup is an ordinary window.
+        let kind = if self.layer_shell.is_none() {
+            Kind::Window
+        } else {
+            kind
+        };
+        s.kind = kind;
+        match (kind, &self.layer_shell) {
+            (Kind::Popup | Kind::Osd, Some(shell)) => {
+                let layer = shell.create_layer_surface(
                     &self.qh,
                     wl,
-                    if kind == Kind::Osd { Layer::Overlay } else { Layer::Top },
+                    if kind == Kind::Osd {
+                        Layer::Overlay
+                    } else {
+                        Layer::Top
+                    },
                     Some(if kind == Kind::Osd { "tspmo-osd" } else { "tspmo" }),
                     None,
                 );
@@ -218,7 +235,7 @@ impl State {
                 layer.commit();
                 s.layer = Some(layer);
             }
-            Kind::Window => {
+            _ => {
                 if let Some(x) = &self.xdg_shell {
                     let w = x.create_window(wl, WindowDecorations::RequestServer, &self.qh);
                     w.set_title(title.to_owned());
@@ -403,13 +420,7 @@ impl CompositorHandler for State {
         _: wl_output::Transform,
     ) {
     }
-    fn frame(
-        &mut self,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-        surface: &wl_surface::WlSurface,
-        _: u32,
-    ) {
+    fn frame(&mut self, _: &Connection, _: &QueueHandle<Self>, surface: &wl_surface::WlSurface, _: u32) {
         if let Some(id) = self.id_of(surface)
             && let Some(s) = self.surfs.get_mut(&id)
         {
@@ -623,7 +634,9 @@ impl PointerHandler for State {
         events: &[PointerEvent],
     ) {
         for e in events {
-            let Some(id) = self.id_of(&e.surface) else { continue };
+            let Some(id) = self.id_of(&e.surface) else {
+                continue;
+            };
             let position = slint::LogicalPosition::new(e.position.0 as f32, e.position.1 as f32);
             match e.kind {
                 PointerEventKind::Enter { serial } => {
@@ -654,15 +667,25 @@ impl PointerHandler for State {
                         self.push(id, WindowEvent::PointerReleased { position, button });
                     }
                 }
-                PointerEventKind::Axis { horizontal, vertical, .. } => {
+                PointerEventKind::Axis {
+                    horizontal, vertical, ..
+                } => {
                     let d = |a: smithay_client_toolkit::seat::pointer::AxisScroll| {
-                        if a.discrete != 0 { -(a.discrete as f32) * 20.0 } else { -(a.absolute as f32) }
+                        if a.discrete != 0 {
+                            -(a.discrete as f32) * 20.0
+                        } else {
+                            -(a.absolute as f32)
+                        }
                     };
                     let (dx, dy) = (d(horizontal), d(vertical));
                     if dx != 0.0 || dy != 0.0 {
                         self.push(
                             id,
-                            WindowEvent::PointerScrolled { position, delta_x: dx, delta_y: dy },
+                            WindowEvent::PointerScrolled {
+                                position,
+                                delta_x: dx,
+                                delta_y: dy,
+                            },
                         );
                     }
                 }

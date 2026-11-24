@@ -24,11 +24,28 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
     Ok(Args { icon, text, value })
 }
 
+/// The daemon passes theme icon names; the profile ones pick the matching accent.
+fn mode_of(icon: &str) -> &str {
+    if icon.contains("performance") {
+        "performance"
+    } else if icon.contains("powersave") {
+        "eco-plus"
+    } else if icon.contains("night") {
+        "power-saver"
+    } else {
+        icon
+    }
+}
+
 pub fn run(args: &[String]) -> Result<(), String> {
     let a = parse(args)?;
     let layer = crate::use_layer_shell();
+    if !layer && !cfg!(feature = "winit") {
+        return Err("no Wayland compositor".into());
+    }
     crate::wl::next_kind(crate::wl::Kind::Osd);
     let win = Osd::new().map_err(|e| e.to_string())?;
+    #[cfg(feature = "winit")]
     if !layer {
         slint::set_xdg_app_id("org.tspmo.osd").map_err(|e| e.to_string())?;
     }
@@ -39,7 +56,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     th.set_font_size(f.px);
     th.set_font_family(f.family.into());
     th.set_mono(f.mono.into());
-    th.set_accent_target(crate::app::mode_color(&a.icon, dark));
+    th.set_accent_target(crate::app::mode_color(mode_of(&a.icon), dark));
     win.set_text(a.text.into());
     win.set_value(a.value.unwrap_or(-1.0));
     win.show().map_err(|e| e.to_string())?;
@@ -55,6 +72,13 @@ mod tests {
 
     fn v(a: &[&str]) -> Vec<String> {
         a.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn icons_pick_accents() {
+        assert_eq!(mode_of("battery-profile-performance"), "performance");
+        assert_eq!(mode_of("battery-profile-powersave"), "eco-plus");
+        assert_eq!(mode_of("input-keyboard"), "input-keyboard");
     }
 
     #[test]

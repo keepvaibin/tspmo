@@ -40,7 +40,13 @@ pub fn trace(what: &str) {
     if std::env::var_os("TSPMO_TRACE").is_some()
         && let Some(t) = T0.get()
     {
-        eprintln!("trace {:>7.1} ms  {what}", t.elapsed().as_secs_f64() * 1000.0);
+        let wall = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        eprintln!(
+            "trace {:>7.1} ms  {what}  (epoch ns {wall})",
+            t.elapsed().as_secs_f64() * 1000.0
+        );
     }
 }
 
@@ -88,31 +94,33 @@ fn gui(args: &[String]) -> Result<(), String> {
         instance::Role::Window(l) => l,
     };
     let layer = use_layer_shell();
-    let _ = layer;
+    if !layer && !cfg!(feature = "winit") {
+        return Err("no Wayland compositor (X11 needs a build with --features winit)".into());
+    }
     app::start(&[kind], theme::is_dark(), theme::fonts())?;
     instance::serve(listener, app::message);
     slint::run_event_loop().map_err(|e| e.to_string())
 }
 
-/// Install the layer-shell platform when the compositor has it; otherwise Slint's winit backend
-/// runs a normal window.
+/// Install the Wayland platform (layer-shell popup, or a plain window where that is missing).
+/// Without a Wayland compositor the winit backend takes over when it is built in.
 pub fn use_layer_shell() -> bool {
-    if std::env::var_os("TSPMO_NO_LAYER").is_some() {
-        return false;
+    if std::env::var_os("TSPMO_NO_LAYER").is_none()
+        && let Some(p) = wl::connect(APP_ID)
+        && slint::platform::set_platform(Box::new(p)).is_ok()
+    {
+        LAYER.store(true, std::sync::atomic::Ordering::Relaxed);
+        return true;
     }
-    let ok = match wl::connect(APP_ID) {
-        Some(p) => slint::platform::set_platform(Box::new(p)).is_ok(),
-        None => false,
-    };
-    LAYER.store(ok, std::sync::atomic::Ordering::Relaxed);
-    ok
+    false
 }
 
 static LAYER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Slint's winit backend needs the application id after the first component exists and before
-/// it is shown. The layer platform takes it at connect time.
+/// it is shown. The Wayland platform takes it at connect time.
 pub fn name_window() {
+    #[cfg(feature = "winit")]
     if !LAYER.load(std::sync::atomic::Ordering::Relaxed) {
         let _ = slint::set_xdg_app_id(APP_ID);
     }

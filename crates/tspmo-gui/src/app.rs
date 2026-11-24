@@ -9,9 +9,7 @@ use crate::bindings;
 use crate::bus::{self, Call, Event};
 use crate::model::{self, Arg, Curve, SOURCES, Store, THERMAL};
 use crate::value::V;
-use crate::{
-    Bk, FansWin, GpuUser, Item, KeysWin, LimitRow, Opt, Popup, Pt, ScreenWin, SystemWin, Th,
-};
+use crate::{Bk, FansWin, GpuUser, Item, KeysWin, LimitRow, Opt, Popup, Pt, ScreenWin, SystemWin, Th};
 use slint::{ComponentHandle, Model, SharedString, Timer, TimerMode, VecModel};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -168,7 +166,6 @@ struct App {
     fan_init: bool,
     pw_init: bool,
     edit: Option<Edit>,
-    eco_missing: bool,
     loaded: bool,
     offline: bool,
     error: String,
@@ -247,7 +244,6 @@ pub fn start(first: &[Kind], dark: bool, fonts: crate::theme::Fonts) -> Result<(
         fan_init: false,
         pw_init: false,
         edit: None,
-        eco_missing: false,
         loaded: false,
         offline: false,
         error: String::new(),
@@ -442,12 +438,7 @@ impl App {
                 self.show_pending();
             }
             Event::GpuUsers(u) => self.store.gpu_users = u,
-            Event::Error(msg) => {
-                if msg.contains("unknown profile") {
-                    self.eco_missing = true;
-                }
-                self.set_error(msg);
-            }
+            Event::Error(msg) => self.set_error(msg),
         }
         self.push();
     }
@@ -904,7 +895,10 @@ impl App {
         bk.set_bat_idx(model::step_index(&steps, s.get(b, "Limit").int()) as i32);
         sync(
             &self.m.bat_opts,
-            steps.iter().map(|v| opt(&v.to_string(), &v.to_string())).collect(),
+            steps
+                .iter()
+                .map(|v| opt(&v.to_string(), &v.to_string()))
+                .collect(),
         );
         sync(&self.m.bat_values, steps.iter().map(|v| *v as i32).collect());
         bk.set_charge_once(s.get(b, "ChargeOnce").bool());
@@ -968,11 +962,7 @@ impl App {
         let ef = model::effect(s);
         sync(
             &self.m.kb_effects,
-            s.get(k, "Modes")
-                .strings()
-                .iter()
-                .map(|m| opt(m, m))
-                .collect(),
+            s.get(k, "Modes").strings().iter().map(|m| opt(m, m)).collect(),
         );
         bk.set_kb_effect(ss(&ef.mode));
         bk.set_kb_color(slint::Color::from_rgb_u8(ef.color.0, ef.color.1, ef.color.2));

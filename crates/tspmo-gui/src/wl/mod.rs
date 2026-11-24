@@ -18,7 +18,7 @@ use state::State;
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Kind {
@@ -108,9 +108,7 @@ impl Platform for WlPlatform {
         self.wl.next_id.set(id + 1);
         let win = Rc::new_cyclic(|w: &Weak<Win>| Win {
             window: slint::Window::new(w.clone()),
-            renderer: SoftwareRenderer::new_with_repaint_buffer_type(
-                RepaintBufferType::ReusedBuffer,
-            ),
+            renderer: SoftwareRenderer::new_with_repaint_buffer_type(RepaintBufferType::ReusedBuffer),
             kind,
             id,
             wl: self.wl.clone(),
@@ -120,6 +118,7 @@ impl Platform for WlPlatform {
             want: Cell::new(None),
             title: RefCell::new(String::new()),
             canvas: RefCell::new(Vec::new()),
+            stats: RefCell::default(),
         });
         self.wl.wins.borrow_mut().push(Rc::downgrade(&win));
         Ok(win)
@@ -134,8 +133,16 @@ impl Platform for WlPlatform {
     }
 
     fn run_event_loop(&self) -> Result<(), PlatformError> {
-        let mut ev = self.ev.borrow_mut().take().ok_or(PlatformError::NoEventLoopProvider)?;
-        let rx = self.rx.borrow_mut().take().ok_or(PlatformError::NoEventLoopProvider)?;
+        let mut ev = self
+            .ev
+            .borrow_mut()
+            .take()
+            .ok_or(PlatformError::NoEventLoopProvider)?;
+        let rx = self
+            .rx
+            .borrow_mut()
+            .take()
+            .ok_or(PlatformError::NoEventLoopProvider)?;
         ev.handle()
             .insert_source(rx, |e, (), st: &mut State| match e {
                 channel::Event::Msg(Msg::Job(j)) => st.jobs.push(j),
@@ -230,6 +237,7 @@ pub struct Win {
     want: Cell<Option<(u32, u32)>>,
     title: RefCell<String>,
     canvas: RefCell<Vec<Px>>,
+    stats: RefCell<Stats>,
 }
 
 impl Win {
@@ -244,7 +252,8 @@ impl Win {
 
     fn rescale(&self) {
         let sf = self.scale120() as f32 / 120.0;
-        self.window.dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor: sf });
+        self.window
+            .dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor: sf });
         if let Some(l) = self.wl.st.borrow().logical(self.id) {
             self.phys.set(self.physical(l));
             self.window.dispatch_event(WindowEvent::Resized {
@@ -261,7 +270,10 @@ impl Win {
             let Some(sz) = self.want.get() else { return };
             let title = self.title.borrow().clone();
             let app = APP_ID.with_borrow(Clone::clone);
-            self.wl.st.borrow_mut().create(self.id, self.kind, sz, &title, &app);
+            self.wl
+                .st
+                .borrow_mut()
+                .create(self.id, self.kind, sz, &title, &app);
             self.rescale();
         } else if !self.visible.get() && exists {
             self.wl.st.borrow_mut().destroy(self.id);
@@ -293,14 +305,17 @@ impl Win {
         if canvas.len() != w * h {
             canvas.clear();
             canvas.resize(w * h, Px::default());
-            self.renderer.set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
+            self.renderer
+                .set_repaint_buffer_type(RepaintBufferType::ReusedBuffer);
         }
+        let t0 = Instant::now();
         let region = self.renderer.render(&mut canvas, w);
-        let bb = (
-            region.bounding_box_origin(),
-            region.bounding_box_size(),
-        );
-        self.wl.st.borrow_mut().present(self.id, &canvas, w as u32, h as u32, bb);
+        let bb = (region.bounding_box_origin(), region.bounding_box_size());
+        self.wl
+            .st
+            .borrow_mut()
+            .present(self.id, &canvas, w as u32, h as u32, bb);
+        self.stats.borrow_mut().frame(t0, Instant::now());
     }
 }
 
@@ -320,7 +335,8 @@ impl WindowAdapter for Win {
     fn set_size(&self, size: slint::WindowSize) {
         let sf = self.window.scale_factor();
         let l = size.to_logical(sf);
-        self.want.set(Some((l.width.ceil() as u32, l.height.ceil() as u32)));
+        self.want
+            .set(Some((l.width.ceil() as u32, l.height.ceil() as u32)));
     }
 
     fn request_redraw(&self) {
@@ -328,6 +344,9 @@ impl WindowAdapter for Win {
     }
 
     fn set_visible(&self, visible: bool) -> Result<(), PlatformError> {
+        if !visible {
+            self.stats.borrow_mut().report();
+        }
         self.visible.set(visible);
         self.redraw.set(true);
         Ok(())
@@ -355,6 +374,57 @@ impl WindowAdapter for Win {
             *self.title.borrow_mut() = t.clone();
             self.wl.st.borrow_mut().set_title(self.id, &t);
         }
+    }
+}
+
+/// Frame timing for `TSPMO_TRACE=1`: draw cost, and the gap between frames while animating.
+#[derive(Default)]
+struct Stats {
+    n: u32,
+    draw_total: Duration,
+    draw_max: Duration,
+    last: Option<Instant>,
+    gaps: Vec<Duration>,
+}
+
+impl Stats {
+    fn frame(&mut self, start: Instant, end: Instant) {
+        let d = end - start;
+        self.n += 1;
+        self.draw_total += d;
+        self.draw_max = self.draw_max.max(d);
+        if let Some(l) = self.last {
+            let gap = start - l;
+            // Gaps over 100 ms are idle time between interactions, not animation.
+            if gap < Duration::from_millis(100) {
+                self.gaps.push(gap);
+            }
+        }
+        self.last = Some(end);
+    }
+
+    fn report(&mut self) {
+        if self.n == 0 {
+            return;
+        }
+        let ms = |d: Duration| d.as_secs_f64() * 1000.0;
+        self.gaps.sort();
+        let pick = |p: f64| {
+            self.gaps
+                .get(((self.gaps.len() as f64 * p) as usize).min(self.gaps.len().saturating_sub(1)))
+                .map_or(0.0, |d| ms(*d))
+        };
+        crate::trace(&format!(
+            "frames {}: draw avg {:.2} ms max {:.2} ms; animation gaps {}: median {:.1} ms p95 {:.1} ms max {:.1} ms",
+            self.n,
+            ms(self.draw_total) / f64::from(self.n),
+            ms(self.draw_max),
+            self.gaps.len(),
+            pick(0.5),
+            pick(0.95),
+            pick(1.0)
+        ));
+        *self = Stats::default();
     }
 }
 
