@@ -342,18 +342,10 @@ impl State {
     /// exclusive zone is 0, so the compositor measures from the usable area). `output` is the one
     /// the surface is on; before the compositor says, the tallest known output is used.
     fn osd_margin(&self, output: Option<&wl_output::WlOutput>) -> i32 {
-        let h = |o: &wl_output::WlOutput| {
-            self.outputs
-                .info(o)
-                .and_then(|i| i.logical_size)
-                .map(|(_, h)| h)
-        };
-        let height = output.and_then(h).or_else(|| {
-            self.outputs
-                .outputs()
-                .filter_map(|o| h(&o))
-                .max()
-        });
+        let h = |o: &wl_output::WlOutput| self.outputs.info(o).and_then(|i| i.logical_size).map(|(_, h)| h);
+        let height = output
+            .and_then(h)
+            .or_else(|| self.outputs.outputs().filter_map(|o| h(&o)).max());
         height.map_or(64, |h| (h / 10).max(24))
     }
 

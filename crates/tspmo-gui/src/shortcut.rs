@@ -103,8 +103,11 @@ mod tests {
     }
 
     fn packaged(name: &str) -> String {
-        std::fs::read_to_string(format!("{}/../../data/applications/{name}", env!("CARGO_MANIFEST_DIR")))
-            .unwrap_or_else(|e| panic!("{name}: {e}"))
+        std::fs::read_to_string(format!(
+            "{}/../../data/applications/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap_or_else(|e| panic!("{name}: {e}"))
     }
 
     #[test]

@@ -712,7 +712,10 @@ mod tests {
                 ),
                 (
                     "Rpm".to_owned(),
-                    V::L(vec![V::L(vec![V::I(1), V::I(2100)]), V::L(vec![V::I(2), V::I(2300)])]),
+                    V::L(vec![
+                        V::L(vec![V::I(1), V::I(2100)]),
+                        V::L(vec![V::I(2), V::I(2300)]),
+                    ]),
                 ),
                 (
                     "Temps".to_owned(),

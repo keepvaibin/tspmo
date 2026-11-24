@@ -941,7 +941,9 @@ impl App {
             .iter()
             .map(V::float)
             .fold(0.0, f64::max);
-        let od = model::hw_items(s).into_iter().find(|i| i.name == "panel_overdrive");
+        let od = model::hw_items(s)
+            .into_iter()
+            .find(|i| i.name == "panel_overdrive");
         let hz_now = bindings::current_hz(s);
         bk.set_screen_title(ss(&format!(
             "Laptop Screen{}{}",
@@ -1117,7 +1119,13 @@ impl App {
             (0..=kmax)
                 .map(|i| {
                     ss(&if kmax == 3 {
-                        ["Backlight Off", "Backlight Low", "Backlight Med", "Backlight High"][i as usize].to_owned()
+                        [
+                            "Backlight Off",
+                            "Backlight Low",
+                            "Backlight Med",
+                            "Backlight High",
+                        ][i as usize]
+                            .to_owned()
                     } else if i == 0 {
                         "Backlight Off".to_owned()
                     } else {
@@ -1127,7 +1135,12 @@ impl App {
                 .collect(),
         );
         let ef = model::effect(s);
-        let kmodes: Vec<String> = s.get(k, "Modes").strings().into_iter().filter(|m| !m.is_empty()).collect();
+        let kmodes: Vec<String> = s
+            .get(k, "Modes")
+            .strings()
+            .into_iter()
+            .filter(|m| !m.is_empty())
+            .collect();
         sync(
             &self.m.kb_effect_labels,
             kmodes.iter().map(|m| ss(&model::nice(m))).collect(),
@@ -1138,10 +1151,7 @@ impl App {
         } else {
             format!("Laptop Keyboard: {}", model::nice(&ef.mode))
         }));
-        sync(
-            &self.m.kb_effects,
-            kmodes.iter().map(|m| opt(m, m)).collect(),
-        );
+        sync(&self.m.kb_effects, kmodes.iter().map(|m| opt(m, m)).collect());
         bk.set_kb_effect(ss(&if ef.mode.is_empty() {
             "Firmware".to_owned()
         } else {

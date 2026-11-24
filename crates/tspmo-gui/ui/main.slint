@@ -22,36 +22,36 @@ export component Osd inherits Window {
         opacity: root.shown ? 1 : 0;
         animate opacity { duration: root.shown ? 90ms : 220ms; easing: ease-out; }
         background: Th.bg;
-        border-radius: 8 * Th.dp;
+        border-radius: 6 * Th.dp;
         border-width: 1px;
         border-color: Th.line;
-        min-width: 150 * Th.dp;
+        min-width: 112 * Th.dp;
         VerticalLayout {
-            padding-left: 14 * Th.dp;
-            padding-right: 16 * Th.dp;
-            padding-top: 10 * Th.dp;
-            padding-bottom: 10 * Th.dp;
-            spacing: 8 * Th.dp;
+            padding-left: 10 * Th.dp;
+            padding-right: 12 * Th.dp;
+            padding-top: 7 * Th.dp;
+            padding-bottom: 7 * Th.dp;
+            spacing: 5 * Th.dp;
             HorizontalLayout {
-                spacing: 9 * Th.dp;
+                spacing: 7 * Th.dp;
                 alignment: center;
                 Icon {
                     name: root.glyph;
-                    size: 20 * Th.dp;
+                    size: 16 * Th.dp;
                     tint: Th.accent;
                     y: (parent.height - self.height) / 2;
                 }
                 Text {
                     text: root.text;
                     color: Th.text;
-                    font-size: 1.1rem;
+                    font-size: Th.t-head;
                     font-weight: 600;
                     vertical-alignment: center;
                 }
             }
             if root.value >= 0: Rectangle {
-                height: 4 * Th.dp;
-                border-radius: 2 * Th.dp;
+                height: 3 * Th.dp;
+                border-radius: 1.5 * Th.dp;
                 background: Th.raised;
                 Rectangle {
                     x: 0;

@@ -203,7 +203,10 @@ fn tables() -> Vec<(&'static str, Props)> {
             vec![
                 ("MaxBrightness", Value::U8(3)),
                 ("Brightness", Value::U8(2)),
-                ("Modes", strs(&["static", "breathe", "rainbow-cycle", "rainbow-wave", "pulse"])),
+                (
+                    "Modes",
+                    strs(&["static", "breathe", "rainbow-cycle", "rainbow-wave", "pulse"]),
+                ),
                 (
                     "Effect",
                     tup(vec![
@@ -235,7 +238,27 @@ fn tables() -> Vec<(&'static str, Props)> {
                 ("SlashBrightness", Value::U8(170)),
                 ("SlashInterval", Value::U8(5)),
                 ("SlashMode", s("bounce")),
-                ("SlashModes", strs(&["static", "bounce", "slash", "loading", "bitstream", "transmission", "flow", "flux", "phantom", "spectrum", "hazard", "interfacing", "ramp", "game-over", "start", "buzzer"])),
+                (
+                    "SlashModes",
+                    strs(&[
+                        "static",
+                        "bounce",
+                        "slash",
+                        "loading",
+                        "bitstream",
+                        "transmission",
+                        "flow",
+                        "flux",
+                        "phantom",
+                        "spectrum",
+                        "hazard",
+                        "interfacing",
+                        "ramp",
+                        "game-over",
+                        "start",
+                        "buzzer",
+                    ]),
+                ),
                 (
                     "SlashShow",
                     arr(["boot", "sleep", "shutdown", "battery", "lid", "warning"]
@@ -393,7 +416,7 @@ fn main() -> zbus::Result<()> {
                             })
                             .collect())
                     } else if prop == "Temps" {
-                        arr(vec![tup(vec![Value::U32(48 + (tick % 5) as u32), s("CPU")])])
+                        arr(vec![tup(vec![Value::U32(48 + (tick % 5)), s("CPU")])])
                     } else {
                         Value::from(0u8)
                     };
