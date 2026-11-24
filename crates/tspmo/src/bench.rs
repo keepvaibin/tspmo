@@ -28,6 +28,10 @@ A condition is `base` or settings joined with `+`:
     noturbo                 CPU turbo off
     cpus=e | lpe | p | <list>   run everything on these CPUs only
     profile=<mode>          tspmo power mode (eco-plus, power-saver, ...)
+    pkgwin=<ms>             package power limit (PL1) time window
+    ecap=<mhz>              maximum clock of the efficiency cores
+    bgcpus=e|lpe|p|<list>   CPUs the --bg load may use
+    bgweight=<n>            systemd CPUWeight of the --bg load (default 100)
 Example:  sudo tspmo bench base hz=60 hz=60+pkg=5/7 profile=eco-plus
 
 OPTIONS:
@@ -36,6 +40,8 @@ OPTIONS:
     --measure S     seconds measured per condition (default 20)
     --workers N     load threads (default 2)
     --no-load       measure an idle system
+    --bg N          run N busy threads as a background load (in a systemd scope; see bgcpus,
+                    bgweight)
     --hold-charge   stop charging while measuring, when on AC (the battery then reads zero;
                     platform power from RAPL is used)
 ";
@@ -47,6 +53,23 @@ pub fn run(args: &[String]) -> ExitCode {
             ExitCode::SUCCESS
         }
         Some("--guard") => guard(args.get(1).map_or("", String::as_str)),
+        Some("--burn") => {
+            // Busy threads that never stop: the background load of `--bg`.
+            let n = args.get(1).and_then(|n| n.parse().ok()).unwrap_or(1usize);
+            let hs: Vec<_> = (0..n)
+                .map(|_| {
+                    std::thread::spawn(|| {
+                        loop {
+                            chunk()
+                        }
+                    })
+                })
+                .collect();
+            for h in hs {
+                let _ = h.join();
+            }
+            ExitCode::SUCCESS
+        }
         _ => match bench(args) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
@@ -68,6 +91,14 @@ pub enum Setting {
     NoTurbo,
     Cpus(String),
     Profile(String),
+    /// Package power limit time window, milliseconds (PL1).
+    PkgWindow(u32),
+    /// Maximum clock of the efficiency cores, MHz.
+    Ecap(u32),
+    /// CPUs the background load runs on.
+    BgCpus(String),
+    /// systemd CPUWeight of the background load.
+    BgWeight(u32),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -103,6 +134,10 @@ pub fn parse_condition(text: &str) -> Result<Condition, String> {
             }
             "uncore" => Setting::Uncore(v.parse().map_err(|_| format!("uncore={v}: not a number"))?),
             "noturbo" => Setting::NoTurbo,
+            "pkgwin" => Setting::PkgWindow(v.parse().map_err(|_| format!("pkgwin={v}: not a number"))?),
+            "ecap" => Setting::Ecap(v.parse().map_err(|_| format!("ecap={v}: not a number"))?),
+            "bgcpus" if !v.is_empty() => Setting::BgCpus(v.to_owned()),
+            "bgweight" => Setting::BgWeight(v.parse().map_err(|_| format!("bgweight={v}: not a number"))?),
             "cpus" if !v.is_empty() => Setting::Cpus(v.to_owned()),
             "profile" if tspmo_core::power::Profile::parse(v).is_some() => Setting::Profile(v.to_owned()),
             _ => return Err(format!("unknown setting '{item}' (see `tspmo bench help`)")),
@@ -323,6 +358,24 @@ impl Rig {
                     &(mhz * 1000).to_string(),
                 ),
                 Setting::NoTurbo => self.write("/sys/devices/system/cpu/intel_pstate/no_turbo", "1"),
+                Setting::PkgWindow(ms) => {
+                    for z in tspmo_core::power::rapl_zones(&SysRoot::default()) {
+                        if z.is_package() {
+                            if let Some(long) = &z.long {
+                                let win = long.replace("power_limit_uw", "time_window_us");
+                                self.write(&win, &(u64::from(*ms) * 1000).to_string());
+                            }
+                        }
+                    }
+                }
+                Setting::Ecap(mhz) => {
+                    let cpus = [self.topo.efficiency.clone(), self.topo.low_power.clone()].concat();
+                    for cpu in cpus {
+                        let p = format!("/sys/devices/system/cpu/cpu{cpu}/cpufreq/scaling_max_freq");
+                        self.write(&p, &(mhz * 1000).to_string());
+                    }
+                }
+                Setting::BgCpus(_) | Setting::BgWeight(_) => {} // used when the load starts
                 Setting::Cpus(which) => {
                     let list = match which.as_str() {
                         "e" => topology::format_cpulist(
@@ -389,6 +442,8 @@ struct Sample {
     pkg_w: Vec<f64>,
     psys_w: Vec<f64>,
     chunk_ms: Vec<f64>,
+    /// How late a 1 ms timer fires, microseconds (the wake-up latency an input event sees).
+    wake_us: Vec<f64>,
 }
 
 /// A fixed amount of arithmetic, about 5 ms on a fast core.
@@ -398,6 +453,53 @@ fn chunk() {
         x = std::hint::black_box(x.wrapping_mul(6364136223846793005).wrapping_add(i));
     }
     std::hint::black_box(x);
+}
+
+/// A thread asking for a 1 ms sleep over and over, logging how late it wakes.
+fn start_jitter(stop: Arc<AtomicBool>, log: Arc<Mutex<Vec<(Instant, f64)>>>) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        while !stop.load(Ordering::Relaxed) {
+            let t0 = Instant::now();
+            std::thread::sleep(Duration::from_millis(1));
+            let late = t0.elapsed().as_secs_f64() * 1e6 - 1000.0;
+            log.lock().unwrap_or_else(|p| p.into_inner()).push((t0, late));
+        }
+    })
+}
+
+/// The background load: `n` busy threads in a transient systemd scope, so their CPUs and weight
+/// can be set like a build's would be. Stopped by killing the scope's process.
+fn start_background(n: usize, c: &Condition, topo: &topology::Topology) -> Option<std::process::Child> {
+    if n == 0 {
+        return None;
+    }
+    let exe = std::env::current_exe().ok()?;
+    let mut cmd = Command::new("systemd-run");
+    cmd.args(["--scope", "--quiet", "--collect", "--slice=tspmo-bench.slice"]);
+    for s in &c.settings {
+        match s {
+            Setting::BgWeight(w) => {
+                cmd.arg(format!("-pCPUWeight={w}"));
+            }
+            Setting::BgCpus(which) => {
+                let list = match which.as_str() {
+                    "e" => {
+                        topology::format_cpulist(&[topo.efficiency.clone(), topo.low_power.clone()].concat())
+                    }
+                    "lpe" => topology::format_cpulist(&topo.low_power),
+                    "p" => topology::format_cpulist(&topo.performance),
+                    other => other.to_owned(),
+                };
+                cmd.arg(format!("-pAllowedCPUs={list}"));
+            }
+            _ => {}
+        }
+    }
+    cmd.arg(exe).args(["bench", "--burn", &n.to_string()]);
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    cmd.spawn().ok()
 }
 
 fn start_load(
@@ -457,6 +559,7 @@ fn zone_energy(psys: bool) -> Option<(String, u64)> {
 fn bench(args: &[String]) -> Result<(), String> {
     let (mut rounds, mut settle, mut measure, mut workers) = (3usize, 8u64, 20u64, 2usize);
     let (mut load, mut hold) = (true, false);
+    let mut bg = 0usize;
     let mut conds = Vec::new();
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -471,6 +574,7 @@ fn bench(args: &[String]) -> Result<(), String> {
             "--measure" => measure = num("--measure")?.max(2),
             "--workers" => workers = num("--workers")? as usize,
             "--no-load" => load = false,
+            "--bg" => bg = num("--bg")? as usize,
             "--hold-charge" => hold = true,
             c => conds.push(parse_condition(c)?),
         }
@@ -539,11 +643,13 @@ fn bench(args: &[String]) -> Result<(), String> {
 
     let stop = Arc::new(AtomicBool::new(false));
     let log = Arc::new(Mutex::new(Vec::new()));
-    let threads = if load {
+    let mut threads = if load {
         start_load(workers, stop.clone(), log.clone())
     } else {
         Vec::new()
     };
+    let wake_log = Arc::new(Mutex::new(Vec::new()));
+    threads.push(start_jitter(stop.clone(), wake_log.clone()));
     let pkg = zone_energy(false);
     let psys = zone_energy(true);
 
@@ -553,6 +659,7 @@ fn bench(args: &[String]) -> Result<(), String> {
             eprint!("round {round}/{rounds}  {:<28}\r", c.name);
             let _ = std::io::stderr().flush();
             rig.apply(c);
+            let mut bg_proc = start_background(bg, c, &rig.topo);
             std::thread::sleep(Duration::from_secs(settle));
             let t0 = Instant::now();
             let e0 = (
@@ -583,6 +690,22 @@ fn bench(args: &[String]) -> Result<(), String> {
                 .filter(|(t, _)| *t >= t0 && *t <= end)
                 .map(|(_, ms)| *ms)
                 .collect();
+            s.wake_us = wake_log
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .iter()
+                .filter(|(t, _)| *t >= t0 && *t <= end)
+                .map(|(_, us)| *us)
+                .collect();
+            if let Some(mut p) = bg_proc.take() {
+                let _ = p.kill();
+                let _ = p.wait();
+                // The scope's own processes die with the unit.
+                let _ = Command::new("systemctl")
+                    .args(["stop", "--quiet", "tspmo-bench.slice"])
+                    .stderr(Stdio::null())
+                    .status();
+            }
             results[i].push(s);
         }
     }
@@ -602,10 +725,18 @@ fn bench(args: &[String]) -> Result<(), String> {
                 .collect::<Vec<_>>(),
         )
     };
-    let base_ms = med(&results[0], |s| &s.chunk_ms);
+    let p95_of = |rs: &[Sample], f: fn(&Sample) -> &Vec<f64>| -> f64 {
+        median(
+            &rs.iter()
+                .map(|s| percentile(f(s), 95.0))
+                .filter(|x| x.is_finite())
+                .collect::<Vec<_>>(),
+        )
+    };
+    let base_p95 = p95_of(&results[0], |s| &s.chunk_ms);
     println!(
-        "{:<28} {:>9} {:>8} {:>8} {:>10} {:>9} {:>7}",
-        "condition", "battery W", "psys W", "pkg W", "chunk ms", "p95 ms", "slower"
+        "{:<34} {:>9} {:>7} {:>6} {:>8} {:>8} {:>7} {:>9}",
+        "condition", "battery W", "psys W", "pkg W", "chunk ms", "p95 ms", "p95 x", "wake p95us"
     );
     for (c, rs) in conds.iter().zip(&results) {
         let f = |x: f64| {
@@ -623,18 +754,19 @@ fn bench(args: &[String]) -> Result<(), String> {
                 .collect::<Vec<_>>(),
         );
         println!(
-            "{:<28} {:>9} {:>8} {:>8} {:>10} {:>9} {:>7}",
+            "{:<34} {:>9} {:>7} {:>6} {:>8} {:>8} {:>7} {:>9}",
             c.name,
             f(med(rs, |s| &s.battery_w)),
             f(med(rs, |s| &s.psys_w)),
             f(med(rs, |s| &s.pkg_w)),
             f(ms),
             f(p95),
-            if ms.is_finite() && base_ms.is_finite() {
-                format!("{:.2}x", ms / base_ms)
+            if p95.is_finite() && base_p95.is_finite() {
+                format!("{:.2}x", p95 / base_p95)
             } else {
                 "-".into()
-            }
+            },
+            f(p95_of(rs, |s| &s.wake_us)),
         );
     }
     Ok(())
