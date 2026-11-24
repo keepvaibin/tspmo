@@ -285,11 +285,16 @@ pub fn battery_line(percent: i64, status: &str, watts: f64) -> String {
     } else {
         String::new()
     };
-    [format!("{percent}%"), status.to_owned(), rate]
+    let state = [status, rate.as_str()]
         .into_iter()
         .filter(|p| !p.is_empty())
         .collect::<Vec<_>>()
-        .join("  ")
+        .join(" ");
+    if state.is_empty() {
+        format!("{percent}%")
+    } else {
+        format!("{percent}%  {state}")
+    }
 }
 
 /// What the firmware reports as the charger in use.
