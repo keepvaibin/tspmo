@@ -63,6 +63,21 @@ pub fn cycle_profile() -> Result<String, String> {
     proxy(&conn)?.call("CycleProfile", &()).map_err(explain)
 }
 
+/// Wait for a GPU switch in progress to finish; returns its final message.
+pub fn wait_gpu_switch(timeout: std::time::Duration) -> Result<String, String> {
+    let start = std::time::Instant::now();
+    loop {
+        let st = state()?;
+        if get_str(&st, "GpuSwitching").is_empty() {
+            return Ok(get_str(&st, "GpuMessage"));
+        }
+        if start.elapsed() > timeout {
+            return Err("the GPU switch is taking unusually long; check `tspmo status`".into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+}
+
 pub fn set_gpu(mode: &str) -> Result<String, String> {
     let conn = connect()?;
     proxy(&conn)?.call("SetGpuMode", &(mode,)).map_err(explain)

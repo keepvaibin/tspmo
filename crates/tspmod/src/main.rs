@@ -25,7 +25,7 @@ fn run() -> zbus::Result<()> {
     // Tune the machine before anyone can ask: the profile, then the GPU policy.
     daemon.apply(true);
     daemon.write_compositor_env();
-    gpu::enforce_policy(&mut daemon);
+    gpu::enforce_at_boot(&mut daemon);
     let shared: dbus::Shared = Arc::new(Mutex::new(daemon));
 
     // TSPMOD_BUS=session runs against the session bus (development, with TSPMO_SYSROOT).

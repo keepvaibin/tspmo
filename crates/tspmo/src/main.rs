@@ -175,6 +175,17 @@ fn gpu(arg: Option<&str>) -> ExitCode {
             Err(e) => fail(e),
         },
         Some(m) => match client::set_gpu(m) {
+            Ok(msg) if msg.starts_with("Switching") => {
+                println!("{msg}");
+                match client::wait_gpu_switch(std::time::Duration::from_secs(45)) {
+                    Ok(done) if done.starts_with("Couldn't") => fail(done),
+                    Ok(done) => {
+                        println!("{done}");
+                        ExitCode::SUCCESS
+                    }
+                    Err(e) => fail(e),
+                }
+            }
             Ok(msg) => {
                 println!("{msg}");
                 ExitCode::SUCCESS

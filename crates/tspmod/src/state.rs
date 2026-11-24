@@ -31,6 +31,10 @@ pub struct Daemon {
     pub gpu_policy: Policy,
     /// `gpu_mux_mode` as it was when we started (a later change means a reboot is pending).
     pub boot_mux: Option<u8>,
+    /// Last firmware-read GPU status (see [`Daemon::gpu_status`]).
+    pub gpu_cache: gpu::Status,
+    /// A GPU switch in progress (the firmware takes seconds to power the dGPU on).
+    pub gpu_switching: Option<gpu::Mode>,
     /// The policy wants a different GPU mode but an app is using the dGPU; retrying.
     pub gpu_waiting: bool,
     /// Last message from a GPU switch attempt, shown in the UI.
@@ -58,12 +62,21 @@ impl Daemon {
             tunables: Tunables::default(),
             // Eco on battery also sidesteps the NVIDIA "wake on every 1% of battery" bug.
             gpu_policy: Policy::Optimized,
+            gpu_cache: gpu::Status {
+                switcher: gpu::Switcher::None,
+                mode: gpu::Mode::Hybrid,
+                pending: None,
+                dgpu: None,
+                dgpu_asleep: false,
+            },
+            gpu_switching: None,
             gpu_waiting: false,
             gpu_message: String::new(),
             applied: None,
             state_file: state_dir.join("state"),
         };
         d.load();
+        d.gpu_cache = gpu::status(&d.root, d.boot_mux);
         d
     }
 
@@ -209,8 +222,21 @@ impl Daemon {
         }
     }
 
+    /// GPU status without touching the firmware: the mode and pending MUX state only change
+    /// when tspmod changes them (cached in `gpu_cache`), while the dGPU's presence and sleep
+    /// state are read from PCI sysfs, which is instant. Firmware reads block for seconds while
+    /// the firmware is powering the dGPU up, so they must never happen on a query path.
     pub fn gpu_status(&self) -> gpu::Status {
-        gpu::status(&self.root, self.boot_mux)
+        let mut st = self.gpu_cache.clone();
+        let dg = gpu::dgpu(&self.root);
+        st.dgpu_asleep = dg.as_ref().is_some_and(tspmo_sys::pci::Gpu::is_asleep);
+        st.dgpu = dg.map(|g| g.address);
+        st
+    }
+
+    /// Re-read the GPU mode from the firmware (start-up and after a switch, off any lock).
+    pub fn read_gpu_status(root: &SysRoot, boot_mux: Option<u8>) -> gpu::Status {
+        gpu::status(root, boot_mux)
     }
 
     // --- persistence: a tiny key=value file, no serde needed --------------------------------

@@ -268,6 +268,7 @@ fn tspmo_props(d: &Daemon) -> Vec<(&'static str, OwnedValue)> {
         ("GpuPending", ov(g.pending.map_or("", Mode::as_str))),
         ("DgpuAsleep", ov(g.dgpu_asleep)),
         ("GpuMessage", ov(d.gpu_message.clone())),
+        ("GpuSwitching", ov(d.gpu_switching.map_or("", Mode::as_str))),
     ]
 }
 
@@ -369,24 +370,33 @@ impl Tspmo {
             .ok_or_else(|| zbus::fdo::Error::InvalidArgs(format!("unknown GPU mode '{mode}'")))?;
         let sender = hdr.sender().map(|s| s.to_string());
         polkit::check(conn, sender.as_deref(), polkit::SET_GPU).await?;
-        let result = {
-            let mut d = lock(&self.0);
-            let target = policy.target(d.on_battery);
-            match gpu::switch(&mut d, target) {
-                Ok(outcome) => {
-                    d.gpu_policy = policy;
-                    d.save();
-                    d.gpu_message = outcome.message().to_owned();
-                    Ok(d.gpu_message.clone())
-                }
-                Err(e) => {
-                    d.gpu_message = e.clone();
-                    Err(e)
-                }
-            }
+        let (target, current) = {
+            let d = lock(&self.0);
+            let st = d.gpu_status();
+            (policy.target(d.on_battery), st)
         };
-        emit_changed(conn, &self.0).await;
-        result.map_err(zbus::fdo::Error::Failed)
+        // Same hardware mode (e.g. choosing Optimized while on AC in Hybrid): just save the policy.
+        if target == current.mode && current.pending.is_none() {
+            let msg = {
+                let mut d = lock(&self.0);
+                d.gpu_policy = policy;
+                d.gpu_waiting = false;
+                d.save();
+                d.gpu_message = format!("GPU mode: {}", policy.as_str());
+                d.gpu_message.clone()
+            };
+            emit_changed(conn, &self.0).await;
+            return Ok(msg);
+        }
+        gpu::begin(conn.clone(), self.0.clone(), target, Some(policy), false)
+            .map_err(zbus::fdo::Error::Failed)?;
+        Ok(format!("Switching to {target}…"))
+    }
+
+    /// The mode a switch in progress is heading to, or "".
+    #[zbus(property)]
+    fn gpu_switching(&self) -> String {
+        lock(&self.0).gpu_switching.map_or("", Mode::as_str).to_owned()
     }
 
     /// Processes holding the NVIDIA GPU: `(pid, name, kind)`. `render`: an app using it (blocks

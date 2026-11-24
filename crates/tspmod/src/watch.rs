@@ -45,17 +45,10 @@ pub fn power_source(conn: Connection, shared: Shared) {
     });
 
     fn on_change(conn: &Connection, shared: &Shared, on_battery: bool) {
-        let changed = {
-            let mut d = lock(shared);
-            let changed = d.set_on_battery(on_battery);
-            if changed {
-                gpu::enforce_policy(&mut d);
-            }
-            changed
-        };
+        let changed = lock(shared).set_on_battery(on_battery);
         if changed {
             emit_changed_blocking(conn, shared);
-            gpu_retry(conn, shared);
+            gpu::enforce(conn.inner(), shared);
         }
     }
 }
@@ -164,16 +157,14 @@ pub fn sessions(conn: Connection, shared: Shared) {
         for _ in signals {
             // Give the compositor a moment to close its device files.
             std::thread::sleep(std::time::Duration::from_millis(500));
-            if gpu::enforce_policy(&mut lock(&shared)).is_some() {
-                emit_changed_blocking(&conn, &shared);
-            }
+            gpu::enforce(conn.inner(), &shared);
         }
     });
 }
 
 /// While a policy switch is waiting for an app to release the dGPU, retry every 15 s. The
 /// thread exists only while waiting, so an idle system has no timer at all.
-pub fn gpu_retry(conn: &Connection, shared: &Shared) {
+pub fn gpu_retry(conn: &zbus::Connection, shared: &Shared) {
     use std::sync::atomic::{AtomicBool, Ordering};
     static RUNNING: AtomicBool = AtomicBool::new(false);
     if !lock(shared).gpu_waiting || RUNNING.swap(true, Ordering::SeqCst) {
@@ -183,20 +174,16 @@ pub fn gpu_retry(conn: &Connection, shared: &Shared) {
     spawn("gpu-retry", move || {
         loop {
             std::thread::sleep(std::time::Duration::from_secs(15));
-            let (changed, waiting) = {
-                let mut d = lock(&shared);
-                if !d.gpu_waiting {
-                    (false, false)
-                } else {
-                    let changed = gpu::enforce_policy(&mut d).is_some();
-                    (changed, d.gpu_waiting)
-                }
+            let (waiting, busy) = {
+                let d = lock(&shared);
+                (d.gpu_waiting, d.gpu_switching.is_some())
             };
-            if changed {
-                emit_changed_blocking(&conn, &shared);
-            }
             if !waiting {
                 break;
+            }
+            if !busy {
+                gpu::enforce(&conn, &shared);
+                zbus::block_on(crate::dbus::emit_changed(&conn, &shared));
             }
         }
         RUNNING.store(false, Ordering::SeqCst);
@@ -204,7 +191,7 @@ pub fn gpu_retry(conn: &Connection, shared: &Shared) {
 }
 
 pub fn all(conn: &Connection, shared: &Shared) {
-    gpu_retry(conn, shared);
+    gpu_retry(conn.inner(), shared);
     sessions(conn.clone(), Arc::clone(shared));
     power_source(conn.clone(), Arc::clone(shared));
     platform_profile(conn.clone(), Arc::clone(shared));

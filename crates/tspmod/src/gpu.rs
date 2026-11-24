@@ -1,21 +1,35 @@
 //! Performing GPU mode switches.
 //!
-//! **Eco ↔ Hybrid is live.** To power the dGPU off we must first make sure nothing holds it:
-//! stop NVIDIA's helper daemons, unload the driver, then ask the firmware to cut power
-//! (`dgpu_disable=1`), which also removes the device from the PCI bus. Powering it back on is the
-//! reverse: `dgpu_disable=0`, PCI rescan, load the driver, restart the helpers.
+//! **Eco ↔ Hybrid is live**, measured on a GU605MI under KWin 6.8:
+//!
+//! * *Hybrid → Eco* (~1 s): announce the removal of the dGPU's DRM devices so the compositor
+//!   drops them (KWin handles a secondary GPU going away without disturbing the session), wait
+//!   until nothing holds them, stop NVIDIA's helper daemons, unload the driver with `rmmod`
+//!   (`modprobe -r` also tries to remove shared dependencies such as `video` and reports a
+//!   failure), then `dgpu_disable=1`: the firmware cuts power and removes the device from PCI.
+//! * *Eco → Hybrid* (~8 s, almost all inside the firmware call): `dgpu_disable=0`, PCI rescan,
+//!   load the driver, restart the helpers. The compositor hot-adds the GPU from the kernel event.
+//!
+//! Switches run on their own thread: the firmware call blocks for seconds and the D-Bus API
+//! (KDE's battery applet, the GUI) must stay responsive. Errors a user can act on ("an app is
+//! using the GPU") are found by a fast [`precheck`] and returned immediately.
 //!
 //! **Ultimate (MUX) needs a reboot:** the panel is physically rewired. We write
-//! `gpu_mux_mode` and report the pending reboot; the firmware applies it at the next boot.
+//! `gpu_mux_mode`; the firmware applies it at the next boot.
 
-use crate::state::Daemon;
+use crate::dbus::{Shared, emit_changed};
 use std::process::Command;
 use std::time::{Duration, Instant};
-use tspmo_core::gpu::{self, Mode, Switcher};
+use tspmo_core::gpu::{self, Mode, Policy, Status, Switcher};
 use tspmo_sys::{SysRoot, fwattr};
 
 /// Kernel modules of the NVIDIA driver stack, in unload order.
 const NVIDIA_MODULES: &[&str] = &["nvidia_drm", "nvidia_modeset", "nvidia_uvm", "nvidia"];
+
+/// Shown when the running desktop still has NVIDIA's EGL driver loaded (it was started before
+/// tspmo's compositor settings existed). Happens once, right after installing tspmo.
+pub const NEEDS_FRESH_SESSION: &str = "The desktop was started before tspmo was set up, so it still has the NVIDIA \
+     driver loaded. Log out and back in once; after that Eco and Hybrid switch instantly.";
 
 #[derive(Debug)]
 pub enum Outcome {
@@ -31,6 +45,10 @@ impl Outcome {
     }
 }
 
+fn lock(s: &Shared) -> std::sync::MutexGuard<'_, crate::state::Daemon> {
+    s.lock().unwrap_or_else(|p| p.into_inner())
+}
+
 fn set_asus(root: &SysRoot, fw_attrs: bool, name: &str, value: &str) -> Result<(), String> {
     if fw_attrs {
         let attr =
@@ -43,7 +61,12 @@ fn set_asus(root: &SysRoot, fw_attrs: bool, name: &str, value: &str) -> Result<(
 }
 
 fn run(cmd: &str, args: &[&str]) -> bool {
-    Command::new(cmd).args(args).status().is_ok_and(|s| s.success())
+    Command::new(cmd)
+        .args(args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
 }
 
 fn wait_for(timeout: Duration, mut cond: impl FnMut() -> bool) -> bool {
@@ -57,7 +80,7 @@ fn wait_for(timeout: Duration, mut cond: impl FnMut() -> bool) -> bool {
     cond()
 }
 
-/// Processes (other than NVIDIA's own helpers) that would lose the GPU.
+/// Processes holding the dGPU, minus NVIDIA's own helper daemons (we stop those ourselves).
 pub fn blocking_users(root: &SysRoot) -> Vec<gpu::User> {
     let addr = gpu::dgpu(root).map(|g| g.address);
     gpu::users(root, addr.as_deref())
@@ -65,11 +88,6 @@ pub fn blocking_users(root: &SysRoot) -> Vec<gpu::User> {
         .filter(|u| !gpu::NVIDIA_SERVICES.iter().any(|(comm, _)| u.name == *comm))
         .collect()
 }
-
-/// Shown when the running desktop still has NVIDIA's EGL driver loaded (it was started before
-/// tspmo's compositor settings existed). Happens once, right after installing tspmo.
-pub const NEEDS_FRESH_SESSION: &str = "The desktop was started before tspmo was set up, so it still has the NVIDIA \
-     driver loaded. Log out and back in once; after that Eco and Hybrid switch instantly.";
 
 /// The dGPU's DRM nodes (`card0`, `renderD129`, ...).
 fn drm_nodes(root: &SysRoot, addr: &str) -> Vec<String> {
@@ -79,8 +97,7 @@ fn drm_nodes(root: &SysRoot, addr: &str) -> Vec<String> {
         .collect()
 }
 
-/// Tell compositors the dGPU's display devices are going away (or back). KWin and Mutter drop a
-/// secondary GPU on `remove`, closing their device files, without disturbing the session.
+/// Tell compositors the dGPU's display devices are going away (or back).
 fn announce(root: &SysRoot, addr: &str, action: &str) {
     for n in drm_nodes(root, addr) {
         let _ = root.write(
@@ -90,47 +107,55 @@ fn announce(root: &SysRoot, addr: &str, action: &str) {
     }
 }
 
-fn holders(root: &SysRoot) -> Vec<gpu::User> {
-    blocking_users(root)
+/// Fast checks for problems the user can act on, before any slow work starts.
+pub fn precheck(root: &SysRoot, st: &Status, target: Mode) -> Result<(), String> {
+    match st.switcher {
+        Switcher::None if target != Mode::Hybrid => {
+            return Err("this laptop has no firmware GPU switch".into());
+        }
+        Switcher::Asus { has_mux: false, .. } if target == Mode::Ultimate => {
+            return Err("this laptop has no MUX switch, so there is no Ultimate mode".into());
+        }
+        _ => {}
+    }
+    if target == Mode::Eco && st.mode == Mode::Hybrid && st.dgpu.is_some() {
+        let users = blocking_users(root);
+        let apps: Vec<String> = users
+            .iter()
+            .filter(|u| u.kind == gpu::UseKind::Render)
+            .map(|u| format!("{} ({})", u.name, u.pid))
+            .collect();
+        if !apps.is_empty() {
+            return Err(format!(
+                "the NVIDIA GPU is in use by {}; close them and try again",
+                apps.join(", ")
+            ));
+        }
+        if users.iter().any(|u| u.driver_handles) {
+            return Err(NEEDS_FRESH_SESSION.into());
+        }
+    }
+    Ok(())
 }
 
-/// Power the dGPU off, live.
-///
-/// 1. Refuse if an app is rendering on it (and say which).
-/// 2. Announce the removal so the desktop releases the GPU's display devices; wait for it.
-/// 3. Stop NVIDIA's helper daemons, unload the driver, cut power (`dgpu_disable=1`).
-///
-/// Any failure rolls back to Hybrid exactly as it was.
+/// Power the dGPU off, live. Any failure rolls back to Hybrid exactly as it was.
 fn power_off(root: &SysRoot, fw_attrs: bool) -> Result<(), String> {
     let Some(addr) = gpu::dgpu(root).map(|g| g.address) else {
         return Ok(()); // already off the bus
     };
-    let users = holders(root);
-    let apps: Vec<String> = users
-        .iter()
-        .filter(|u| u.kind == gpu::UseKind::Render)
-        .map(|u| format!("{} ({})", u.name, u.pid))
-        .collect();
-    if !apps.is_empty() {
-        return Err(format!(
-            "the NVIDIA GPU is in use by {}; close them and try again",
-            apps.join(", ")
-        ));
-    }
-    if users.iter().any(|u| u.driver_handles) {
-        return Err(NEEDS_FRESH_SESSION.into());
-    }
 
+    // 1. The desktop lets go of the GPU's display devices.
     announce(root, &addr, "remove");
-    if !wait_for(Duration::from_secs(4), || holders(root).is_empty()) {
+    if !wait_for(Duration::from_secs(4), || blocking_users(root).is_empty()) {
         announce(root, &addr, "add");
-        let left: Vec<String> = holders(root).iter().map(|u| u.name.clone()).collect();
+        let left: Vec<String> = blocking_users(root).iter().map(|u| u.name.clone()).collect();
         return Err(format!(
             "{} didn't release the NVIDIA GPU; staying in Hybrid",
             left.join(", ")
         ));
     }
 
+    // 2. NVIDIA's helpers and driver.
     let mut stopped = Vec::new();
     for (_, unit) in gpu::NVIDIA_SERVICES {
         if run("systemctl", &["is-active", "--quiet", unit]) && run("systemctl", &["stop", unit]) {
@@ -146,12 +171,14 @@ fn power_off(root: &SysRoot, fw_attrs: bool) -> Result<(), String> {
         Err(msg)
     };
     for m in NVIDIA_MODULES {
-        if root.exists(format!("/sys/module/{m}")) && !run("modprobe", &["-r", m]) {
+        if root.exists(format!("/sys/module/{m}")) && !run("rmmod", &[m]) {
             return rollback(format!(
-                "could not unload {m}: something still uses the NVIDIA driver"
+                "couldn't unload {m}: something still uses the NVIDIA driver"
             ));
         }
     }
+
+    // 3. Cut the power.
     if let Err(e) = set_asus(root, fw_attrs, "dgpu_disable", "1") {
         return rollback(e);
     }
@@ -162,9 +189,12 @@ fn power_off(root: &SysRoot, fw_attrs: bool) -> Result<(), String> {
 }
 
 fn power_on(root: &SysRoot, fw_attrs: bool) -> Result<(), String> {
+    // The firmware powers the GPU up and re-enumerates it; this call takes several seconds.
     set_asus(root, fw_attrs, "dgpu_disable", "0")?;
-    let _ = root.write("/sys/bus/pci/rescan", "1");
-    if !wait_for(Duration::from_secs(5), || gpu::dgpu(root).is_some()) {
+    if gpu::dgpu(root).is_none() {
+        let _ = root.write("/sys/bus/pci/rescan", "1");
+    }
+    if !wait_for(Duration::from_secs(10), || gpu::dgpu(root).is_some()) {
         return Err("the NVIDIA GPU did not come back on the PCI bus".into());
     }
     run("modprobe", &["nvidia_drm"]);
@@ -176,93 +206,155 @@ fn power_on(root: &SysRoot, fw_attrs: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// Switch to `target`. Blocking (module unload/load takes ~1 s); call off the D-Bus executor.
-pub fn switch(d: &mut Daemon, target: Mode) -> Result<Outcome, String> {
-    let st = d.gpu_status();
-    let Switcher::Asus { fw_attrs, has_mux } = st.switcher else {
-        return match target {
-            Mode::Hybrid => Ok(Outcome::Done("Hybrid is the only mode on this laptop".into())),
-            _ => Err("this laptop has no firmware GPU switch".into()),
-        };
+/// Perform a switch. Blocking: call from a worker thread (or at start-up, before D-Bus).
+pub fn switch(root: &SysRoot, st: &Status, target: Mode) -> Result<Outcome, String> {
+    precheck(root, st, target)?;
+    let Switcher::Asus { fw_attrs, .. } = st.switcher else {
+        return Ok(Outcome::Done("Hybrid is the only mode on this laptop".into()));
     };
-    let root = d.root.clone();
 
-    // Undo a pending MUX change if the user goes back to what is running now.
+    // Going back to what is running now cancels a pending MUX change.
     if st.pending.is_some() && target == st.mode {
-        set_asus(
-            &root,
-            fw_attrs,
-            "gpu_mux_mode",
-            if st.mode == Mode::Ultimate { "0" } else { "1" },
-        )?;
+        let mux = if st.mode == Mode::Ultimate { "0" } else { "1" };
+        set_asus(root, fw_attrs, "gpu_mux_mode", mux)?;
         return Ok(Outcome::Done(format!(
-            "Cancelled the pending switch; staying in {}",
-            target
+            "Cancelled the pending switch; staying in {target}"
         )));
     }
 
     match (st.mode, target) {
         (a, b) if a == b && st.pending.is_none() => Ok(Outcome::Done(format!("Already in {b} mode"))),
         (Mode::Hybrid, Mode::Eco) => {
-            power_off(&root, fw_attrs)?;
-            Ok(Outcome::Done("Eco: the NVIDIA GPU is powered off".into()))
+            power_off(root, fw_attrs)?;
+            Ok(Outcome::Done("Eco: the NVIDIA GPU is off".into()))
         }
         (Mode::Eco, Mode::Hybrid) => {
-            power_on(&root, fw_attrs)?;
+            power_on(root, fw_attrs)?;
             Ok(Outcome::Done(
-                "Hybrid: the NVIDIA GPU is available to apps that ask for it".into(),
+                "Hybrid: the NVIDIA GPU is ready for apps that ask for it".into(),
             ))
         }
         (_, Mode::Ultimate) => {
-            if !has_mux {
-                return Err("this laptop has no MUX switch".into());
-            }
             if st.mode == Mode::Eco {
-                power_on(&root, fw_attrs)?;
+                power_on(root, fw_attrs)?;
             }
-            set_asus(&root, fw_attrs, "gpu_mux_mode", "0")?;
+            set_asus(root, fw_attrs, "gpu_mux_mode", "0")?;
             Ok(Outcome::NeedsReboot(
-                "Ultimate takes effect after a reboot: the panel will be wired to the NVIDIA GPU".into(),
+                "Ultimate is ready: restart to wire the screen straight to the NVIDIA GPU".into(),
             ))
         }
         (Mode::Ultimate, b) => {
-            set_asus(&root, fw_attrs, "gpu_mux_mode", "1")?;
-            let extra = if b == Mode::Eco {
-                "; Eco will be applied after it"
+            set_asus(root, fw_attrs, "gpu_mux_mode", "1")?;
+            let then = if b == Mode::Eco {
+                " (Eco is applied right after)"
             } else {
                 ""
             };
             Ok(Outcome::NeedsReboot(format!(
-                "{b} takes effect after a reboot{extra}"
+                "{b} is ready: restart to finish{then}"
             )))
         }
         (_, b) => Ok(Outcome::Done(format!("Already in {b} mode"))),
     }
 }
 
-/// Bring the hardware in line with the policy for the current power source.
-/// Used at start-up and on AC/battery changes (Optimized). Never forces: if apps are using
-/// the dGPU, Eco waits for the next event.
-pub fn enforce_policy(d: &mut Daemon) -> Option<String> {
+/// What the policy wants right now, if it differs from the hardware and can be done live.
+pub fn policy_target(d: &crate::state::Daemon) -> Option<Mode> {
     let target = d.gpu_policy.target(d.on_battery);
     let st = d.gpu_status();
-    if st.mode == target || st.pending.is_some() || st.mode == Mode::Ultimate || target == Mode::Ultimate {
-        d.gpu_waiting = false;
-        return None;
-    }
-    let msg = match switch(d, target) {
-        Ok(o) => {
-            d.gpu_waiting = false;
-            o.message().to_owned()
+    let live = st.mode != Mode::Ultimate && target != Mode::Ultimate && st.pending.is_none();
+    (live && st.mode != target).then_some(target)
+}
+
+/// Start a switch on a worker thread. `policy`: saved once the switch succeeds (user requests).
+/// `automatic`: a policy-driven switch, retried while an app holds the GPU.
+/// Returns immediately; progress is published through `GpuSwitching` / `GpuMessage`.
+pub fn begin(
+    conn: zbus::Connection,
+    shared: Shared,
+    target: Mode,
+    policy: Option<Policy>,
+    automatic: bool,
+) -> Result<(), String> {
+    let (root, st) = {
+        let mut d = lock(&shared);
+        if let Some(t) = d.gpu_switching {
+            return Err(format!("already switching to {t}; one moment"));
         }
+        let st = d.gpu_status();
+        if let Err(e) = precheck(&d.root, &st, target) {
+            if automatic {
+                d.gpu_waiting = e != NEEDS_FRESH_SESSION;
+                d.gpu_message = format!("Waiting to switch to {target}: {e}");
+            }
+            return Err(e);
+        }
+        d.gpu_switching = Some(target);
+        d.gpu_message = format!("Switching to {target}…");
+        (d.root.clone(), st)
+    };
+    let worker_conn = conn.clone();
+    let worker_shared = shared.clone();
+    std::thread::Builder::new()
+        .name("gpu-switch".into())
+        .stack_size(256 * 1024)
+        .spawn(move || {
+            zbus::block_on(emit_changed(&worker_conn, &worker_shared));
+            let result = switch(&root, &st, target);
+            let boot_mux = lock(&worker_shared).boot_mux;
+            let fresh = crate::state::Daemon::read_gpu_status(&root, boot_mux);
+            {
+                let mut d = lock(&worker_shared);
+                d.gpu_cache = fresh;
+                d.gpu_switching = None;
+                match &result {
+                    Ok(o) => {
+                        if let Some(p) = policy {
+                            d.gpu_policy = p;
+                            d.save();
+                        }
+                        d.gpu_waiting = false;
+                        d.gpu_message = o.message().to_owned();
+                    }
+                    Err(e) => {
+                        d.gpu_waiting = automatic && e != NEEDS_FRESH_SESSION;
+                        d.gpu_message = format!("Couldn't switch to {target}: {e}");
+                    }
+                }
+                eprintln!("tspmod: gpu: {}", d.gpu_message);
+            }
+            zbus::block_on(emit_changed(&worker_conn, &worker_shared));
+            if automatic {
+                crate::watch::gpu_retry(&worker_conn, &worker_shared);
+            }
+        })
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Bring the hardware in line with the policy (power-source change, logout, retry).
+pub fn enforce(conn: &zbus::Connection, shared: &Shared) {
+    let target = policy_target(&lock(shared));
+    match target {
+        Some(t) => {
+            let _ = begin(conn.clone(), shared.clone(), t, None, true);
+        }
+        None => lock(shared).gpu_waiting = false,
+    }
+}
+
+/// At start-up, before D-Bus is up: apply the policy synchronously.
+pub fn enforce_at_boot(d: &mut crate::state::Daemon) {
+    let Some(target) = policy_target(d) else { return };
+    let st = d.gpu_status();
+    let result = switch(&d.root, &st, target);
+    d.gpu_cache = crate::state::Daemon::read_gpu_status(&d.root, d.boot_mux);
+    d.gpu_message = match result {
+        Ok(o) => o.message().to_owned(),
         Err(e) => {
-            // An app (a game) is using the dGPU: retry until it exits. (A desktop that still
-            // has the NVIDIA driver loaded only changes at the next login: no point retrying.)
             d.gpu_waiting = e != NEEDS_FRESH_SESSION;
             format!("Waiting to switch to {target}: {e}")
         }
     };
-    eprintln!("tspmod: gpu: {msg}");
-    d.gpu_message = msg.clone();
-    Some(msg)
+    eprintln!("tspmod: gpu: {}", d.gpu_message);
 }
