@@ -1,7 +1,7 @@
 // The contract between the UI and Rust: plain data in, callbacks out. Each window has its own
 // copy of this global; Rust fills all of them from the same state.
 
-export struct Opt { id: string, label: string, hint: string, tint: color, keyed: bool }
+export struct Opt { id: string, label: string, tint: color, keyed: bool }
 export struct GpuUser { pid: int, name: string }
 export struct Pt { t: int, p: int }
 export struct LimitRow { name: string, label: string, unit: string, min: int, max: int, def: int, cur: int, custom: bool }
@@ -56,6 +56,7 @@ export global Bk {
     in property <bool> has-battery;
     in property <int> bat-percent: -1;
     in property <string> bat-status;
+    in property <string> bat-line;
     in property <string> bat-power;
     in property <string> bat-left;
     in property <int> bat-limit;

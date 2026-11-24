@@ -114,7 +114,6 @@ PlasmoidItem {
                         Layout.preferredWidth: 1
                         implicitHeight: Math.round(Kirigami.Units.gridUnit * 2.6)
                         text: modelData.label
-                        hint: String(index + 1)
                         accent: root.accentOf(modelData)
                         keyed: true
                         selected: daemon.profile === modelData.id
@@ -165,7 +164,6 @@ PlasmoidItem {
         Tile {
             Layout.fillWidth: true
             text: "All settings"
-            hint: "ROG"
             accent: root.accentOf(root.modeInfo(daemon.profile))
             onActivated: {
                 launcher.connectSource("tspmo-gui --toggle");

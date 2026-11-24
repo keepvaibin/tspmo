@@ -266,12 +266,83 @@ pub fn fmt_duration(secs: i64) -> String {
     }
 }
 
+/// Watts, or nothing when unknown or too small to mean anything (0.0 W while "Not charging").
 pub fn fmt_watts(w: f64) -> String {
-    if w < 0.0 {
+    if w < 0.5 {
         String::new()
     } else {
         format!("{w:.1} W")
     }
+}
+
+/// `82%  Charging 41.9 W`. The rate only appears while energy actually flows.
+pub fn battery_line(percent: i64, status: &str, watts: f64) -> String {
+    if percent < 0 {
+        return String::new();
+    }
+    let rate = if matches!(status, "Charging" | "Discharging") {
+        fmt_watts(watts)
+    } else {
+        String::new()
+    };
+    let state = [status, rate.as_str()]
+        .into_iter()
+        .filter(|p| !p.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    if state.is_empty() {
+        format!("{percent}%")
+    } else {
+        format!("{percent}%  {state}")
+    }
+}
+
+/// What the firmware reports as the charger in use.
+pub fn charger_label(code: &str) -> &'static str {
+    match code {
+        "0" => "none",
+        "1" => "barrel",
+        "2" => "USB-C",
+        _ => "",
+    }
+}
+
+/// Power limits that must keep an order: sustained <= boost <= fast boost.
+pub const LIMIT_ORDER: [&str; 3] = ["ppt_pl1_spl", "ppt_pl2_sppt", "ppt_pl3_fppt"];
+
+/// After `name` was set to `value`, the neighbours that would break the order, with their new
+/// values (clamped to their own range). Empty when nothing needs to move.
+pub fn limit_fixes(ls: &[Limit], name: &str, value: i64) -> Vec<(String, i64)> {
+    let Some(at) = LIMIT_ORDER.iter().position(|n| *n == name) else {
+        return Vec::new();
+    };
+    let get = |n: &str| ls.iter().find(|l| l.name == n);
+    let mut out: Vec<(String, i64)> = Vec::new();
+    let mut prev = value;
+    for n in &LIMIT_ORDER[at + 1..] {
+        if let Some(l) = get(n) {
+            if l.cur < prev {
+                let v = prev.clamp(l.min, l.max.max(l.min));
+                out.push(((*n).to_owned(), v));
+                prev = v;
+            } else {
+                prev = l.cur;
+            }
+        }
+    }
+    let mut next = value;
+    for n in LIMIT_ORDER[..at].iter().rev() {
+        if let Some(l) = get(n) {
+            if l.cur > next {
+                let v = next.clamp(l.min, l.max.max(l.min));
+                out.push(((*n).to_owned(), v));
+                next = v;
+            } else {
+                next = l.cur;
+            }
+        }
+    }
+    out
 }
 
 /// Index of the step matching `limit` (the nearest below if the exact one is absent).
@@ -350,8 +421,13 @@ pub fn cycle<'a>(list: &'a [String], cur: &str, dir: i64) -> Option<&'a String> 
     if list.is_empty() {
         return None;
     }
-    let i = list.iter().position(|m| m == cur).unwrap_or(0) as i64;
-    list.get((i + dir).rem_euclid(list.len() as i64) as usize)
+    let n = list.len() as i64;
+    // Nothing chosen yet: forward starts at the first entry, backward at the last.
+    let i = list
+        .iter()
+        .position(|m| m == cur)
+        .map_or(if dir > 0 { -1 } else { 0 }, |i| i as i64);
+    list.get((i + dir).rem_euclid(n) as usize)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -639,12 +715,48 @@ mod tests {
     }
 
     #[test]
+    fn limits_keep_their_order() {
+        let l = |n: &str, min, max, cur| Limit {
+            name: n.into(),
+            label: n.into(),
+            unit: "W".into(),
+            min,
+            max,
+            def: cur,
+            cur,
+            custom: false,
+        };
+        let ls = [
+            l("ppt_pl1_spl", 28, 90, 60),
+            l("ppt_pl2_sppt", 28, 135, 80),
+            l("nv_tgp", 5, 20, 10),
+        ];
+        // Sustained above boost drags boost along.
+        assert_eq!(
+            limit_fixes(&ls, "ppt_pl1_spl", 100),
+            vec![("ppt_pl2_sppt".to_owned(), 100)]
+        );
+        // Boost below sustained drags sustained down.
+        assert_eq!(
+            limit_fixes(&ls, "ppt_pl2_sppt", 40),
+            vec![("ppt_pl1_spl".to_owned(), 40)]
+        );
+        assert!(limit_fixes(&ls, "ppt_pl1_spl", 70).is_empty());
+        assert!(limit_fixes(&ls, "nv_tgp", 15).is_empty());
+    }
+
+    #[test]
     fn formats() {
         assert_eq!(fmt_duration(3600 + 25 * 60), "1h 25m");
         assert_eq!(fmt_duration(90), "2m");
         assert_eq!(fmt_duration(-1), "");
         assert_eq!(fmt_watts(12.34), "12.3 W");
         assert_eq!(fmt_watts(-1.0), "");
+        assert_eq!(fmt_watts(0.0), "");
+        assert_eq!(battery_line(82, "Not charging", 0.0), "82%  Not charging");
+        assert_eq!(battery_line(75, "Charging", 41.94), "75%  Charging 41.9 W");
+        assert_eq!(battery_line(75, "Full", 3.0), "75%  Full");
+        assert_eq!(battery_line(-1, "Full", 3.0), "");
         assert_eq!(step_index(&[60, 65, 70, 75, 80, 100], 80), 4);
         assert_eq!(step_index(&[60, 65, 70, 75, 80, 100], 77), 3);
         assert_eq!(step_index(&[], 77), 0);
@@ -673,5 +785,7 @@ mod tests {
         assert_eq!(cycle(&l, "c", 1).map(String::as_str), Some("a"));
         assert_eq!(cycle(&l, "a", -1).map(String::as_str), Some("c"));
         assert_eq!(cycle(&[], "a", 1), None);
+        assert_eq!(cycle(&l, "", 1).map(String::as_str), Some("a"));
+        assert_eq!(cycle(&l, "", -1).map(String::as_str), Some("c"));
     }
 }

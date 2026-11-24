@@ -1,4 +1,4 @@
-import { Th } from "theme.slint";
+import { Th, Nav } from "theme.slint";
 import { Bk, Opt } from "bk.slint";
 import { Btn, Seg, Field, SlideRow, Row, Cap, Mono } from "controls.slint";
 
@@ -28,10 +28,10 @@ export component PopupBody inherits VerticalLayout {
             h: 2.8rem;
             wheel: true;
             opts: [
-                { id: "eco-plus", label: "Eco+", hint: "1", tint: Th.mode-color("eco-plus"), keyed: true },
-                { id: "power-saver", label: "Silent", hint: "2", tint: Th.mode-color("power-saver"), keyed: true },
-                { id: "balanced", label: "Balanced", hint: "3", tint: Th.mode-color("balanced"), keyed: true },
-                { id: "performance", label: "Turbo", hint: "4", tint: Th.mode-color("performance"), keyed: true },
+                { id: "eco-plus", label: "Eco+", tint: Th.mode-color("eco-plus"), keyed: true },
+                { id: "power-saver", label: "Silent", tint: Th.mode-color("power-saver"), keyed: true },
+                { id: "balanced", label: "Balanced", tint: Th.mode-color("balanced"), keyed: true },
+                { id: "performance", label: "Turbo", tint: Th.mode-color("performance"), keyed: true },
             ];
             index: Bk.mode == "eco-plus" ? 0 : Bk.mode == "power-saver" ? 1 : Bk.mode == "balanced" ? 2 : Bk.mode == "performance" ? 3 : -1;
             picked(i) => { Bk.act("mode", ["eco-plus", "power-saver", "balanced", "performance"][i]); }
@@ -75,7 +75,7 @@ export component PopupBody inherits VerticalLayout {
             min: 1;
             max: 100;
             value-int: Bk.brightness;
-            value: Bk.brightness + " %";
+            value: Bk.brightness + "%";
             released(v) => { Bk.acti("brightness", v); }
         }
         if Bk.has-light: SlideRow {
@@ -93,7 +93,7 @@ export component PopupBody inherits VerticalLayout {
         spacing: 0.4rem;
         Field {
             label: "Charge limit";
-            value: Bk.bat-percent >= 0 ? Bk.bat-percent + " % " + Bk.bat-status + (Bk.bat-power != "" ? "  " + Bk.bat-power : "") : "";
+            value: Bk.bat-line;
         }
         if Bk.bat-opts.length > 0: Seg {
             opts: Bk.bat-opts;
@@ -107,13 +107,13 @@ export component PopupBody inherits VerticalLayout {
         spacing: 0.3rem;
         if Bk.win-fans || Bk.win-screen: HorizontalLayout {
             spacing: 0.3rem;
-            if Bk.win-fans: Btn { horizontal-stretch: 1; preferred-width: 0px; text: "Fans & Power"; hint: "F"; clicked => { Bk.open("fans"); } }
-            if Bk.win-screen: Btn { horizontal-stretch: 1; preferred-width: 0px; text: "Screen"; hint: "S"; clicked => { Bk.open("screen"); } }
+            if Bk.win-fans: Btn { horizontal-stretch: 1; preferred-width: 0px; text: "Fans & Power"; clicked => { Bk.open("fans"); } }
+            if Bk.win-screen: Btn { horizontal-stretch: 1; preferred-width: 0px; text: "Screen"; clicked => { Bk.open("screen"); } }
         }
         if Bk.win-keys || Bk.win-system: HorizontalLayout {
             spacing: 0.3rem;
-            if Bk.win-keys: Btn { horizontal-stretch: 1; preferred-width: 0px; text: "Keyboard & Lid"; hint: "K"; clicked => { Bk.open("keys"); } }
-            if Bk.win-system: Btn { horizontal-stretch: 1; preferred-width: 0px; text: "System"; hint: "Y"; clicked => { Bk.open("system"); } }
+            if Bk.win-keys: Btn { horizontal-stretch: 1; preferred-width: 0px; text: "Keyboard & Lid"; clicked => { Bk.open("keys"); } }
+            if Bk.win-system: Btn { horizontal-stretch: 1; preferred-width: 0px; text: "System"; clicked => { Bk.open("system"); } }
         }
     }
 
@@ -136,6 +136,7 @@ export component Popup inherits Window {
     FocusScope {
         init => { self.focus(); }
         key-pressed(e) => {
+            Nav.keys = true;
             if (e.text == Key.Escape) { Bk.close(); return accept; }
             if (e.modifiers.control || e.modifiers.alt || e.modifiers.meta) { return reject; }
             if (e.text == "1") { Bk.act("mode", "eco-plus"); return accept; }
