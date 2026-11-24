@@ -38,7 +38,7 @@ export component GpuSection inherits VerticalLayout {
     property <bool> busy: Bk.gpu-switching != "";
     Seg {
         opts: [
-            { id: "eco", label: "Eco", icon: "eco" },
+            { id: "eco", label: "Eco", icon: "eco-plus" },
             { id: "hybrid", label: "Hybrid", icon: "hybrid" },
             { id: "ultimate", label: "Ultimate", icon: "ultimate" },
             { id: "optimized", label: "Auto", icon: "auto" },
@@ -53,7 +53,7 @@ export component GpuSection inherits VerticalLayout {
             label: Bk.gpu-switching != "" ? "→ " + Bk.gpu-switching : Bk.gpu-mode;
             value: Bk.dgpu-asleep ? "dGPU off" : "dGPU on";
         }
-        if Bk.gpu-pending != "" && Bk.gpu-pending != Bk.gpu-mode: Row {
+        if Bk.gpu-reboot: Row {
             icon: "reboot";
             label: Bk.gpu-pending;
             Btn { text: "Reboot"; icon: "reboot"; primary: true; clicked => { Bk.act("reboot", ""); } }

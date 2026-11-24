@@ -87,7 +87,11 @@ fn sync<T: Clone + PartialEq + 'static>(m: &VecModel<T>, new: Vec<T>) {
 }
 
 fn opt(id: &str, label: &str, icon: &str) -> Opt {
-    Opt { id: ss(id), label: ss(label), icon: ss(icon) }
+    Opt {
+        id: ss(id),
+        label: ss(label),
+        icon: ss(icon),
+    }
 }
 
 fn item_of(i: &model::HwItem) -> Item {
@@ -194,7 +198,8 @@ impl App {
         match ev {
             Event::Props(iface, props) => {
                 let settings_changed = iface == "Fans1" && props.iter().any(|(k, _)| k == "Settings");
-                let switching = iface == "Daemon1" && props.iter().any(|(k, _)| k == "GpuSwitching" || k == "GpuMode");
+                let switching =
+                    iface == "Daemon1" && props.iter().any(|(k, _)| k == "GpuSwitching" || k == "GpuMode");
                 self.store.merge(&iface, props);
                 if settings_changed && self.edit.as_ref().is_some_and(|e| e.sent) {
                     self.edit = None;
@@ -230,12 +235,21 @@ impl App {
     fn init_locals(&mut self) {
         if !self.fan_init && self.store.has_prop("Fans1", "Mode") {
             self.fan_init = true;
-            self.fan_mode = THERMAL.iter().position(|m| *m == self.store.get("Fans1", "Mode").str()).unwrap_or(1);
+            self.fan_mode = THERMAL
+                .iter()
+                .position(|m| *m == self.store.get("Fans1", "Mode").str())
+                .unwrap_or(1);
         }
         if !self.pw_init && self.store.has_prop("Power1", "Mode") {
             self.pw_init = true;
-            self.pw_mode = THERMAL.iter().position(|m| *m == self.store.get("Power1", "Mode").str()).unwrap_or(1);
-            self.pw_source = SOURCES.iter().position(|m| *m == self.store.get("Power1", "Source").str()).unwrap_or(0);
+            self.pw_mode = THERMAL
+                .iter()
+                .position(|m| *m == self.store.get("Power1", "Mode").str())
+                .unwrap_or(1);
+            self.pw_source = SOURCES
+                .iter()
+                .position(|m| *m == self.store.get("Power1", "Source").str())
+                .unwrap_or(0);
         }
     }
 
@@ -248,14 +262,15 @@ impl App {
 
     fn set_error(&mut self, msg: String) {
         self.error = msg;
-        self.error_timer.start(TimerMode::SingleShot, Duration::from_secs(6), || {
-            with_app(|a| {
-                if !a.offline {
-                    a.error.clear();
-                    a.push();
-                }
+        self.error_timer
+            .start(TimerMode::SingleShot, Duration::from_secs(6), || {
+                with_app(|a| {
+                    if !a.offline {
+                        a.error.clear();
+                        a.push();
+                    }
+                });
             });
-        });
     }
 
     fn call(&self, c: Call) {
@@ -277,7 +292,10 @@ impl App {
         }
         if matches!(self.section.as_str(), "fans" | "battery") {
             self.tick();
-            self.live_timer.start(TimerMode::Repeated, Duration::from_secs(1), || with_app(|a| a.tick_and_push()));
+            self.live_timer
+                .start(TimerMode::Repeated, Duration::from_secs(1), || {
+                    with_app(|a| a.tick_and_push())
+                });
         } else {
             self.live_timer.stop();
         }
@@ -303,7 +321,11 @@ impl App {
     // actions
 
     fn mode_list(&self) -> Vec<&'static str> {
-        MODES.iter().copied().filter(|m| *m != "eco-plus" || !self.eco_missing).collect()
+        MODES
+            .iter()
+            .copied()
+            .filter(|m| *m != "eco-plus" || !self.eco_missing)
+            .collect()
     }
 
     fn thermal(&self) -> &'static str {
@@ -312,7 +334,9 @@ impl App {
 
     fn fan_number(&self) -> Option<u32> {
         let f = self.store.get("Fans1", "Fans").list();
-        f.get(self.fan_sel).or_else(|| f.first()).map(|e| e.at(0).int() as u32)
+        f.get(self.fan_sel)
+            .or_else(|| f.first())
+            .map(|e| e.at(0).int() as u32)
     }
 
     fn act(&mut self, key: &str, arg: &str) {
@@ -326,14 +350,26 @@ impl App {
             "gpu" => self.send("Daemon1", "SetGpuMode", &[Arg::s(arg)]),
             "reboot" => bus::reboot(emit),
             "refresh" => self.send(bindings::IFACE, bindings::SET_REFRESH_POLICY, &[Arg::s(arg)]),
-            "flicker" => self.send(bindings::IFACE, bindings::SET_FLICKER_FREE, &[Arg::B(arg == "on")]),
+            "flicker" => self.send(
+                bindings::IFACE,
+                bindings::SET_FLICKER_FREE,
+                &[Arg::B(arg == "on")],
+            ),
             "color" => self.send(bindings::IFACE, bindings::SET_COLOR_MODE, &[Arg::s(arg)]),
             "hw-toggle" => {
                 if let Some(what) = arg.strip_prefix("slash:") {
-                    let on = s.get("Lid1", "SlashShow").list().iter().any(|e| e.at(0).str() == what && e.at(1).bool());
+                    let on = s
+                        .get("Lid1", "SlashShow")
+                        .list()
+                        .iter()
+                        .any(|e| e.at(0).str() == what && e.at(1).bool());
                     self.send("Lid1", "SetSlashShow", &[Arg::s(what), Arg::B(!on)]);
                 } else if let Some(it) = model::hw_items(s).iter().find(|i| i.name == arg) {
-                    self.send("Hardware1", "Set", &[Arg::s(arg), Arg::s(if it.on() { "0" } else { "1" })]);
+                    self.send(
+                        "Hardware1",
+                        "Set",
+                        &[Arg::s(arg), Arg::s(if it.on() { "0" } else { "1" })],
+                    );
                 }
             }
             "charge-once" => self.send("Battery1", "SetChargeOnce", &[Arg::B(arg == "on")]),
@@ -356,7 +392,12 @@ impl App {
                     self.send(
                         "Power1",
                         "SetLimit",
-                        &[Arg::s(mode), Arg::s(SOURCES[self.pw_source.min(1)]), Arg::s(arg), Arg::N(-1)],
+                        &[
+                            Arg::s(mode),
+                            Arg::s(SOURCES[self.pw_source.min(1)]),
+                            Arg::s(arg),
+                            Arg::N(-1),
+                        ],
                     );
                 }
             }
@@ -404,18 +445,30 @@ impl App {
                 let mut e = model::effect(s);
                 if let Some(next) = model::cycle(&modes, &e.mode, n) {
                     e.mode = next.clone();
-                    self.call(Call::new("Lighting1", "SetEffect", vec![zbus::zvariant::Value::from(""), e.to_value()]));
+                    self.call(Call::new(
+                        "Lighting1",
+                        "SetEffect",
+                        vec![zbus::zvariant::Value::from(""), e.to_value()],
+                    ));
                 }
             }
             "kb-color" => {
                 let mut e = model::effect(s);
                 e.color = model::KB_COLORS[(n as usize).min(7)];
-                self.call(Call::new("Lighting1", "SetEffect", vec![zbus::zvariant::Value::from(""), e.to_value()]));
+                self.call(Call::new(
+                    "Lighting1",
+                    "SetEffect",
+                    vec![zbus::zvariant::Value::from(""), e.to_value()],
+                ));
             }
             "kb-speed" => {
                 let mut e = model::effect(s);
                 e.speed = model::KB_SPEEDS[(n as usize).min(2)].to_owned();
-                self.call(Call::new("Lighting1", "SetEffect", vec![zbus::zvariant::Value::from(""), e.to_value()]));
+                self.call(Call::new(
+                    "Lighting1",
+                    "SetEffect",
+                    vec![zbus::zvariant::Value::from(""), e.to_value()],
+                ));
             }
             "kb-idle-step" => {
                 let cur = s.get("Lighting1", "IdleTimeout").int();
@@ -433,7 +486,12 @@ impl App {
             "anime-level" => self.send("Lid1", "SetAnimeBrightness", &[Arg::N(n)]),
             k if k.starts_with("kb-state:") => {
                 let i: usize = k["kb-state:".len()..].parse().unwrap_or(0);
-                let mut st: Vec<bool> = s.get("Lighting1", "PowerStates").list().iter().map(V::bool).collect();
+                let mut st: Vec<bool> = s
+                    .get("Lighting1", "PowerStates")
+                    .list()
+                    .iter()
+                    .map(V::bool)
+                    .collect();
                 st.resize(4, true);
                 if let Some(slot) = st.get_mut(i) {
                     *slot = n != 0;
@@ -446,12 +504,21 @@ impl App {
                 self.send(
                     "Power1",
                     "SetLimit",
-                    &[Arg::s(THERMAL[self.pw_mode.min(2)]), Arg::s(SOURCES[self.pw_source.min(1)]), Arg::s(name), Arg::N(n)],
+                    &[
+                        Arg::s(THERMAL[self.pw_mode.min(2)]),
+                        Arg::s(SOURCES[self.pw_source.min(1)]),
+                        Arg::s(name),
+                        Arg::N(n),
+                    ],
                 );
             }
             k if k.starts_with("hw-step:") => {
                 let name = &k["hw-step:".len()..];
-                if let Some(v) = model::hw_items(s).iter().find(|i| i.name == name).and_then(|i| i.step(n)) {
+                if let Some(v) = model::hw_items(s)
+                    .iter()
+                    .find(|i| i.name == name)
+                    .and_then(|i| i.step(n))
+                {
                     self.send("Hardware1", "Set", &[Arg::s(name), Arg::S(v)]);
                 }
             }
@@ -469,13 +536,22 @@ impl App {
         }
         let fan = self.fan_number().unwrap_or(1);
         let pts = model::fan_setting(&self.store, self.thermal(), fan).points;
-        if pts.is_empty() { model::default_curve() } else { pts }
+        if pts.is_empty() {
+            model::default_curve()
+        } else {
+            pts
+        }
     }
 
     fn curve_move(&mut self, i: usize, t: i32, p: i32) {
         if self.edit.is_none() {
             let Some(fan) = self.fan_number() else { return };
-            self.edit = Some(Edit { mode: self.thermal(), fan, points: self.shown_curve(), sent: false });
+            self.edit = Some(Edit {
+                mode: self.thermal(),
+                fan,
+                points: self.shown_curve(),
+                sent: false,
+            });
         }
         if let Some(e) = self.edit.as_mut() {
             e.sent = false;
@@ -494,17 +570,26 @@ impl App {
         let c = Call::new(
             "Fans1",
             "SetCurve",
-            vec![zbus::zvariant::Value::from(e.mode), zbus::zvariant::Value::U32(e.fan), pts],
+            vec![
+                zbus::zvariant::Value::from(e.mode),
+                zbus::zvariant::Value::U32(e.fan),
+                pts,
+            ],
         );
         self.call(c);
     }
 
     fn push_curve(&self) {
-        let pts: Vec<Pt> = self.shown_curve().iter().map(|(t, p)| Pt { t: i32::from(*t), p: i32::from(*p) }).collect();
-        let path = curve_path(&pts);
+        let pts: Vec<Pt> = self
+            .shown_curve()
+            .iter()
+            .map(|(t, p)| Pt {
+                t: i32::from(*t),
+                p: i32::from(*p),
+            })
+            .collect();
         sync(&self.m.curve, pts);
         if let Some(w) = self.win.upgrade() {
-            w.global::<Bk>().set_curve_path(ss(&path));
             let kind = if self.edit.is_some() {
                 "custom".to_owned()
             } else {
@@ -542,10 +627,15 @@ impl App {
         bk.set_head_text(ss(&head_text(s, self.live_w)));
 
         // GPU
-        bk.set_gpu_mode(ss(s.get("Daemon1", "GpuMode").str()));
+        bk.set_gpu_mode(ss(&model::color_label(s.get("Daemon1", "GpuMode").str())));
         bk.set_gpu_policy(ss(s.get("Daemon1", "GpuPolicy").str()));
         bk.set_gpu_switching(ss(s.get("Daemon1", "GpuSwitching").str()));
-        bk.set_gpu_pending(ss(s.get("Daemon1", "GpuPending").str()));
+        let (mode_raw, pending) = (
+            s.get("Daemon1", "GpuMode").str(),
+            s.get("Daemon1", "GpuPending").str(),
+        );
+        bk.set_gpu_pending(ss(&model::color_label(pending)));
+        bk.set_gpu_reboot(!pending.is_empty() && pending != mode_raw);
         bk.set_gpu_message(ss(s.get("Daemon1", "GpuMessage").str()));
         bk.set_dgpu_asleep(s.get("Daemon1", "DgpuAsleep").bool());
         sync(
@@ -553,7 +643,10 @@ impl App {
             s.gpu_users
                 .iter()
                 .filter(|(_, _, k)| k == "render")
-                .map(|(pid, name, _)| GpuUser { pid: *pid as i32, name: ss(name) })
+                .map(|(pid, name, _)| GpuUser {
+                    pid: *pid as i32,
+                    name: ss(name),
+                })
                 .collect(),
         );
 
@@ -566,40 +659,78 @@ impl App {
         bk.set_flicker(sc.flicker);
         bk.set_brightness(sc.brightness as i32);
         bk.set_color_mode(ss(&sc.color_mode));
-        bk.set_color_idx(sc.color_modes.iter().position(|m| *m == sc.color_mode).unwrap_or(0) as i32);
+        bk.set_color_idx(
+            sc.color_modes
+                .iter()
+                .position(|m| *m == sc.color_mode)
+                .unwrap_or(0) as i32,
+        );
         sync(
             &self.m.color_modes,
-            sc.color_modes.iter().map(|m| opt(m, &model::color_label(m), "")).collect(),
+            sc.color_modes
+                .iter()
+                .map(|m| opt(m, &model::color_label(m), ""))
+                .collect(),
         );
         bk.set_has_eye(sc.has_eye);
         bk.set_eye_kelvin(sc.eye_kelvin as i32);
         let hw = model::hw_items(s);
         sync(
             &self.m.screen_items,
-            hw.iter().filter(|i| model::SCREEN_ITEMS.contains(&i.name.as_str())).map(item_of).collect(),
+            hw.iter()
+                .filter(|i| model::SCREEN_ITEMS.contains(&i.name.as_str()))
+                .map(item_of)
+                .collect(),
         );
         sync(
             &self.m.system_items,
-            hw.iter().filter(|i| !model::SCREEN_ITEMS.contains(&i.name.as_str())).map(item_of).collect(),
+            hw.iter()
+                .filter(|i| !model::SCREEN_ITEMS.contains(&i.name.as_str()))
+                .map(item_of)
+                .collect(),
         );
         bk.set_reboot_pending(s.get("Hardware1", "RebootPending").bool());
 
         // Battery
         let b = "Battery1";
-        bk.set_bat_percent(if s.has_prop(b, "Percent") { s.get(b, "Percent").int() as i32 } else { -1 });
+        bk.set_bat_percent(if s.has_prop(b, "Percent") {
+            s.get(b, "Percent").int() as i32
+        } else {
+            -1
+        });
         bk.set_bat_status(ss(s.get(b, "Status").str()));
         let watts = self.live_w.map_or_else(|| s.get(b, "Power").float(), f64::from);
-        bk.set_bat_power(ss(&model::fmt_watts(if s.has_prop(b, "Power") || self.live_w.is_some() { watts } else { -1.0 })));
+        bk.set_bat_power(ss(&model::fmt_watts(
+            if s.has_prop(b, "Power") || self.live_w.is_some() {
+                watts
+            } else {
+                -1.0
+            },
+        )));
         bk.set_bat_left(ss(&model::fmt_duration(s.get(b, "TimeLeft").int())));
         bk.set_bat_limit(s.get(b, "Limit").int() as i32);
         let steps: Vec<i64> = s.get(b, "Steps").list().iter().map(V::int).collect();
         bk.set_bat_idx(model::step_index(&steps, s.get(b, "Limit").int()) as i32);
-        sync(&self.m.bat_opts, steps.iter().map(|v| opt(&v.to_string(), &v.to_string(), "")).collect());
+        sync(
+            &self.m.bat_opts,
+            steps
+                .iter()
+                .map(|v| opt(&v.to_string(), &v.to_string(), ""))
+                .collect(),
+        );
         sync(&self.m.bat_values, steps.iter().map(|v| *v as i32).collect());
         bk.set_charge_once(s.get(b, "ChargeOnce").bool());
         let health = s.get(b, "Health").float();
-        bk.set_bat_health(ss(&if health >= 0.0 && s.has_prop(b, "Health") { format!("{health:.0}%") } else { "-".into() }));
-        bk.set_bat_cycles(ss(&if s.has_prop(b, "Cycles") { s.get(b, "Cycles").int().to_string() } else { "-".into() }));
+        bk.set_bat_health(ss(&if health >= 0.0 && s.has_prop(b, "Health") {
+            format!("{health:.0}%")
+        } else {
+            "-".into()
+        }));
+        bk.set_bat_cycles(ss(&if s.has_prop(b, "Cycles") {
+            s.get(b, "Cycles").int().to_string()
+        } else {
+            "-".into()
+        }));
 
         // Fans
         let fan_list: Vec<FanRow> = s
@@ -649,12 +780,19 @@ impl App {
         let ef = model::effect(s);
         sync(
             &self.m.kb_effects,
-            s.get(k, "Modes").strings().iter().map(|m| opt(m, m, "")).collect(),
+            s.get(k, "Modes")
+                .strings()
+                .iter()
+                .map(|m| opt(m, m, ""))
+                .collect(),
         );
         bk.set_kb_effect(ss(&ef.mode));
         bk.set_kb_color(slint::Color::from_rgb_u8(ef.color.0, ef.color.1, ef.color.2));
         bk.set_kb_speed(model::KB_SPEEDS.iter().position(|v| *v == ef.speed).unwrap_or(1) as i32);
-        sync(&self.m.kb_states, s.get(k, "PowerStates").list().iter().map(V::bool).collect());
+        sync(
+            &self.m.kb_states,
+            s.get(k, "PowerStates").list().iter().map(V::bool).collect(),
+        );
         bk.set_kb_idle(s.get(k, "IdleTimeout").int() as i32);
 
         // Lid
@@ -664,7 +802,12 @@ impl App {
         bk.set_slash_on(s.get(l, "SlashEnabled").bool());
         bk.set_slash_level(s.get(l, "SlashBrightness").int() as i32);
         let modes = s.get(l, "SlashModes").strings();
-        bk.set_slash_mode_idx(modes.iter().position(|m| m == s.get(l, "SlashMode").str()).unwrap_or(0) as i32);
+        bk.set_slash_mode_idx(
+            modes
+                .iter()
+                .position(|m| m == s.get(l, "SlashMode").str())
+                .unwrap_or(0) as i32,
+        );
         sync(&self.m.slash_modes, modes.iter().map(|m| ss(m)).collect());
         sync(
             &self.m.slash_show,
@@ -690,17 +833,6 @@ impl App {
         bk.set_anime_on(s.get(l, "AnimeEnabled").bool());
         bk.set_anime_level(s.get(l, "AnimeBrightness").int() as i32);
     }
-}
-
-/// The curve as SVG path commands in a 1000 x 1000 box (20-100 °C across, 0-100 % up).
-fn curve_path(pts: &[Pt]) -> String {
-    let mut s = String::new();
-    for (i, p) in pts.iter().enumerate() {
-        let x = (p.t - 20) * 1000 / 80;
-        let y = (100 - p.p) * 10;
-        s.push_str(&format!("{}{x} {y}", if i == 0 { "M" } else { "L" }));
-    }
-    s
 }
 
 pub fn mode_color(mode: &str) -> slint::Color {

@@ -80,7 +80,9 @@ pub fn sections(s: &Store) -> Vec<Section> {
     if s.has("Lid1") && !s.get("Lid1", "Devices").list().is_empty() {
         v.push(sec("lid", "Lid", "lid"));
     }
-    if hw.iter().any(|i| !SCREEN_ITEMS.contains(&i.name.as_str())) || s.get("Hardware1", "RebootPending").bool() {
+    if hw.iter().any(|i| !SCREEN_ITEMS.contains(&i.name.as_str()))
+        || s.get("Hardware1", "RebootPending").bool()
+    {
         v.push(sec("system", "System", "system"));
     }
     v
@@ -153,7 +155,10 @@ pub struct FanSetting {
 }
 
 fn points(v: &V) -> Curve {
-    v.list().iter().map(|p| (p.at(0).int() as u8, p.at(1).int() as u8)).collect()
+    v.list()
+        .iter()
+        .map(|p| (p.at(0).int() as u8, p.at(1).int() as u8))
+        .collect()
 }
 
 /// Kind and curve for (mode, fan). `auto` shows the firmware curve when it is known.
@@ -253,11 +258,19 @@ pub fn fmt_duration(secs: i64) -> String {
         return String::new();
     }
     let m = (secs + 30) / 60;
-    if m >= 60 { format!("{}h {:02}m", m / 60, m % 60) } else { format!("{m}m") }
+    if m >= 60 {
+        format!("{}h {:02}m", m / 60, m % 60)
+    } else {
+        format!("{m}m")
+    }
 }
 
 pub fn fmt_watts(w: f64) -> String {
-    if w < 0.0 { String::new() } else { format!("{w:.1} W") }
+    if w < 0.0 {
+        String::new()
+    } else {
+        format!("{w:.1} W")
+    }
 }
 
 /// Index of the step matching `limit` (the nearest below if the exact one is absent).
@@ -408,10 +421,18 @@ pub fn screen(s: &Store) -> Screen {
     Screen {
         has_refresh: s.has_prop(d, bindings::REFRESH_POLICY),
         policy: s.get(d, bindings::REFRESH_POLICY).str().to_owned(),
-        now: if hz > 0.0 { format!("{} Hz", hz.round()) } else { String::new() },
+        now: if hz > 0.0 {
+            format!("{} Hz", hz.round())
+        } else {
+            String::new()
+        },
         has_flicker: s.has_prop(d, bindings::FLICKER_FREE) || s.has_prop(d, bindings::FLICKER_SETTING),
         flicker: bindings::flicker_on(s),
-        brightness: if s.has_prop(d, bindings::BRIGHTNESS) { s.get(d, bindings::BRIGHTNESS).int() } else { -1 },
+        brightness: if s.has_prop(d, bindings::BRIGHTNESS) {
+            s.get(d, bindings::BRIGHTNESS).int()
+        } else {
+            -1
+        },
         color_modes: s.get(d, bindings::COLOR_MODES).strings(),
         color_mode: s.get(d, bindings::COLOR_MODE).str().to_owned(),
         has_eye: s.has_prop(d, bindings::EYE_CARE),
@@ -426,7 +447,8 @@ pub fn color_label(id: &str) -> String {
         "" => String::new(),
         _ => {
             let mut c = id.chars();
-            c.next().map_or(String::new(), |f| f.to_uppercase().chain(c).collect())
+            c.next()
+                .map_or(String::new(), |f| f.to_uppercase().chain(c).collect())
         }
     }
 }
@@ -464,7 +486,10 @@ mod tests {
             "Hardware1",
             vec![(
                 "Items".into(),
-                V::L(vec![item("boot_sound", "toggle", "1", &[], true), item("panel_overdrive", "toggle", "0", &[], true)]),
+                V::L(vec![
+                    item("boot_sound", "toggle", "1", &[], true),
+                    item("panel_overdrive", "toggle", "0", &[], true),
+                ]),
             )],
         );
         let ids: Vec<_> = sections(&s).iter().map(|x| x.id).collect();
@@ -473,7 +498,10 @@ mod tests {
         let mut s2 = Store::default();
         s2.merge(
             "Hardware1",
-            vec![("Items".into(), V::L(vec![item("panel_overdrive", "toggle", "0", &[], true)]))],
+            vec![(
+                "Items".into(),
+                V::L(vec![item("panel_overdrive", "toggle", "0", &[], true)]),
+            )],
         );
         let ids: Vec<_> = sections(&s2).iter().map(|x| x.id).collect();
         assert_eq!(ids, ["screen"]);
@@ -496,9 +524,18 @@ mod tests {
         };
         assert_eq!(c.step(1).as_deref(), Some("c"));
         assert_eq!(c.step(-1).as_deref(), Some("a"));
-        let end = HwItem { current: "c".into(), ..c.clone() };
+        let end = HwItem {
+            current: "c".into(),
+            ..c.clone()
+        };
         assert_eq!(end.step(1), None);
-        let n = HwItem { kind: "number".into(), current: "9".into(), min: 0, max: 10, ..c };
+        let n = HwItem {
+            kind: "number".into(),
+            current: "9".into(),
+            min: 0,
+            max: 10,
+            ..c
+        };
         assert_eq!(n.step(1).as_deref(), Some("10"));
         assert_eq!(n.step(-1).as_deref(), Some("8"));
     }
@@ -512,15 +549,35 @@ mod tests {
                 (
                     "Settings",
                     V::L(vec![
-                        V::L(vec![V::S("balanced".into()), V::I(1), V::S("custom".into()), pts(&[(30, 10), (60, 50)])]),
-                        V::L(vec![V::S("balanced".into()), V::I(2), V::S("auto".into()), pts(&[])]),
+                        V::L(vec![
+                            V::S("balanced".into()),
+                            V::I(1),
+                            V::S("custom".into()),
+                            pts(&[(30, 10), (60, 50)]),
+                        ]),
+                        V::L(vec![
+                            V::S("balanced".into()),
+                            V::I(2),
+                            V::S("auto".into()),
+                            pts(&[]),
+                        ]),
                     ]),
                 ),
-                ("Factory", V::L(vec![V::L(vec![V::S("balanced".into()), V::I(2), pts(&[(40, 20)])])])),
+                (
+                    "Factory",
+                    V::L(vec![V::L(vec![
+                        V::S("balanced".into()),
+                        V::I(2),
+                        pts(&[(40, 20)]),
+                    ])]),
+                ),
             ],
         );
         let a = fan_setting(&s, "balanced", 1);
-        assert_eq!((a.kind.as_str(), a.points.clone()), ("custom", vec![(30, 10), (60, 50)]));
+        assert_eq!(
+            (a.kind.as_str(), a.points.clone()),
+            ("custom", vec![(30, 10), (60, 50)])
+        );
         let b = fan_setting(&s, "balanced", 2);
         assert_eq!((b.kind.as_str(), b.points), ("auto", vec![(40, 20)]));
         assert_eq!(fan_setting(&s, "performance", 1).kind, "auto");
@@ -541,20 +598,42 @@ mod tests {
     #[test]
     fn limits_use_custom_values_per_mode_and_source() {
         let row = |n: &str, min, max, def| {
-            V::L(vec![V::S(n.into()), V::S(n.into()), V::S("W".into()), V::I(min), V::I(max), V::I(def), V::I(def)])
+            V::L(vec![
+                V::S(n.into()),
+                V::S(n.into()),
+                V::S("W".into()),
+                V::I(min),
+                V::I(max),
+                V::I(def),
+                V::I(def),
+            ])
         };
         let s = st(
             "Power1",
             vec![
-                ("Limits", V::L(vec![row("ppt_pl1_spl", 5, 65, 30), row("ppt_pl2_sppt", 5, 80, 40)])),
+                (
+                    "Limits",
+                    V::L(vec![
+                        row("ppt_pl1_spl", 5, 65, 30),
+                        row("ppt_pl2_sppt", 5, 80, 40),
+                    ]),
+                ),
                 (
                     "Custom",
-                    V::L(vec![V::L(vec![V::S("balanced".into()), V::S("ac".into()), V::S("ppt_pl1_spl".into()), V::I(45)])]),
+                    V::L(vec![V::L(vec![
+                        V::S("balanced".into()),
+                        V::S("ac".into()),
+                        V::S("ppt_pl1_spl".into()),
+                        V::I(45),
+                    ])]),
                 ),
             ],
         );
         let l = limits(&s, "balanced", "ac");
-        assert_eq!((l[0].cur, l[0].custom, l[1].cur, l[1].custom), (45, true, 40, false));
+        assert_eq!(
+            (l[0].cur, l[0].custom, l[1].cur, l[1].custom),
+            (45, true, 40, false)
+        );
         assert!(!limits(&s, "balanced", "battery")[0].custom);
     }
 
@@ -575,7 +654,8 @@ mod tests {
     #[test]
     fn arguments_follow_the_declared_signature() {
         let mut s = Store::default();
-        s.methods.insert("Display1.SetFlickerFree".into(), vec!["s".into()]);
+        s.methods
+            .insert("Display1.SetFlickerFree".into(), vec!["s".into()]);
         s.methods.insert("Display1.SetEyeCare".into(), vec!["b".into()]);
         let c = call(&s, "Display1", "SetFlickerFree", &[Arg::B(true)]);
         assert_eq!(c.args, vec![Value::from("on")]);

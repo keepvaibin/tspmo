@@ -48,7 +48,8 @@ mod tests {
     #[test]
     fn reads_the_window_colour() {
         let dark = "[General]\nColorScheme=BreezeDark\n[Colors:Window]\nBackgroundNormal=35,38,41\n";
-        let light = "[Colors:Button]\nBackgroundNormal=0,0,0\n[Colors:Window]\nBackgroundNormal=239,240,241\n";
+        let light =
+            "[Colors:Button]\nBackgroundNormal=0,0,0\n[Colors:Window]\nBackgroundNormal=239,240,241\n";
         assert_eq!(kde_is_dark(dark), Some(true));
         assert_eq!(kde_is_dark(light), Some(false));
         assert_eq!(kde_is_dark("[General]\n"), None);

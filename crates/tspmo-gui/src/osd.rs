@@ -50,7 +50,10 @@ mod tests {
     #[test]
     fn parses_value_as_percent() {
         let a = parse(&v(&["battery", "80%", "80"])).unwrap();
-        assert_eq!((a.icon.as_str(), a.text.as_str(), a.value), ("battery", "80%", Some(0.8)));
+        assert_eq!(
+            (a.icon.as_str(), a.text.as_str(), a.value),
+            ("battery", "80%", Some(0.8))
+        );
         assert_eq!(parse(&v(&["light", "Aura"])).unwrap().value, None);
         assert_eq!(parse(&v(&["light", "x", "250"])).unwrap().value, Some(1.0));
         assert!(parse(&[]).is_err());

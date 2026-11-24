@@ -19,7 +19,14 @@ const PREFIX: &str = "org.tspmo.";
 
 /// Every interface the GUI knows, by short name.
 pub const IFACES: [&str; 8] = [
-    "Daemon1", "Display1", "Fans1", "Power1", "Battery1", "Hardware1", "Lighting1", "Lid1",
+    "Daemon1",
+    "Display1",
+    "Fans1",
+    "Power1",
+    "Battery1",
+    "Hardware1",
+    "Lighting1",
+    "Lid1",
 ];
 
 pub enum Event {
@@ -43,7 +50,11 @@ pub struct Call {
 
 impl Call {
     pub fn new(iface: &'static str, method: &str, args: Vec<Value<'static>>) -> Call {
-        Call { iface, method: method.to_owned(), args }
+        Call {
+            iface,
+            method: method.to_owned(),
+            args,
+        }
     }
 }
 
@@ -108,18 +119,22 @@ async fn run(emit: &(impl Fn(Event) + Send + Sync + 'static)) -> zbus::Result<()
     for name in IFACES {
         let conn = conn.clone();
         let tx = tx.clone();
-        conn.clone().executor().spawn(
-            async move {
-                let r = get_all(&conn, name).await;
-                let _ = tx.send((name.to_owned(), r));
-            },
-            "getall",
-        )
-        .detach();
+        conn.clone()
+            .executor()
+            .spawn(
+                async move {
+                    let r = get_all(&conn, name).await;
+                    let _ = tx.send((name.to_owned(), r));
+                },
+                "getall",
+            )
+            .detach();
     }
     let intro = {
         let conn = conn.clone();
-        conn.clone().executor().spawn(async move { introspect(&conn).await }, "introspect")
+        conn.clone()
+            .executor()
+            .spawn(async move { introspect(&conn).await }, "introspect")
     };
     drop(tx);
 
@@ -153,10 +168,14 @@ async fn run(emit: &(impl Fn(Event) + Send + Sync + 'static)) -> zbus::Result<()
         else {
             continue;
         };
-        let Some(short) = iface.strip_prefix(PREFIX) else { continue };
+        let Some(short) = iface.strip_prefix(PREFIX) else {
+            continue;
+        };
         let short = short.to_owned();
-        let mut props: Vec<(String, V)> =
-            changed.iter().map(|(k, v)| (k.clone(), V::from_value(v))).collect();
+        let mut props: Vec<(String, V)> = changed
+            .iter()
+            .map(|(k, v)| (k.clone(), V::from_value(v)))
+            .collect();
         if !invalid.is_empty() {
             if let Ok(all) = get_all(&conn, IFACES.iter().find(|n| **n == short).unwrap_or(&"")).await {
                 props = all;
@@ -257,8 +276,14 @@ fn run_call(c: &Call) -> zbus::Result<Option<Event>> {
                 b = b.append_field(a.clone());
             }
             let body = b.build()?;
-            conn.call_method(Some(SERVICE), PATH, Some(iface.as_str()), c.method.as_str(), &body)
-                .await
+            conn.call_method(
+                Some(SERVICE),
+                PATH,
+                Some(iface.as_str()),
+                c.method.as_str(),
+                &body,
+            )
+            .await
         }
     })?;
     let body = reply.body();

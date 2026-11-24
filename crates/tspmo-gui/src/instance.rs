@@ -29,12 +29,12 @@ pub fn claim() -> Role {
                 Role::Toggled
             } else {
                 // Unreachable owner (it just exited): become the window without a socket.
-                Role::Window(
-                    UnixListener::bind_addr(&a).unwrap_or_else(|_| {
-                        UnixListener::bind_addr(&SocketAddr::from_abstract_name("tspmo-gui-fallback").expect("name"))
-                            .expect("fallback socket")
-                    }),
-                )
+                Role::Window(UnixListener::bind_addr(&a).unwrap_or_else(|_| {
+                    UnixListener::bind_addr(
+                        &SocketAddr::from_abstract_name("tspmo-gui-fallback").expect("name"),
+                    )
+                    .expect("fallback socket")
+                }))
             }
         }
     }

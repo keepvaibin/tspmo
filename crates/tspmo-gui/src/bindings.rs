@@ -73,7 +73,11 @@ mod tests {
         let s = store(vec![(FLICKER_SETTING, V::S("on".into())), (EYE_CARE, V::B(true))]);
         assert!(flicker_on(&s));
         assert_eq!(eye_kelvin(&s), EYE_DEFAULT_KELVIN);
-        let s = store(vec![(FLICKER_FREE, V::B(false)), (FLICKER_SETTING, V::S("on".into())), (EYE_CARE, V::I(3500))]);
+        let s = store(vec![
+            (FLICKER_FREE, V::B(false)),
+            (FLICKER_SETTING, V::S("on".into())),
+            (EYE_CARE, V::I(3500)),
+        ]);
         assert!(!flicker_on(&s));
         assert_eq!(eye_kelvin(&s), 3500);
     }
@@ -88,7 +92,10 @@ mod tests {
             ]),
         )]);
         assert_eq!(current_hz(&s), 240.0);
-        let s = store(vec![(REFRESH_NOW, V::F(60.0)), (REFRESH_RATES, V::L(vec![V::I(240)]))]);
+        let s = store(vec![
+            (REFRESH_NOW, V::F(60.0)),
+            (REFRESH_RATES, V::L(vec![V::I(240)])),
+        ]);
         assert_eq!(current_hz(&s), 60.0);
     }
 }

@@ -66,7 +66,7 @@ export component Btn inherits Rectangle {
     opacity: enabled ? 1 : 0.4;
     background: primary ? Th.accent : active ? Th.hover : ta.has-hover ? Th.hover : Th.surface2;
     border-width: fs.has-focus ? 1.5px : 0;
-    border-color: Th.accent;
+    border-color: Th.ring;
     animate background { duration: 200ms; }
     fs := FocusScope {
         enabled: root.enabled;
@@ -116,7 +116,7 @@ export component Toggle inherits Rectangle {
     opacity: enabled ? 1 : 0.4;
     background: on ? Th.accent : Th.surface2;
     border-width: fs.has-focus ? 1.5px : 0;
-    border-color: Th.accent;
+    border-color: Th.ring;
     animate background { duration: 160ms; easing: ease-in-out; }
     Rectangle {
         x: root.on ? parent.width - self.width - 3px : 3px;
@@ -156,7 +156,7 @@ export component Seg inherits Rectangle {
     border-radius: 10px;
     background: Th.surface2;
     border-width: fs.has-focus ? 1.5px : 0;
-    border-color: Th.accent;
+    border-color: Th.ring;
     opacity: enabled ? 1 : 0.5;
     fs := FocusScope {
         enabled: root.enabled;
@@ -278,7 +278,7 @@ export component Slide inherits Rectangle {
         border-radius: 8px;
         background: Th.text;
         border-width: fs.has-focus ? 2px : 0;
-        border-color: Th.accent;
+        border-color: Th.ring;
         animate x { duration: ta.pressed ? 0ms : 120ms; }
     }
     settle := Timer {

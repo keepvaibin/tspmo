@@ -43,14 +43,18 @@ export component CurveEditor inherits Rectangle {
         horizontal-alignment: center;
     }
 
+    // Slint cannot loop over path elements, so the polyline is spelled out for 8 points.
+    pure function seg(i: int) -> string {
+        i < Bk.curve.length ? (i == 0 ? "M" : "L") + "\{root.px(Bk.curve[i].t) / 1px} \{root.py(Bk.curve[i].p) / 1px}" : ""
+    }
     Path {
-        x: root.pad-l;
-        y: 8px;
-        width: root.pw;
-        height: root.ph;
-        viewbox-width: 1000;
-        viewbox-height: 1000;
-        commands: Bk.curve-path;
+        x: 0;
+        y: 0;
+        width: root.width;
+        height: root.height;
+        viewbox-width: root.width / 1px;
+        viewbox-height: root.height / 1px;
+        commands: root.seg(0) + root.seg(1) + root.seg(2) + root.seg(3) + root.seg(4) + root.seg(5) + root.seg(6) + root.seg(7);
         stroke: root.tint;
         stroke-width: 2px;
         stroke-line-join: round;

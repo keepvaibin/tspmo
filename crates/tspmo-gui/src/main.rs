@@ -56,7 +56,11 @@ fn popup(args: &[String]) -> Result<(), String> {
         instance::Role::Toggled => return Ok(()),
         instance::Role::Window(l) => l,
     };
-    let section = args.iter().position(|a| a == "--section").and_then(|i| args.get(i + 1)).cloned();
+    let section = args
+        .iter()
+        .position(|a| a == "--section")
+        .and_then(|i| args.get(i + 1))
+        .cloned();
     let win = Main::new().map_err(|e| e.to_string())?;
     // After the first component exists (that creates the platform), before it is shown.
     slint::set_xdg_app_id(APP_ID).map_err(|e| e.to_string())?;

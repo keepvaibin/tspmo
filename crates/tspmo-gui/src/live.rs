@@ -23,7 +23,10 @@ mod tests {
 
     #[test]
     fn reads_temperature_and_power_from_the_fixture() {
-        let root = SysRoot::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../fixtures/asus-gu605mi"));
+        let root = SysRoot::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../fixtures/asus-gu605mi"
+        ));
         // The fixture has a coretemp device; its temperature file may be absent.
         let _ = cpu_temp(&root);
         let w = battery_watts(&root);

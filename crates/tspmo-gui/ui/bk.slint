@@ -36,6 +36,7 @@ export global Bk {
     in property <string> gpu-policy;
     in property <string> gpu-switching;
     in property <string> gpu-pending;
+    in property <bool> gpu-reboot;
     in property <string> gpu-message;
     in property <bool> dgpu-asleep;
     in property <[GpuUser]> gpu-users;
@@ -73,7 +74,6 @@ export global Bk {
     in property <[FanRow]> fans;
     in property <string> fan-kind;
     in property <[Pt]> curve;
-    in property <string> curve-path;
     in property <string> cpu-temp;
 
     // power limits

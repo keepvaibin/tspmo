@@ -2,7 +2,7 @@
 //!
 //! The packaged files already do it system-wide (`/usr/share/applications` and
 //! `/usr/share/kglobalaccel` carry `X-KDE-Shortcuts`). This writes the same entry under
-//! `~/.local/share` for a build that is not installed, and asks KDE to pick it up.
+//! `~/.local/share` for a build that is not installed, and has KDE pick it up.
 
 use crate::{APP_ICON, APP_ID};
 use std::path::PathBuf;
@@ -52,22 +52,13 @@ pub fn install() -> Result<(), String> {
         std::fs::write(&f, &text).map_err(|e| format!("{}: {e}", f.display()))?;
         println!("{}", f.display());
     }
-    // Make a running session notice: refresh the desktop database, then restart the shortcut
-    // service's view of its components. Both are best effort; a new login always works.
-    let _ = std::process::Command::new("kbuildsycoca6").arg("--noincremental").status();
-    let _ = std::process::Command::new("busctl")
-        .args([
-            "--user",
-            "call",
-            "org.kde.kglobalaccel",
-            "/kglobalaccel",
-            "org.kde.KGlobalAccel",
-            "unregister",
-            "ss",
-            &format!("{APP_ID}.desktop"),
-            "_launch",
-        ])
+    // KDE's shortcut service reloads its components when the desktop database changes, so a
+    // running session picks the key up at once. Best effort: a new login always works.
+    let _ = std::process::Command::new("kbuildsycoca6")
+        .arg("--noincremental")
+        .stderr(std::process::Stdio::null())
         .status();
+    println!("{KEY}");
     Ok(())
 }
 
