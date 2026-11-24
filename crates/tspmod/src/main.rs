@@ -87,6 +87,24 @@ fn run() -> zbus::Result<()> {
     watch::all(&conn, &shared);
     // The GPU policy waits for the boot to settle (see boot.rs).
     boot::start(conn.inner(), &shared);
+    // Entering or leaving Eco+ changes what the GPU policy wants (Eco+ is dGPU off). The event
+    // fires under the power daemon's lock: hand off to a thread.
+    {
+        let (c, s) = (conn.inner().clone(), Arc::clone(&shared));
+        let last = std::sync::Mutex::new(false);
+        events::subscribe(move |e| {
+            if let events::Event::ProfileApplied { eco_plus, .. } = e {
+                let mut l = last.lock().unwrap_or_else(|p| p.into_inner());
+                if *l != *eco_plus {
+                    *l = *eco_plus;
+                    let (c, s) = (c.clone(), Arc::clone(&s));
+                    let _ = std::thread::Builder::new()
+                        .name("eco-plus-gpu".into())
+                        .spawn(move || gpu::enforce(&c, &s));
+                }
+            }
+        });
+    }
 
     // All work happens on the D-Bus executor and the watcher threads.
     loop {

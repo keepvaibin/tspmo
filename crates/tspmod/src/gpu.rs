@@ -34,6 +34,32 @@ pub const NEEDS_FRESH_SESSION: &str = "The desktop was started before tspmo was 
 /// Shown when a GPU change is asked for before the boot has settled (see `boot.rs`).
 pub const STILL_STARTING: &str = "The system is still starting; try again in a minute.";
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn eco_plus_forces_eco_and_leaving_it_restores_the_policy() {
+        for policy in [
+            Policy::Optimized,
+            Policy::Fixed(Mode::Hybrid),
+            Policy::Fixed(Mode::Eco),
+        ] {
+            for battery in [true, false] {
+                assert_eq!(wanted_mode(policy, battery, true), Mode::Eco);
+                assert_eq!(wanted_mode(policy, battery, false), policy.target(battery));
+            }
+        }
+        // Optimized on AC is Hybrid again once Eco+ ends.
+        assert_eq!(wanted_mode(Policy::Optimized, false, false), Mode::Hybrid);
+        // Ultimate is a reboot-only choice that Eco+ leaves alone.
+        assert_eq!(
+            wanted_mode(Policy::Fixed(Mode::Ultimate), true, true),
+            Mode::Ultimate
+        );
+    }
+}
+
 #[derive(Debug)]
 pub enum Outcome {
     Done(String),
@@ -308,13 +334,24 @@ pub fn switch(root: &SysRoot, st: &Status, target: Mode) -> Result<Outcome, Stri
     }
 }
 
+/// The mode wanted now. Eco+ means the dGPU is off, whatever the policy says (a policy that
+/// fixes Ultimate stays: that one needs a reboot and is not Eco+'s to undo). Leaving Eco+ just
+/// goes back to the policy, which Eco+ never changed.
+pub fn wanted_mode(policy: Policy, on_battery: bool, eco_plus: bool) -> Mode {
+    if eco_plus && policy != Policy::Fixed(Mode::Ultimate) {
+        Mode::Eco
+    } else {
+        policy.target(on_battery)
+    }
+}
+
 /// What the policy wants right now, if it differs from the hardware and can be done live.
 pub fn policy_target(d: &crate::state::Daemon) -> Option<Mode> {
     // Not while the boot is still bringing the display stack (and the NVIDIA driver) up.
     if !crate::boot::allowed() {
         return None;
     }
-    let target = d.gpu_policy.target(d.on_battery);
+    let target = wanted_mode(d.gpu_policy, d.on_battery, d.effective().is_eco_plus());
     let st = d.gpu_status();
     let live = st.mode != Mode::Ultimate && target != Mode::Ultimate && st.pending.is_none();
     (live && st.mode != target).then_some(target)
@@ -339,7 +376,12 @@ pub fn begin(
         if let Err(e) = precheck(&d.root, &st, target) {
             if automatic {
                 d.gpu_waiting = e != NEEDS_FRESH_SESSION;
-                d.gpu_message = format!("Waiting to switch to {target}: {e}");
+                let msg = format!("Waiting to switch to {target}: {e}");
+                // Eco+ promises the dGPU off: say what is holding it (once, not on every retry).
+                if d.effective().is_eco_plus() && d.gpu_message != msg {
+                    crate::session::osd("video-card", &e, None);
+                }
+                d.gpu_message = msg;
             }
             return Err(e);
         }
