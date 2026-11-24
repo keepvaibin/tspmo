@@ -24,7 +24,11 @@ fn explain(e: zbus::Error) -> String {
     if s.contains("ServiceUnknown") || s.contains("NameHasNoOwner") || s.contains("was not provided") {
         "tspmod isn't running (start it with: sudo systemctl enable --now tspmod)".into()
     } else {
-        s
+        // "org.freedesktop.DBus.Error.Failed: message" -> "message"
+        match s.split_once(": ") {
+            Some((kind, msg)) if kind.contains(".Error.") => msg.to_owned(),
+            _ => s,
+        }
     }
 }
 

@@ -250,7 +250,17 @@ pub fn users(root: &SysRoot, dgpu_addr: Option<&str>) -> Vec<User> {
             }
         }
         if let Some(mut kind) = kind {
-            let name = root.read_opt(format!("/proc/{pid}/comm")).unwrap_or_default();
+            let comm = root.read_opt(format!("/proc/{pid}/comm")).unwrap_or_default();
+            // Helper processes ("RDD Process", "GPU Process") are named after their app.
+            let exe = std::fs::read_link(root.path(format!("/proc/{pid}/exe")))
+                .ok()
+                .and_then(|p| Some(p.file_name()?.to_str()?.trim_end_matches("-bin").to_owned()));
+            let name = match exe {
+                Some(e) if !e.is_empty() && !comm.starts_with(e.as_str()) && comm.contains(' ') => {
+                    format!("{e} ({comm})")
+                }
+                _ => comm,
+            };
             if DESKTOP_PROCESSES.contains(&name.as_str()) {
                 kind = UseKind::Display;
             }
