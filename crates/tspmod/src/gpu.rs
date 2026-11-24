@@ -305,18 +305,14 @@ pub fn switch(root: &SysRoot, st: &Status, target: Mode) -> Result<Outcome, Stri
         }
         (Mode::Eco, Mode::Hybrid) => {
             power_on(root, fw_attrs)?;
-            Ok(Outcome::Done(
-                "Hybrid: the NVIDIA GPU is ready".into(),
-            ))
+            Ok(Outcome::Done("Hybrid: the NVIDIA GPU is ready".into()))
         }
         (_, Mode::Ultimate) => {
             if st.mode == Mode::Eco {
                 power_on(root, fw_attrs)?;
             }
             set_asus(root, fw_attrs, "gpu_mux_mode", "0")?;
-            Ok(Outcome::NeedsReboot(
-                "Ultimate set. Restart to apply.".into(),
-            ))
+            Ok(Outcome::NeedsReboot("Ultimate set. Restart to apply.".into()))
         }
         (Mode::Ultimate, b) => {
             set_asus(root, fw_attrs, "gpu_mux_mode", "1")?;

@@ -42,6 +42,7 @@ OPTIONS:
     --measure S     seconds measured per condition (default 20)
     --workers N     load threads (default 2)
     --no-load       measure an idle system
+    --no-wake       also leave out the 1 ms timer thread (it keeps the CPU out of deep idle)
     --bg N          run N busy threads as a background load (in a systemd scope; see bgcpus,
                     bgweight)
     --hold-charge   stop charging while measuring, when on AC (the battery then reads zero;
@@ -589,7 +590,7 @@ fn zone_energy(psys: bool) -> Option<(String, u64)> {
 
 fn bench(args: &[String]) -> Result<(), String> {
     let (mut rounds, mut settle, mut measure, mut workers) = (3usize, 8u64, 20u64, 2usize);
-    let (mut load, mut hold) = (true, false);
+    let (mut load, mut hold, mut wake) = (true, false, true);
     let mut bg = 0usize;
     let mut conds = Vec::new();
     let mut it = args.iter();
@@ -605,6 +606,7 @@ fn bench(args: &[String]) -> Result<(), String> {
             "--measure" => measure = num("--measure")?.max(2),
             "--workers" => workers = num("--workers")? as usize,
             "--no-load" => load = false,
+            "--no-wake" => wake = false,
             "--bg" => bg = num("--bg")? as usize,
             "--hold-charge" => hold = true,
             c => conds.push(parse_condition(c)?),
@@ -680,7 +682,9 @@ fn bench(args: &[String]) -> Result<(), String> {
         Vec::new()
     };
     let wake_log = Arc::new(Mutex::new(Vec::new()));
-    threads.push(start_jitter(stop.clone(), wake_log.clone()));
+    if wake {
+        threads.push(start_jitter(stop.clone(), wake_log.clone()));
+    }
     let pkg = zone_energy(false);
     let psys = zone_energy(true);
 

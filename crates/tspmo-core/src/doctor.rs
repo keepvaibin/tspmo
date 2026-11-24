@@ -647,4 +647,72 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&d);
     }
+
+    fn awake_nvidia(tag: &str, active: u64, suspended: u64, holder: bool) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("tspmo-doctor-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let dev = d.join("sys/bus/pci/devices/0000:01:00.0");
+        std::fs::create_dir_all(dev.join("power")).unwrap();
+        for (f, v) in [
+            ("class", "0x030200\n"),
+            ("vendor", "0x10de\n"),
+            ("power/runtime_status", "active\n"),
+            ("power/control", "auto\n"),
+        ] {
+            std::fs::write(dev.join(f), v).unwrap();
+        }
+        std::fs::write(dev.join("power/runtime_active_time"), format!("{active}\n")).unwrap();
+        std::fs::write(dev.join("power/runtime_suspended_time"), format!("{suspended}\n")).unwrap();
+        std::fs::create_dir_all(d.join("sys/bus/pci/drivers/nvidia")).unwrap();
+        std::os::unix::fs::symlink("../../../bus/pci/drivers/nvidia", dev.join("driver")).unwrap();
+        std::fs::create_dir_all(d.join("sys/bus/acpi/devices/NVDA0820:00")).unwrap();
+        if holder {
+            let fd = d.join("proc/4242/fd");
+            std::fs::create_dir_all(&fd).unwrap();
+            std::fs::write(d.join("proc/4242/comm"), "firefox\n").unwrap();
+            std::os::unix::fs::symlink("/dev/nvidia0", fd.join("7")).unwrap();
+        }
+        d
+    }
+
+    #[test]
+    fn an_awake_nvidia_gpu_with_no_holder_is_blamed_on_the_firmware() {
+        let d = awake_nvidia("nvpcf", 600, 400, false);
+        let root = SysRoot::new(&d);
+        let m = Machine::probe(&root);
+        let mut out = Vec::new();
+        nvidia_wakes(&root, &m, &mut out);
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(out[0].id, "nvidia-nvpcf");
+        assert!(out[0].detail.contains("NVDA0820"));
+        assert_eq!(out[0].fix.as_ref().unwrap().commands, ["tspmo gpu eco"]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn an_app_holding_the_nvidia_gpu_is_named() {
+        let d = awake_nvidia("held", 600, 400, true);
+        let root = SysRoot::new(&d);
+        let m = Machine::probe(&root);
+        let mut out = Vec::new();
+        nvidia_wakes(&root, &m, &mut out);
+        assert!(
+            out.iter()
+                .any(|f| f.id == "nvidia-held" && f.title.contains("firefox")),
+            "{out:?}"
+        );
+        assert!(!out.iter().any(|f| f.id == "nvidia-nvpcf"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_gpu_that_sleeps_is_not_reported() {
+        let d = awake_nvidia("asleep", 50, 950, false);
+        let root = SysRoot::new(&d);
+        let m = Machine::probe(&root);
+        let mut out = Vec::new();
+        nvidia_wakes(&root, &m, &mut out);
+        assert!(out.is_empty(), "{out:?}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
 }
