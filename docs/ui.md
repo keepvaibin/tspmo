@@ -24,9 +24,10 @@ dashboard.
   a glance. The four mode tiles also carry their own colour as a thin bar at the bottom, dim when
   unchosen, so the colour coding is learned before it is needed. Nothing else is coloured, apart
   from red for errors.
-- **Selection = tint + bar.** The chosen tile gets a flat 20 % accent tint and a 3 px bar on its
-  bottom edge, bold text. No outline that doubles as a focus ring, no fill swap that reads as
-  pressed. Focus is a 2 px ring in the text colour, drawn inside the control; hover and pressed
+- **Selection = neutral fill + accent bar.** The chosen tile gets the "selected" grey, a 3 px
+  bar in the accent on its bottom edge and bold text; the accent is never used as a wash, which
+  keeps light and dark themes free of tinted pastels. No outline that doubles as a focus ring,
+  no fill swap that reads as pressed. Focus is a 2 px ring in the text colour, drawn inside the control; hover and pressed
   step the surface; disabled is 40 % opacity.
 - **No gradients, glow, blur, shadows or pastel.** Flat fills, a 1 px border, 3 px radius. The
   flyout itself has an 8 px-ish corner (0.6 rem) drawn with anti-aliasing on a transparent
@@ -62,7 +63,8 @@ Sizes: `rem` = system font size (default 10 pt = 13.33 px). `u` = 0.6 rem.
 | window | `#1b1c1e` | `#f4f4f5` |
 | raised (controls) | `#26282b` | `#e8e9eb` |
 | hover | `#303338` | `#dcdee1` |
-| pressed | `#3b3f45` | `#cdd0d4` |
+| pressed | `#464a50` | `#bfc3c8` |
+| selected | `#393d43` | `#cdd0d5` |
 | line | `#34373c` | `#cdd0d4` |
 | text | `#e9eaec` | `#16171a` |
 | dim | `#9a9fa6` | `#5b5f66` |

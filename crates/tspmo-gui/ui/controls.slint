@@ -199,7 +199,7 @@ export component Seg inherits Rectangle {
                 animate background { duration: 100ms; }
                 Rectangle {
                     border-radius: Th.radius;
-                    background: sel ? c.with-alpha(Th.dark ? 0.2 : 0.16) : transparent;
+                    background: sel ? Th.selected : transparent;
                     animate background { duration: 140ms; }
                 }
                 Rectangle {
