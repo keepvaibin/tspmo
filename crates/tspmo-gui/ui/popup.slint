@@ -107,13 +107,13 @@ export component PopupBody inherits VerticalLayout {
         spacing: 0.3rem;
         if Bk.win-fans || Bk.win-screen: HorizontalLayout {
             spacing: 0.3rem;
-            if Bk.win-fans: Btn { text: "Fans & Power"; hint: "F"; clicked => { Bk.open("fans"); } }
-            if Bk.win-screen: Btn { text: "Screen"; hint: "S"; clicked => { Bk.open("screen"); } }
+            if Bk.win-fans: Btn { horizontal-stretch: 1; preferred-width: 0px; text: "Fans & Power"; hint: "F"; clicked => { Bk.open("fans"); } }
+            if Bk.win-screen: Btn { horizontal-stretch: 1; preferred-width: 0px; text: "Screen"; hint: "S"; clicked => { Bk.open("screen"); } }
         }
         if Bk.win-keys || Bk.win-system: HorizontalLayout {
             spacing: 0.3rem;
-            if Bk.win-keys: Btn { text: "Keyboard & Lid"; hint: "K"; clicked => { Bk.open("keys"); } }
-            if Bk.win-system: Btn { text: "System"; hint: "Y"; clicked => { Bk.open("system"); } }
+            if Bk.win-keys: Btn { horizontal-stretch: 1; preferred-width: 0px; text: "Keyboard & Lid"; hint: "K"; clicked => { Bk.open("keys"); } }
+            if Bk.win-system: Btn { horizontal-stretch: 1; preferred-width: 0px; text: "System"; hint: "Y"; clicked => { Bk.open("system"); } }
         }
     }
 

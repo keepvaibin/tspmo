@@ -1,10 +1,10 @@
 import { Th } from "theme.slint";
-import { Bk, Opt, GpuUser, FanRow, Pt, LimitRow, Item } from "bk.slint";
+import { Bk, Opt, GpuUser, Pt, LimitRow, Item } from "bk.slint";
 import { Popup } from "popup.slint";
 import { FansWin, ScreenWin, KeysWin, SystemWin } from "windows.slint";
 import { Cap, Mono } from "controls.slint";
 
-export { Bk, Th, Opt, GpuUser, FanRow, Pt, LimitRow, Item, Popup, FansWin, ScreenWin, KeysWin, SystemWin }
+export { Bk, Th, Opt, GpuUser, Pt, LimitRow, Item, Popup, FansWin, ScreenWin, KeysWin, SystemWin }
 
 // A short note for desktops without their own OSD: text, an optional bar.
 export component Osd inherits Window {
@@ -36,6 +36,7 @@ export component Osd inherits Window {
                 height: 0.35rem;
                 background: Th.raised;
                 Rectangle {
+                    x: 0;
                     width: parent.width * clamp(root.value, 0, 1);
                     background: Th.accent;
                 }

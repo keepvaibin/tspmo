@@ -83,30 +83,10 @@ export component FansWin inherits WinFrame {
             }
             Rectangle { height: 0.4rem; }
             Field { label: "Fan"; value: Bk.fan-kind == "custom" ? "custom curve" : Bk.fan-kind == "full" ? "full speed" : "firmware curve"; }
-            HorizontalLayout {
-                spacing: 0.3rem;
-                for f[i] in Bk.fans: Rectangle {
-                    height: Th.control;
-                    horizontal-stretch: 1;
-                    border-radius: Th.radius;
-                    background: ta.pressed ? Th.pressed : ta.has-hover ? Th.hover : Th.raised;
-                    Rectangle {
-                        border-radius: Th.radius;
-                        background: i == Bk.fan-sel ? Th.accent.with-alpha(Th.dark ? 0.2 : 0.16) : transparent;
-                    }
-                    Rectangle {
-                        y: parent.height - self.height;
-                        height: i == Bk.fan-sel ? 3px : 0px;
-                        background: Th.accent;
-                    }
-                    HorizontalLayout {
-                        alignment: center;
-                        spacing: 0.5rem;
-                        Text { text: f.label; color: Th.text; font-weight: i == Bk.fan-sel ? 700 : 400; vertical-alignment: center; }
-                        Mono { text: f.rpm > 0 ? f.rpm : "-"; }
-                    }
-                    ta := TouchArea { clicked => { Bk.acti("fan-sel", i); } }
-                }
+            Seg {
+                opts: Bk.fan-opts;
+                index: Bk.fan-sel;
+                picked(i) => { Bk.acti("fan-sel", i); }
             }
             CurveEditor {
                 height: 14rem;
@@ -114,9 +94,9 @@ export component FansWin inherits WinFrame {
             }
             HorizontalLayout {
                 spacing: 0.3rem;
-                Btn { horizontal-stretch: 1; text: "Auto"; active: Bk.fan-kind == "auto"; clicked => { Bk.act("fan-auto", ""); } }
-                Btn { horizontal-stretch: 1; text: "Full"; active: Bk.fan-kind == "full"; clicked => { Bk.act("fan-full", ""); } }
-                Btn { horizontal-stretch: 1; text: "Factory"; clicked => { Bk.act("fan-reset", ""); } }
+                Btn { horizontal-stretch: 1; preferred-width: 0px; text: "Auto"; active: Bk.fan-kind == "auto"; clicked => { Bk.act("fan-auto", ""); } }
+                Btn { horizontal-stretch: 1; preferred-width: 0px; text: "Full"; active: Bk.fan-kind == "full"; clicked => { Bk.act("fan-full", ""); } }
+                Btn { horizontal-stretch: 1; preferred-width: 0px; text: "Factory"; clicked => { Bk.act("fan-reset", ""); } }
             }
         }
         if Bk.has-power: VerticalLayout {

@@ -71,7 +71,6 @@ impl WindowAdapter for SnapWin {
             w = w.min(m.width);
             h = h.min(m.height);
         }
-        if std::env::var_os("TSPMO_DEBUG").is_some() { eprintln!("update_window_properties {w}x{h}"); }
         self.want.set((w.ceil(), h.ceil()));
         self.size.set(PhysicalSize::new(
             (w.ceil() * self.scale).round() as u32,

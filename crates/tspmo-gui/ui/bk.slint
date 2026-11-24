@@ -3,7 +3,6 @@
 
 export struct Opt { id: string, label: string, hint: string, tint: color, keyed: bool }
 export struct GpuUser { pid: int, name: string }
-export struct FanRow { label: string, rpm: int, kind: string }
 export struct Pt { t: int, p: int }
 export struct LimitRow { name: string, label: string, unit: string, min: int, max: int, def: int, cur: int, custom: bool }
 export struct Item {
@@ -71,7 +70,7 @@ export global Bk {
     in property <bool> has-fans;
     in property <int> fan-mode: 1;
     in property <int> fan-sel: 0;
-    in property <[FanRow]> fans;
+    in property <[Opt]> fan-opts;
     in property <string> fan-kind;
     in property <[Pt]> curve;
 

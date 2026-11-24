@@ -32,7 +32,20 @@ pub const APP_ICON: &str = "preferences-system-power-management";
 /// Desktop entry and Wayland app id.
 pub const APP_ID: &str = "org.tspmo.gui";
 
+/// Process start, for `TSPMO_TRACE=1` timings.
+pub static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
+/// `TSPMO_TRACE=1`: print a timing line to stderr.
+pub fn trace(what: &str) {
+    if std::env::var_os("TSPMO_TRACE").is_some()
+        && let Some(t) = T0.get()
+    {
+        eprintln!("trace {:>7.1} ms  {what}", t.elapsed().as_secs_f64() * 1000.0);
+    }
+}
+
 fn main() -> std::process::ExitCode {
+    let _ = T0.set(std::time::Instant::now());
     env::force_mesa();
     let args: Vec<String> = std::env::args().skip(1).collect();
     let r = match args.first().map(String::as_str) {

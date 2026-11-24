@@ -10,7 +10,7 @@ use crate::bus::{self, Call, Event};
 use crate::model::{self, Arg, Curve, SOURCES, Store, THERMAL};
 use crate::value::V;
 use crate::{
-    Bk, FanRow, FansWin, GpuUser, Item, KeysWin, LimitRow, Opt, Popup, Pt, ScreenWin, SystemWin, Th,
+    Bk, FansWin, GpuUser, Item, KeysWin, LimitRow, Opt, Popup, Pt, ScreenWin, SystemWin, Th,
 };
 use slint::{ComponentHandle, Model, SharedString, Timer, TimerMode, VecModel};
 use std::cell::RefCell;
@@ -99,7 +99,7 @@ struct Models {
     screen_items: Rc<VecModel<Item>>,
     bat_opts: Rc<VecModel<Opt>>,
     bat_values: Rc<VecModel<i32>>,
-    fans: Rc<VecModel<FanRow>>,
+    fan_opts: Rc<VecModel<Opt>>,
     curve: Rc<VecModel<Pt>>,
     limits: Rc<VecModel<LimitRow>>,
     kb_effects: Rc<VecModel<Opt>>,
@@ -117,7 +117,7 @@ impl Models {
             screen_items: Rc::default(),
             bat_opts: Rc::default(),
             bat_values: Rc::default(),
-            fans: Rc::default(),
+            fan_opts: Rc::default(),
             curve: Rc::default(),
             limits: Rc::default(),
             kb_effects: Rc::default(),
@@ -134,7 +134,7 @@ impl Models {
         bk.set_screen_items(self.screen_items.clone().into());
         bk.set_bat_opts(self.bat_opts.clone().into());
         bk.set_bat_values(self.bat_values.clone().into());
-        bk.set_fans(self.fans.clone().into());
+        bk.set_fan_opts(self.fan_opts.clone().into());
         bk.set_curve(self.curve.clone().into());
         bk.set_limits(self.limits.clone().into());
         bk.set_kb_effects(self.kb_effects.clone().into());
@@ -155,6 +155,8 @@ struct Edit {
 
 struct App {
     wins: Vec<(Kind, AnyWin)>,
+    /// Created, not yet shown.
+    pending: Vec<Kind>,
     store: Store,
     m: Models,
     fonts: crate::theme::Fonts,
@@ -234,6 +236,7 @@ fn with_app(f: impl FnOnce(&mut App)) {
 pub fn start(first: &[Kind], dark: bool, fonts: crate::theme::Fonts) -> Result<(), String> {
     let app = App {
         wins: Vec::new(),
+        pending: Vec::new(),
         store: Store::default(),
         m: Models::new(),
         fonts,
@@ -322,15 +325,15 @@ impl App {
         });
         with_globals!(&win, |bk, _th| self.push_to(&bk));
         crate::name_window();
-        match &win {
-            AnyWin::Popup(w) => w.show(),
-            AnyWin::Fans(w) => w.show(),
-            AnyWin::Screen(w) => w.show(),
-            AnyWin::Keys(w) => w.show(),
-            AnyWin::System(w) => w.show(),
-        }
-        .map_err(|e| e.to_string())?;
         self.wins.push((k, win));
+        // Wait for the daemon's first answer (a few ms) so the first frame is the right size and
+        // already filled in; a timer shows the window anyway if the daemon is slow or absent.
+        if self.loaded {
+            self.show_kind(k)?;
+        } else {
+            self.pending.push(k);
+            Timer::single_shot(Duration::from_millis(120), || with_app(App::show_pending));
+        }
         self.live_timer
             .start(TimerMode::Repeated, Duration::from_secs(1), || {
                 with_app(|a| a.tick_and_push());
@@ -339,6 +342,29 @@ impl App {
             self.tick();
         }
         Ok(())
+    }
+
+    fn show_kind(&self, k: Kind) -> Result<(), String> {
+        let Some((_, win)) = self.wins.iter().find(|(w, _)| *w == k) else {
+            return Ok(());
+        };
+        match win {
+            AnyWin::Popup(w) => w.show(),
+            AnyWin::Fans(w) => w.show(),
+            AnyWin::Screen(w) => w.show(),
+            AnyWin::Keys(w) => w.show(),
+            AnyWin::System(w) => w.show(),
+        }
+        .map_err(|e| e.to_string())
+    }
+
+    fn show_pending(&mut self) {
+        crate::trace("show windows");
+        for k in std::mem::take(&mut self.pending) {
+            if let Err(e) = self.show_kind(k) {
+                self.set_error(e);
+            }
+        }
     }
 
     /// Open a window, or raise it by recreating nothing when it already exists.
@@ -401,7 +427,10 @@ impl App {
             }
             Event::Methods(m) => self.store.methods = m,
             Event::Ready => {
+                crate::trace("daemon state read");
                 self.loaded = true;
+                self.push();
+                self.show_pending();
                 self.fetch_gpu_users();
                 self.tick();
             }
@@ -409,6 +438,8 @@ impl App {
                 self.loaded = true;
                 self.offline = true;
                 self.error = msg;
+                self.push();
+                self.show_pending();
             }
             Event::GpuUsers(u) => self.store.gpu_users = u,
             Event::Error(msg) => {
@@ -758,7 +789,6 @@ impl App {
         bk.set_loaded(self.loaded);
         bk.set_error(ss(&self.error));
         let has = |id: &str| secs.iter().any(|x| x.id == id);
-        if std::env::var_os("TSPMO_DEBUG").is_some() { eprintln!("push loaded={} secs={:?}", self.loaded, secs.iter().map(|x| x.id).collect::<Vec<_>>()); }
         bk.set_has_gpu(has("gpu"));
         bk.set_has_battery(has("battery"));
         bk.set_has_fans(has("fans"));
@@ -891,23 +921,24 @@ impl App {
         }));
 
         // Fans
-        let fan_list: Vec<FanRow> = s
+        let fan_list: Vec<Opt> = s
             .get("Fans1", "Fans")
             .list()
             .iter()
             .map(|f| {
-                let n = f.at(0).int() as u32;
-                FanRow {
-                    label: ss(f.at(1).str()),
-                    rpm: model::rpm_of(s, n) as i32,
-                    kind: ss(&model::fan_setting(s, self.thermal(), n).kind),
-                }
+                let rpm = model::rpm_of(s, f.at(0).int() as u32);
+                let label = if rpm > 0 {
+                    format!("{}  {rpm}", f.at(1).str())
+                } else {
+                    f.at(1).str().to_owned()
+                };
+                opt(f.at(1).str(), &label)
             })
             .collect();
         bk.set_has_fans(s.has("Fans1"));
         bk.set_fan_mode(self.fan_mode as i32);
         bk.set_fan_sel(self.fan_sel.min(fan_list.len().saturating_sub(1)) as i32);
-        sync(&self.m.fans, fan_list);
+        sync(&self.m.fan_opts, fan_list);
         self.push_curve_to(bk);
 
         // Power limits

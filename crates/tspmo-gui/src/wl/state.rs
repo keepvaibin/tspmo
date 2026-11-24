@@ -285,6 +285,7 @@ impl State {
         bb: (slint::PhysicalPosition, slint::PhysicalSize),
     ) {
         let Some(s) = self.surfs.get_mut(&id) else { return };
+        crate::trace("present");
         let Ok((buffer, mem)) = self.pool.create_buffer(
             w as i32,
             h as i32,
@@ -556,6 +557,7 @@ impl KeyboardHandler for State {
         _: &[Keysym],
     ) {
         self.kb_focus = self.id_of(surface);
+        crate::trace("keyboard focus");
     }
     fn leave(
         &mut self,
