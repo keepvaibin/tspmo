@@ -1,12 +1,13 @@
 import { Th } from "theme.slint";
 import { Bk, Opt, GpuUser, Pt, LimitRow, Item } from "bk.slint";
-import { Popup } from "popup.slint";
+import { Popup, PopupBody } from "popup.slint";
 import { FansWin, ScreenWin, KeysWin, SystemWin } from "windows.slint";
-import { Cap, Mono } from "controls.slint";
+import { Cap, Mono, Icon } from "controls.slint";
 
 export { Bk, Th, Opt, GpuUser, Pt, LimitRow, Item, Popup, FansWin, ScreenWin, KeysWin, SystemWin }
 
-// A short note for desktops without their own OSD: text, an optional bar.
+// The on-screen note: icon, text, an optional bar. Click-through, never focused, shown about
+// 1.2 s with a short fade at both ends (`shown` is switched by the program).
 export component Osd inherits Window {
     no-frame: true;
     background: transparent;
@@ -14,30 +15,48 @@ export component Osd inherits Window {
     default-font-size: Th.font-size;
     default-font-family: Th.font-family;
     in property <string> text;
+    in property <string> glyph;
     in property <float> value: -1;
+    in property <bool> shown: false;
     Rectangle {
+        opacity: root.shown ? 1 : 0;
+        animate opacity { duration: root.shown ? 90ms : 220ms; easing: ease-out; }
         background: Th.bg;
-        border-radius: 0.6rem;
+        border-radius: 8 * Th.dp;
         border-width: 1px;
         border-color: Th.line;
-        min-width: 14rem;
+        min-width: 150 * Th.dp;
         VerticalLayout {
-            padding: 1rem;
-            spacing: 0.6rem;
-            alignment: center;
-            Text {
-                text: root.text;
-                color: Th.text;
-                font-size: 1.15rem;
-                font-weight: 600;
-                horizontal-alignment: center;
+            padding-left: 14 * Th.dp;
+            padding-right: 16 * Th.dp;
+            padding-top: 10 * Th.dp;
+            padding-bottom: 10 * Th.dp;
+            spacing: 8 * Th.dp;
+            HorizontalLayout {
+                spacing: 9 * Th.dp;
+                alignment: center;
+                Icon {
+                    name: root.glyph;
+                    size: 20 * Th.dp;
+                    tint: Th.accent;
+                    y: (parent.height - self.height) / 2;
+                }
+                Text {
+                    text: root.text;
+                    color: Th.text;
+                    font-size: 1.1rem;
+                    font-weight: 600;
+                    vertical-alignment: center;
+                }
             }
             if root.value >= 0: Rectangle {
-                height: 0.35rem;
+                height: 4 * Th.dp;
+                border-radius: 2 * Th.dp;
                 background: Th.raised;
                 Rectangle {
                     x: 0;
                     width: parent.width * clamp(root.value, 0, 1);
+                    border-radius: parent.border-radius;
                     background: Th.accent;
                 }
             }

@@ -1,19 +1,28 @@
 import { Th, Nav } from "theme.slint";
 import { Bk, Opt } from "bk.slint";
-import { Btn, Seg, Field, SlideRow, Row, Cap, Mono } from "controls.slint";
+import { Btn, Seg, Combo, ColorBtn, Check, Chip, Slide, Head, Cap, Mono, Row } from "controls.slint";
 
-// The flyout: everything needed day to day, no scrolling. The rest opens in its own window.
+// One section: a head and its controls, 6dp apart.
+component Section inherits VerticalLayout {
+    spacing: 6 * Th.dp;
+}
+
+// The main window: one dense column, laid out after G-Helper (mode, GPU, screen, display,
+// Slash, keyboard, battery), no scrolling. Everything else opens in its own window.
 export component PopupBody inherits VerticalLayout {
-    padding: 1.2rem;
-    spacing: 1.1rem;
-    min-width: 26rem;
+    padding-left: 16 * Th.dp;
+    padding-right: 16 * Th.dp;
+    padding-top: 14 * Th.dp;
+    padding-bottom: 14 * Th.dp;
+    spacing: 14 * Th.dp;
+    min-width: 470 * Th.dp;
 
     if !Bk.loaded: Rectangle {
-        height: 26rem;
+        height: 420 * Th.dp;
         VerticalLayout {
-            spacing: 1.1rem;
-            for h in [4.3rem, 3.9rem, 6.2rem, 2rem, 3.9rem]: Rectangle {
-                height: h;
+            spacing: 14 * Th.dp;
+            for h in [84, 84, 56, 70, 50]: Rectangle {
+                height: h * Th.dp;
                 border-radius: Th.radius;
                 background: Th.raised.with-alpha(0.5);
             }
@@ -21,108 +30,230 @@ export component PopupBody inherits VerticalLayout {
     }
 
     // Mode
-    if Bk.loaded && Bk.mode != "": VerticalLayout {
-        spacing: 0.4rem;
-        Field { label: "Mode"; value: Bk.fan-text; }
+    if Bk.loaded && Bk.mode != "": Section {
+        Head { icon: "gauge"; title: Bk.mode-title; info: Bk.mode-info; }
         Seg {
-            h: 2.8rem;
             wheel: true;
-            opts: [
-                { id: "eco-plus", label: "Eco+", tint: Th.mode-color("eco-plus"), keyed: true },
-                { id: "power-saver", label: "Silent", tint: Th.mode-color("power-saver"), keyed: true },
-                { id: "balanced", label: "Balanced", tint: Th.mode-color("balanced"), keyed: true },
-                { id: "performance", label: "Turbo", tint: Th.mode-color("performance"), keyed: true },
+            opts: Bk.win-fans ? [
+                { id: "eco-plus", label: "Eco+", tint: Th.mode-color("eco-plus"), keyed: true, icon: "eco-plus", dim: false, on: false },
+                { id: "power-saver", label: "Silent", tint: Th.mode-color("power-saver"), keyed: true, icon: "power-saver", dim: false, on: false },
+                { id: "balanced", label: "Balanced", tint: Th.mode-color("balanced"), keyed: true, icon: "balanced", dim: false, on: false },
+                { id: "performance", label: "Turbo", tint: Th.mode-color("performance"), keyed: true, icon: "performance", dim: false, on: false },
+                { id: "fans", label: "Fans + Power", tint: Th.dim, keyed: true, icon: "tune", dim: false, on: false },
+            ] : [
+                { id: "eco-plus", label: "Eco+", tint: Th.mode-color("eco-plus"), keyed: true, icon: "eco-plus", dim: false, on: false },
+                { id: "power-saver", label: "Silent", tint: Th.mode-color("power-saver"), keyed: true, icon: "power-saver", dim: false, on: false },
+                { id: "balanced", label: "Balanced", tint: Th.mode-color("balanced"), keyed: true, icon: "balanced", dim: false, on: false },
+                { id: "performance", label: "Turbo", tint: Th.mode-color("performance"), keyed: true, icon: "performance", dim: false, on: false },
             ];
             index: Bk.mode == "eco-plus" ? 0 : Bk.mode == "power-saver" ? 1 : Bk.mode == "balanced" ? 2 : Bk.mode == "performance" ? 3 : -1;
-            picked(i) => { Bk.act("mode", ["eco-plus", "power-saver", "balanced", "performance"][i]); }
+            picked(i) => {
+                if (i == 4) { Bk.open("fans"); } else { Bk.act("mode", ["eco-plus", "power-saver", "balanced", "performance"][i]); }
+            }
         }
     }
 
-    // GPU
-    if Bk.loaded && Bk.has-gpu: VerticalLayout {
-        spacing: 0.4rem;
-        Field { label: "GPU"; value: Bk.gpu-switching != "" ? "switching" : Bk.gpu-state; }
+    // GPU. While Eco+ is on the dGPU is off: Eco shows as chosen, the rest is unavailable.
+    if Bk.loaded && Bk.has-gpu: Section {
+        Head { icon: "chip"; title: Bk.gpu-title; info: Bk.gpu-info; }
         Seg {
             opts: [
-                { id: "eco", label: "Eco", tint: Th.accent },
-                { id: "hybrid", label: "Standard", tint: Th.accent },
-                { id: "ultimate", label: "Ultimate", tint: Th.accent },
-                { id: "optimized", label: "Optimized", tint: Th.accent },
+                { id: "eco", label: "Eco", tint: Th.accent, keyed: false, icon: "eco", dim: false, on: false },
+                { id: "hybrid", label: "Standard", tint: Th.accent, keyed: false, icon: "hybrid", dim: Bk.gpu-locked, on: false },
+                { id: "ultimate", label: "Ultimate", tint: Th.accent, keyed: false, icon: "ultimate", dim: Bk.gpu-locked, on: false },
+                { id: "optimized", label: "Optimized", tint: Th.accent, keyed: false, icon: "optimized", dim: Bk.gpu-locked, on: false },
             ];
-            index: Bk.gpu-policy == "eco" ? 0 : Bk.gpu-policy == "hybrid" ? 1 : Bk.gpu-policy == "ultimate" ? 2 : Bk.gpu-policy == "optimized" ? 3 : -1;
+            index: Bk.gpu-index;
             enabled: Bk.gpu-switching == "";
-            picked(i) => { Bk.act("gpu", ["eco", "hybrid", "ultimate", "optimized"][i]); }
+            picked(i) => {
+                if (!Bk.gpu-locked) { Bk.act("gpu", ["eco", "hybrid", "ultimate", "optimized"][i]); }
+            }
         }
         if Bk.gpu-reboot: Row {
-            h: 2rem;
+            h: 24 * Th.dp;
             label: "Reboot for " + Bk.gpu-pending;
-            Btn { text: "Reboot"; danger: true; clicked => { Bk.act("reboot", ""); } }
+            Btn { h: 24 * Th.dp; text: "Reboot"; danger: true; clicked => { Bk.act("reboot", ""); } }
         }
     }
 
-    // Screen
-    if Bk.loaded && (Bk.has-refresh || Bk.brightness >= 0 || Bk.has-light): VerticalLayout {
-        spacing: 0.4rem;
-        if Bk.has-refresh: Field { label: "Screen"; value: Bk.refresh-now; }
-        if Bk.has-refresh: Seg {
+    // Laptop screen: refresh policy and panel overdrive.
+    if Bk.loaded && Bk.has-refresh: Section {
+        Head { icon: "laptop"; title: Bk.screen-title; }
+        Seg {
             wheel: true;
-            opts: [{ id: "auto", label: "Auto", tint: Th.accent }, { id: "60", label: "60 Hz", tint: Th.accent }, { id: "max", label: "Max", tint: Th.accent }];
-            index: Bk.refresh-policy == "auto" ? 0 : Bk.refresh-policy == "60" ? 1 : Bk.refresh-policy == "max" ? 2 : -1;
-            picked(i) => { Bk.act("refresh", ["auto", "60", "max"][i]); }
+            opts: Bk.refresh-opts;
+            index: Bk.refresh-idx;
+            picked(i) => {
+                if (i == 3) { Bk.act("hw-toggle", "panel_overdrive"); } else { Bk.act("refresh", ["auto", "60", "max"][i]); }
+            }
         }
-        if Bk.brightness >= 0: SlideRow {
-            label: "Brightness";
+    }
+
+    // Brightness and the visual options.
+    if Bk.loaded && (Bk.brightness >= 0 || Bk.has-flicker || Bk.color-labels.length > 0): Section {
+        Head {
+            icon: "sun";
+            title: Bk.has-flicker ? "Flicker-free Dimming / Visual Mode" : "Brightness / Visual Mode";
+            info: Bk.brightness >= 0 ? Bk.brightness + "%" : "";
+        }
+        if Bk.brightness >= 0: Slide {
             min: 1;
             max: 100;
-            value-int: Bk.brightness;
-            value: Bk.brightness + "%";
+            value: Bk.brightness;
             released(v) => { Bk.acti("brightness", v); }
         }
-        if Bk.has-light: SlideRow {
-            label: "Keyboard";
-            min: 0;
-            max: max(Bk.kb-max, 1);
-            value-int: Bk.kb-level;
-            value: Bk.kb-level + " / " + Bk.kb-max;
-            released(v) => { Bk.acti("kb-level", v); }
+        HorizontalLayout {
+            spacing: 6 * Th.dp;
+            if Bk.color-labels.length > 0: Combo {
+                horizontal-stretch: 1;
+                preferred-width: 0px;
+                items: Bk.color-labels;
+                index: Bk.color-idx;
+                picked(i) => { Bk.act("color", Bk.color-modes[i].id); }
+            }
+            if Bk.has-eye: Combo {
+                horizontal-stretch: 1;
+                preferred-width: 0px;
+                items: Bk.eye-items;
+                index: Bk.eye-idx;
+                text: Bk.eye-text;
+                picked(i) => { Bk.acti("eye", [0, 5500, 4500, 3500][i]); }
+            }
+            if Bk.has-flicker: Rectangle {
+                horizontal-stretch: 1;
+                preferred-width: 0px;
+                Check {
+                    x: 2 * Th.dp;
+                    width: parent.width - 2 * Th.dp;
+                    label: "Flicker-free";
+                    on: Bk.flicker;
+                    toggled(v) => { Bk.act("flicker", v ? "on" : "off"); }
+                }
+            }
+        }
+    }
+
+    // Slash lighting
+    if Bk.loaded && Bk.has-slash: Section {
+        Head { icon: "slash"; title: Bk.slash-title; }
+        HorizontalLayout {
+            spacing: 6 * Th.dp;
+            Combo {
+                horizontal-stretch: 1;
+                preferred-width: 0px;
+                items: ["Off", "Low", "Medium", "High"];
+                index: Bk.slash-bright-idx;
+                picked(i) => { Bk.acti("slash-bright", i); }
+            }
+            if Bk.slash-modes.length > 0: Combo {
+                horizontal-stretch: 1;
+                preferred-width: 0px;
+                items: Bk.slash-modes;
+                index: Bk.slash-mode-idx;
+                enabled: Bk.slash-on;
+                picked(i) => { Bk.acti("slash-mode-set", i); }
+            }
+            Combo {
+                horizontal-stretch: 1;
+                preferred-width: 0px;
+                right: true;
+                items: ["Interval Off", "Interval 1", "Interval 2", "Interval 3", "Interval 4", "Interval 5"];
+                index: Bk.slash-interval;
+                text: Bk.slash-interval > 5 ? "Interval " + Bk.slash-interval : "";
+                enabled: Bk.slash-on;
+                picked(i) => { Bk.acti("slash-interval", i); }
+            }
+        }
+        HorizontalLayout {
+            spacing: 6 * Th.dp;
+            Check {
+                horizontal-stretch: 1;
+                preferred-width: 0px;
+                label: "Show on battery";
+                on: Bk.slash-batt;
+                toggled => { Bk.act("hw-toggle", "slash:battery"); }
+            }
+            Check {
+                horizontal-stretch: 1;
+                preferred-width: 0px;
+                label: "Show on lid close";
+                on: Bk.slash-lid;
+                toggled => { Bk.act("hw-toggle", "slash:lid"); }
+            }
+        }
+    }
+
+    // Keyboard
+    if Bk.loaded && Bk.has-light: Section {
+        HorizontalLayout {
+            spacing: 6 * Th.dp;
+            Head { horizontal-stretch: 1; icon: "keyboard"; title: Bk.kb-title; }
+            if Bk.has-fnlock: Chip {
+                y: 1 * Th.dp;
+                text: "Fn-Lock";
+                on: Bk.fnlock;
+                toggled(v) => { Bk.act("fnlock", v ? "on" : "off"); }
+            }
+        }
+        HorizontalLayout {
+            spacing: 6 * Th.dp;
+            Combo {
+                horizontal-stretch: 1;
+                preferred-width: 0px;
+                up: true;
+                items: Bk.kb-levels;
+                index: Bk.kb-level;
+                picked(i) => { Bk.acti("kb-level", i); }
+            }
+            if Bk.kb-effects.length > 0: Combo {
+                horizontal-stretch: 1;
+                preferred-width: 0px;
+                up: true;
+                items: Bk.kb-effect-labels;
+                index: Bk.kb-effect-idx;
+                text: Bk.kb-effect-idx < 0 ? Bk.kb-effect : "";
+                picked(i) => { Bk.act("kb-effect", Bk.kb-effects[i].id); }
+            }
+            if Bk.kb-effects.length > 0: ColorBtn {
+                horizontal-stretch: 1;
+                preferred-width: 0px;
+                label: "Color";
+                value: Bk.kb-color;
+                colors: [#ffffff, #ff3b30, #ff9500, #ffd60a, #34c759, #0a84ff, #bf5af2, #ff2d92];
+                index: Bk.kb-color-idx;
+                picked(i) => { Bk.acti("kb-color", i); }
+            }
         }
     }
 
     // Battery
-    if Bk.loaded && Bk.has-battery: VerticalLayout {
-        spacing: 0.4rem;
-        Field {
-            label: "Charge limit";
-            value: Bk.bat-line;
+    if Bk.loaded && Bk.has-battery: Section {
+        Head {
+            icon: "battery";
+            title: Bk.bat-limit > 0 ? "Battery Charge Limit: " + Bk.bat-limit + "%" : "Battery Charge Limit";
+            info: Bk.bat-line;
         }
-        if Bk.bat-opts.length > 0: Seg {
-            opts: Bk.bat-opts;
-            index: Bk.bat-idx;
-            picked(i) => { Bk.acti("bat-limit", Bk.bat-values[i]); }
+        if Bk.bat-values.length > 1: Slide {
+            min: 0;
+            max: Bk.bat-values.length - 1;
+            value: Bk.bat-idx;
+            released(v) => { Bk.acti("bat-limit", Bk.bat-values[v]); }
         }
     }
 
     // The rest
-    if Bk.loaded && (Bk.win-fans || Bk.win-screen || Bk.win-keys || Bk.win-system): VerticalLayout {
-        spacing: 0.3rem;
-        if Bk.win-fans || Bk.win-screen: HorizontalLayout {
-            spacing: 0.3rem;
-            if Bk.win-fans: Btn { horizontal-stretch: 1; preferred-width: 0px; text: "Fans & Power"; clicked => { Bk.open("fans"); } }
-            if Bk.win-screen: Btn { horizontal-stretch: 1; preferred-width: 0px; text: "Screen"; clicked => { Bk.open("screen"); } }
-        }
-        if Bk.win-keys || Bk.win-system: HorizontalLayout {
-            spacing: 0.3rem;
-            if Bk.win-keys: Btn { horizontal-stretch: 1; preferred-width: 0px; text: "Keyboard & Lid"; clicked => { Bk.open("keys"); } }
-            if Bk.win-system: Btn { horizontal-stretch: 1; preferred-width: 0px; text: "System"; clicked => { Bk.open("system"); } }
-        }
+    if Bk.loaded && (Bk.win-screen || Bk.win-keys || Bk.win-system): HorizontalLayout {
+        spacing: 6 * Th.dp;
+        if Bk.win-screen: Btn { horizontal-stretch: 1; preferred-width: 0px; icon: "screen"; text: "Screen"; clicked => { Bk.open("screen"); } }
+        if Bk.win-keys: Btn { horizontal-stretch: 1; preferred-width: 0px; icon: "keyboard"; text: "Keyboard & Lid"; clicked => { Bk.open("keys"); } }
+        if Bk.win-system: Btn { horizontal-stretch: 1; preferred-width: 0px; icon: "system"; text: "System"; clicked => { Bk.open("system"); } }
     }
 
     if Bk.error != "": Text {
         text: Bk.error;
         color: Th.danger;
-        font-size: 0.85rem;
+        font-size: Th.t-small;
         wrap: word-wrap;
-        max-width: 23.6rem;
     }
 }
 
@@ -151,7 +282,7 @@ export component Popup inherits Window {
         }
         Rectangle {
             background: Th.bg;
-            border-radius: 0.6rem;
+            border-radius: 8 * Th.dp;
             border-width: 1px;
             border-color: Th.line;
             PopupBody { }

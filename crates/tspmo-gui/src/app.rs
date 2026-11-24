@@ -101,6 +101,11 @@ struct Models {
     curve: Rc<VecModel<Pt>>,
     limits: Rc<VecModel<LimitRow>>,
     kb_effects: Rc<VecModel<Opt>>,
+    color_labels: Rc<VecModel<SharedString>>,
+    eye_items: Rc<VecModel<SharedString>>,
+    kb_levels: Rc<VecModel<SharedString>>,
+    kb_effect_labels: Rc<VecModel<SharedString>>,
+    refresh_opts: Rc<VecModel<Opt>>,
     kb_states: Rc<VecModel<bool>>,
     slash_modes: Rc<VecModel<SharedString>>,
     slash_show: Rc<VecModel<Item>>,
@@ -119,6 +124,11 @@ impl Models {
             curve: Rc::default(),
             limits: Rc::default(),
             kb_effects: Rc::default(),
+            color_labels: Rc::default(),
+            eye_items: Rc::default(),
+            kb_levels: Rc::default(),
+            kb_effect_labels: Rc::default(),
+            refresh_opts: Rc::default(),
             kb_states: Rc::default(),
             slash_modes: Rc::default(),
             slash_show: Rc::default(),
@@ -136,6 +146,11 @@ impl Models {
         bk.set_curve(self.curve.clone().into());
         bk.set_limits(self.limits.clone().into());
         bk.set_kb_effects(self.kb_effects.clone().into());
+        bk.set_color_labels(self.color_labels.clone().into());
+        bk.set_eye_items(self.eye_items.clone().into());
+        bk.set_kb_levels(self.kb_levels.clone().into());
+        bk.set_kb_effect_labels(self.kb_effect_labels.clone().into());
+        bk.set_refresh_opts(self.refresh_opts.clone().into());
         bk.set_kb_states(self.kb_states.clone().into());
         bk.set_slash_modes(self.slash_modes.clone().into());
         bk.set_slash_show(self.slash_show.clone().into());
@@ -197,6 +212,9 @@ fn opt(id: &str, label: &str) -> Opt {
         label: ss(label),
         tint: slint::Color::default(),
         keyed: false,
+        icon: ss(""),
+        dim: false,
+        on: false,
     }
 }
 
@@ -502,6 +520,7 @@ impl App {
         let mut what = Vec::new();
         if self.store.has("Fans1") {
             what.push(("Fans1", "Rpm"));
+            what.push(("Fans1", "Temps"));
         }
         if self.store.has("Battery1") {
             what.push(("Battery1", "Power"));
@@ -592,6 +611,11 @@ impl App {
                     );
                 }
             }
+            "kb-effect" => {
+                let mut e = model::effect(s);
+                e.mode = arg.to_owned();
+                self.set_effect(&e);
+            }
             "slash-on" => self.send("Lid1", "SetSlashEnabled", &[Arg::B(arg == "on")]),
             "anime-on" => self.send("Lid1", "SetAnimeEnabled", &[Arg::B(arg == "on")]),
             _ => {}
@@ -639,6 +663,24 @@ impl App {
                 let j = (i + n).clamp(0, model::KB_IDLE.len() as i64 - 1) as usize;
                 self.send("Lighting1", "SetIdleTimeout", &[Arg::N(model::KB_IDLE[j])]);
             }
+            "slash-bright" => {
+                if n == 0 {
+                    self.send("Lid1", "SetSlashEnabled", &[Arg::B(false)]);
+                } else {
+                    if !s.get("Lid1", "SlashEnabled").bool() {
+                        self.send("Lid1", "SetSlashEnabled", &[Arg::B(true)]);
+                    }
+                    let level = SLASH_LEVELS[(n as usize - 1).min(2)];
+                    self.send("Lid1", "SetSlashBrightness", &[Arg::N(level)]);
+                }
+            }
+            "slash-mode-set" => {
+                let modes = s.get("Lid1", "SlashModes").strings();
+                if let Some(m) = modes.get(n.max(0) as usize) {
+                    self.send("Lid1", "SetSlashMode", &[Arg::s(m)]);
+                }
+            }
+            "slash-interval" => self.send("Lid1", "SetSlashInterval", &[Arg::N(n.clamp(0, 255))]),
             "slash-level" => self.send("Lid1", "SetSlashBrightness", &[Arg::N(n)]),
             "slash-mode-step" => {
                 let modes = s.get("Lid1", "SlashModes").strings();
@@ -813,6 +855,8 @@ impl App {
 
         let mode = s.get("Daemon1", "Profile").str();
         bk.set_mode(ss(mode));
+        bk.set_mode_title(ss(&format!("Mode: {}", model::mode_label(mode))));
+        bk.set_mode_info(ss(&model::mode_info(s)));
         let rpm = s
             .get("Fans1", "Rpm")
             .list()
@@ -827,6 +871,11 @@ impl App {
         }));
 
         // GPU
+        let gv = model::gpu_view(s);
+        bk.set_gpu_title(ss(&gv.title));
+        bk.set_gpu_info(ss(&gv.info));
+        bk.set_gpu_index(gv.index);
+        bk.set_gpu_locked(gv.locked);
         bk.set_gpu_mode(ss(&model::color_label(s.get("Daemon1", "GpuMode").str())));
         bk.set_gpu_policy(ss(s.get("Daemon1", "GpuPolicy").str()));
         bk.set_gpu_switching(ss(s.get("Daemon1", "GpuSwitching").str()));
@@ -876,6 +925,72 @@ impl App {
                 .map(|m| opt(m, &model::color_label(m)))
                 .collect(),
         );
+        sync(
+            &self.m.color_labels,
+            sc.color_modes.iter().map(|m| ss(&model::nice(m))).collect(),
+        );
+        let hz_max = s
+            .get(bindings::IFACE, bindings::REFRESH_RATES)
+            .list()
+            .iter()
+            .map(V::float)
+            .fold(0.0, f64::max);
+        let od = model::hw_items(s).into_iter().find(|i| i.name == "panel_overdrive");
+        let hz_now = bindings::current_hz(s);
+        bk.set_screen_title(ss(&format!(
+            "Laptop Screen{}{}",
+            if hz_now > 0.0 {
+                format!(": {}Hz", hz_now.round())
+            } else {
+                String::new()
+            },
+            if od.as_ref().is_some_and(|o| o.on()) {
+                " + Overdrive"
+            } else {
+                ""
+            }
+        )));
+        let mut ropts = vec![
+            opt("auto", "Auto"),
+            opt("60", "60Hz"),
+            opt(
+                "max",
+                &if hz_max > 60.0 {
+                    format!("{}Hz", hz_max.round())
+                } else {
+                    "Max".to_owned()
+                },
+            ),
+        ];
+        if let Some(o) = &od {
+            let mut t = opt("od", "Overdrive");
+            t.on = o.on();
+            ropts.push(t);
+        }
+        sync(&self.m.refresh_opts, ropts);
+        bk.set_refresh_idx(match sc.policy.as_str() {
+            "auto" => 0,
+            "60" => 1,
+            "max" => 2,
+            _ => -1,
+        });
+        sync(
+            &self.m.eye_items,
+            ["Eye care: Off", "Warm 5500 K", "Warm 4500 K", "Warm 3500 K"]
+                .iter()
+                .map(|t| ss(t))
+                .collect(),
+        );
+        let eye_idx = [0, 5500, 4500, 3500]
+            .iter()
+            .position(|k| *k == sc.eye_kelvin)
+            .map_or(-1, |i| i as i32);
+        bk.set_eye_idx(eye_idx);
+        bk.set_eye_text(ss(&if eye_idx < 0 {
+            format!("Warm {} K", sc.eye_kelvin)
+        } else {
+            String::new()
+        }));
         bk.set_has_eye(sc.has_eye);
         bk.set_eye_kelvin(sc.eye_kelvin as i32);
         let hw = model::hw_items(s);
@@ -988,9 +1103,35 @@ impl App {
 
         // Lighting
         let k = "Lighting1";
-        bk.set_kb_max(s.get(k, "MaxBrightness").int() as i32);
+        let kmax = s.get(k, "MaxBrightness").int() as i32;
+        bk.set_kb_max(kmax);
         bk.set_kb_level(s.get(k, "Brightness").int() as i32);
+        sync(
+            &self.m.kb_levels,
+            (0..=kmax)
+                .map(|i| {
+                    ss(&if kmax == 3 {
+                        ["Backlight Off", "Backlight Low", "Backlight Med", "Backlight High"][i as usize].to_owned()
+                    } else if i == 0 {
+                        "Backlight Off".to_owned()
+                    } else {
+                        format!("Backlight {i}")
+                    })
+                })
+                .collect(),
+        );
         let ef = model::effect(s);
+        let kmodes = s.get(k, "Modes").strings();
+        sync(
+            &self.m.kb_effect_labels,
+            kmodes.iter().map(|m| ss(&model::nice(m))).collect(),
+        );
+        bk.set_kb_effect_idx(kmodes.iter().position(|m| *m == ef.mode).map_or(-1, |i| i as i32));
+        bk.set_kb_title(ss(&if ef.mode.is_empty() {
+            "Laptop Keyboard".to_owned()
+        } else {
+            format!("Laptop Keyboard: {}", model::nice(&ef.mode))
+        }));
         sync(
             &self.m.kb_effects,
             s.get(k, "Modes").strings().iter().map(|m| opt(m, m)).collect(),
@@ -1024,7 +1165,34 @@ impl App {
         let devices = s.get(l, "Devices").strings();
         bk.set_has_slash(devices.iter().any(|d| d == "slash"));
         bk.set_slash_on(s.get(l, "SlashEnabled").bool());
-        bk.set_slash_level(s.get(l, "SlashBrightness").int() as i32);
+        let slash_on = s.get(l, "SlashEnabled").bool();
+        let level = s.get(l, "SlashBrightness").int();
+        bk.set_slash_level(level as i32);
+        bk.set_slash_bright_idx(if !slash_on {
+            0
+        } else if level <= SLASH_LEVELS[0] {
+            1
+        } else if level <= SLASH_LEVELS[1] {
+            2
+        } else {
+            3
+        });
+        bk.set_slash_interval(s.get(l, "SlashInterval").int() as i32);
+        bk.set_slash_title(ss(&if slash_on && !s.get(l, "SlashMode").str().is_empty() {
+            format!("Slash Lighting: {}", model::nice(s.get(l, "SlashMode").str()))
+        } else if slash_on {
+            "Slash Lighting".to_owned()
+        } else {
+            "Slash Lighting: Off".to_owned()
+        }));
+        let shows = |what: &str| {
+            s.get(l, "SlashShow")
+                .list()
+                .iter()
+                .any(|e| e.at(0).str() == what && e.at(1).bool())
+        };
+        bk.set_slash_batt(shows("battery"));
+        bk.set_slash_lid(shows("lid"));
         let modes = s.get(l, "SlashModes").strings();
         bk.set_slash_mode_idx(
             modes
@@ -1092,6 +1260,9 @@ pub fn mode_color(mode: &str, dark: bool) -> slint::Color {
     };
     slint::Color::from_rgb_u8(r, g, b)
 }
+
+/// Slash brightness behind Low, Medium and High (0-255).
+const SLASH_LEVELS: [i64; 3] = [85, 170, 255];
 
 fn idle_label(secs: i64) -> String {
     match secs {

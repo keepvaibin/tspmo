@@ -12,7 +12,7 @@ export component Icon inherits Path {
     commands: Ic.path(name);
     fill: transparent;
     stroke: tint;
-    stroke-width: 2px;
+    stroke-width: max(size * 0.085, 1px);
     stroke-line-cap: round;
     stroke-line-join: round;
 }
@@ -20,7 +20,7 @@ export component Icon inherits Path {
 // Dim caption.
 export component Cap inherits Text {
     color: Th.dim;
-    font-size: 0.85rem;
+    font-size: Th.t-body;
     vertical-alignment: center;
     overflow: elide;
 }
@@ -29,30 +29,42 @@ export component Cap inherits Text {
 export component Mono inherits Text {
     color: Th.dim;
     font-family: Th.mono;
-    font-size: 0.85rem;
+    font-size: Th.t-small;
     vertical-alignment: center;
     horizontal-alignment: right;
 }
 
-// A section line: caption on the left, a live readout on the right.
-export component Field inherits Rectangle {
-    in property <string> label;
-    in property <string> value;
-    height: 1.5rem;
+// Section head: a small icon, a bold title that carries the state, live readings on the right.
+export component Head inherits Rectangle {
+    in property <string> icon;
+    in property <string> title;
+    in property <string> info;
+    height: 20 * Th.dp;
     HorizontalLayout {
-        spacing: Th.u;
-        Cap { text: root.label; }
-        Rectangle {
-            horizontal-stretch: 1;
-            Rectangle {
-                y: parent.height / 2;
-                height: 1px;
-                background: Th.line;
-            }
+        spacing: 6 * Th.dp;
+        if root.icon != "": Icon {
+            name: root.icon;
+            size: 15 * Th.dp;
+            y: (parent.height - self.height) / 2;
         }
-        if root.value != "": Mono { text: root.value; }
+        Text {
+            text: root.title;
+            color: Th.text;
+            font-size: Th.t-head;
+            font-weight: 700;
+            vertical-alignment: center;
+            overflow: elide;
+            horizontal-stretch: 1;
+        }
+        if root.info != "": Mono {
+            text: root.info;
+            color: Th.text.with-alpha(0.8);
+        }
     }
 }
+
+// A group head without an icon, for the secondary windows.
+export component Field inherits Head { }
 
 export component Rule inherits Rectangle {
     height: 1px;
@@ -62,37 +74,57 @@ export component Rule inherits Rectangle {
 // Ring drawn inside a focused control.
 component Ring inherits Rectangle {
     in property <bool> on;
-    border-width: on ? 2px : 0;
-    border-color: Th.focus;
-    border-radius: Th.radius;
+    in property <length> inset: 0;
+    Rectangle {
+        x: root.inset;
+        y: root.inset;
+        width: root.width - 2 * root.inset;
+        height: root.height - 2 * root.inset;
+        border-width: root.on ? 1.5px : 0;
+        border-color: Th.focus;
+        border-radius: max(Th.radius - root.inset, 1px);
+    }
 }
 
 export component Btn inherits Rectangle {
     in property <string> text;
+    in property <string> icon;
     in property <bool> enabled: true;
     in property <bool> active;
     in property <bool> danger;
     in property <length> h: Th.control;
     callback clicked();
     height: h;
-    min-width: 2rem;
+    min-width: 24 * Th.dp;
     border-radius: Th.radius;
     opacity: enabled ? 1 : 0.4;
-    background: ta.pressed ? Th.pressed : (ta.has-hover || active) ? Th.hover : Th.raised;
+    background: ta.pressed ? Th.pressed : ta.has-hover ? Th.hover : Th.raised;
     animate background { duration: 100ms; }
+    Rectangle {
+        border-radius: Th.radius;
+        border-width: root.active ? 2px : 0;
+        border-color: Th.accent;
+    }
     HorizontalLayout {
-        padding-left: Th.u;
-        padding-right: Th.u;
-        spacing: 0.5rem;
+        padding-left: 6 * Th.dp;
+        padding-right: 6 * Th.dp;
+        spacing: 5 * Th.dp;
         alignment: center;
+        if root.icon != "": Icon {
+            name: root.icon;
+            size: 14 * Th.dp;
+            tint: root.danger ? Th.danger : Th.text;
+            y: (parent.height - self.height) / 2;
+        }
         Text {
             text: root.text;
             color: root.danger ? Th.danger : Th.text;
+            font-size: Th.t-body;
             vertical-alignment: center;
             overflow: elide;
         }
     }
-    Ring { on: fs.has-focus && Nav.keys; }
+    Ring { on: fs.has-focus && Nav.keys; inset: 3 * Th.dp; }
     fs := FocusScope {
         enabled: root.enabled;
         key-pressed(e) => {
@@ -126,8 +158,8 @@ export component IconBtn inherits Rectangle {
     opacity: enabled ? 1 : 0.4;
     background: ta.pressed ? Th.pressed : ta.has-hover ? Th.hover : Th.raised;
     animate background { duration: 100ms; }
-    Icon { name: root.icon; size: 0.9rem; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; }
-    Ring { on: fs.has-focus && Nav.keys; }
+    Icon { name: root.icon; size: 13 * Th.dp; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; }
+    Ring { on: fs.has-focus && Nav.keys; inset: 3 * Th.dp; }
     fs := FocusScope {
         enabled: root.enabled;
         key-pressed(e) => {
@@ -149,7 +181,8 @@ export component IconBtn inherits Rectangle {
     }
 }
 
-// A row of equal tiles. The chosen one carries the accent as a bar and a light tint.
+// A row of equal tiles. The chosen one is outlined in its colour (mode tiles carry their own,
+// the others the accent). With icons the tile is a small icon above the label.
 // Arrows move the highlight, Enter or Space applies it; the wheel steps when `wheel` is set.
 export component Seg inherits Rectangle {
     in property <[Opt]> opts;
@@ -157,9 +190,10 @@ export component Seg inherits Rectangle {
     in property <color> tint: Th.accent;
     in property <bool> enabled: true;
     in property <bool> wheel: false;
-    in property <length> h: Th.control;
+    in property <length> h: opts.length > 0 && opts[0].icon != "" ? 58 * Th.dp : Th.control;
     callback picked(int);
     property <int> cur: index;
+    property <length> gap: Th.gap;
     height: h;
     opacity: enabled ? 1 : 0.4;
     fs := FocusScope {
@@ -180,65 +214,70 @@ export component Seg inherits Rectangle {
                 return accept;
             }
             if (e.text == Key.Return || e.text == " ") {
-                root.picked(root.cur);
+                if (!root.opts[root.cur].dim) {
+                    root.picked(root.cur);
+                }
                 return accept;
             }
             return reject;
         }
         for o[i] in root.opts: Rectangle {
-                x: i * (self.width + 0.3rem);
-                width: (root.width - 0.3rem * (root.opts.length - 1)) / max(root.opts.length, 1);
-                height: root.height;
-                property <bool> sel: i == root.index;
-                property <color> c: o.keyed ? o.tint : root.tint;
+            x: i * (self.width + root.gap);
+            width: (root.width - root.gap * (root.opts.length - 1)) / max(root.opts.length, 1);
+            height: root.height;
+            property <bool> sel: i == root.index || o.on;
+            property <color> c: o.keyed ? o.tint : root.tint;
+            border-radius: Th.radius;
+            opacity: o.dim ? 0.38 : 1;
+            background: ta.pressed && !o.dim ? Th.pressed : ta.has-hover && !o.dim ? Th.hover : Th.raised;
+            animate background { duration: 100ms; }
+            animate opacity { duration: 140ms; }
+            if o.icon != "": Icon {
+                name: o.icon;
+                size: 18 * Th.dp;
+                tint: sel ? c : Th.text;
+                x: (parent.width - self.width) / 2;
+                y: 10 * Th.dp;
+            }
+            Text {
+                text: o.label;
+                color: Th.text;
+                font-size: Th.t-body;
+                font-weight: sel ? 700 : 400;
+                x: 2 * Th.dp;
+                width: parent.width - 4 * Th.dp;
+                y: o.icon != "" ? parent.height - self.height - 9 * Th.dp : (parent.height - self.height) / 2;
+                horizontal-alignment: center;
+                overflow: elide;
+            }
+            Rectangle {
                 border-radius: Th.radius;
-                background: ta.pressed ? Th.pressed : ta.has-hover ? Th.hover : Th.raised;
-                animate background { duration: 100ms; }
-                Rectangle {
-                    border-radius: Th.radius;
-                    background: sel ? Th.selected : transparent;
-                    animate background { duration: 140ms; }
+                border-width: sel ? 2px : 0;
+                border-color: c;
+                animate border-color { duration: 140ms; }
+            }
+            Ring { on: fs.has-focus && Nav.keys && i == root.cur; inset: 3 * Th.dp; }
+            ta := TouchArea {
+                enabled: !o.dim;
+                clicked => {
+                    fs.focus();
+                    Nav.keys = false;
+                    root.cur = i;
+                    root.picked(i);
                 }
-                Rectangle {
-                    y: parent.height - self.height;
-                    height: sel ? 3px : (o.keyed ? 2px : 0px);
-                    background: sel ? c : c.with-alpha(0.5);
-                    animate height { duration: 140ms; }
-                    animate background { duration: 140ms; }
-                }
-                Text {
-                    text: o.label;
-                    color: Th.text;
-                    font-weight: sel ? 700 : 400;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                    overflow: elide;
-                }
-                Rectangle {
-                    border-radius: Th.radius;
-                    border-width: fs.has-focus && Nav.keys && i == root.cur ? 2px : 0;
-                    border-color: Th.focus;
-                }
-                ta := TouchArea {
-                    clicked => {
-                        fs.focus();
-                        Nav.keys = false;
-                        root.cur = i;
-                        root.picked(i);
+                scroll-event(e) => {
+                    if (!root.wheel) {
+                        return reject;
                     }
-                    scroll-event(e) => {
-                        if (!root.wheel) {
-                            return reject;
-                        }
-                        if (e.delta-y < 0 && root.index < root.opts.length - 1) {
-                            root.picked(root.index + 1);
-                        } else if (e.delta-y > 0 && root.index > 0) {
-                            root.picked(root.index - 1);
-                        }
-                        return accept;
+                    if (e.delta-y < 0 && root.index < root.opts.length - 1) {
+                        root.picked(root.index + 1);
+                    } else if (e.delta-y > 0 && root.index > 0) {
+                        root.picked(root.index - 1);
                     }
+                    return accept;
                 }
             }
+        }
     }
 }
 
@@ -247,23 +286,23 @@ export component Check inherits Rectangle {
     in property <bool> on;
     in property <bool> enabled: true;
     callback toggled(bool);
-    height: 1.8rem;
+    height: 18 * Th.dp;
     opacity: enabled ? 1 : 0.4;
     HorizontalLayout {
-        spacing: 0.6rem;
+        spacing: 6 * Th.dp;
         Rectangle {
-            width: 1.1rem;
-            height: 1.1rem;
+            width: 14 * Th.dp;
+            height: 14 * Th.dp;
             y: (parent.height - self.height) / 2;
             border-radius: 2px;
             background: root.on ? Th.accent : (ta.has-hover ? Th.hover : Th.raised);
             border-width: root.on ? 0 : 1px;
             border-color: Th.dim;
             animate background { duration: 100ms; }
-            if root.on: Icon { name: "check"; size: 0.9rem; tint: Th.on-accent; x: 0.1rem; y: 0.1rem; }
-            Ring { on: fs.has-focus && Nav.keys; x: -2px; y: -2px; width: parent.width + 4px; height: parent.height + 4px; }
+            if root.on: Icon { name: "check"; size: 12 * Th.dp; tint: Th.on-accent; x: 1 * Th.dp; y: 1 * Th.dp; }
+            Ring { on: fs.has-focus && Nav.keys; inset: -2px; }
         }
-        Text { text: root.label; color: Th.text; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+        Text { text: root.label; color: Th.text; font-size: Th.t-body; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
     }
     fs := FocusScope {
         enabled: root.enabled;
@@ -286,8 +325,243 @@ export component Check inherits Rectangle {
     }
 }
 
-// Horizontal slider: a flat bar, a vertical thumb. `moved` while dragging, `released` once it
-// settles. Arrows step (Shift: five steps), Home and End jump, the wheel steps.
+// A small badge that toggles (Fn-Lock).
+export component Chip inherits Rectangle {
+    in property <string> text;
+    in property <bool> on;
+    callback toggled(bool);
+    height: 18 * Th.dp;
+    width: label.preferred-width + 14 * Th.dp;
+    border-radius: 3px;
+    background: root.on ? Th.accent : ta.has-hover ? Th.hover : Th.raised;
+    label := Text {
+        text: root.text;
+        color: root.on ? Th.on-accent : Th.text;
+        font-size: Th.t-small;
+        font-weight: 700;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+    Ring { on: fs.has-focus && Nav.keys; inset: 2 * Th.dp; }
+    fs := FocusScope {
+        key-pressed(e) => {
+            Nav.keys = true;
+            if (e.text == Key.Return || e.text == " ") {
+                root.toggled(!root.on);
+                return accept;
+            }
+            return reject;
+        }
+    }
+    ta := TouchArea {
+        clicked => {
+            fs.focus();
+            Nav.keys = false;
+            root.toggled(!root.on);
+        }
+    }
+}
+
+// A drop-down: the value and a small arrow; the list opens as a popup inside the window (over
+// the rows below, or above them with `up`). Arrows step the value while the list is closed, so
+// the keyboard never needs the list. More than eight items flow into several columns.
+export component Combo inherits Rectangle {
+    in property <[string]> items;
+    in property <int> index;
+    in property <string> prefix;
+    // Shown instead of the item when the value is not in the list.
+    in property <string> text;
+    in property <bool> up: false;
+    in property <bool> right: false;
+    in property <bool> enabled: true;
+    callback picked(int);
+    property <int> rows: min(items.length, 8);
+    property <int> cols: ceil(items.length / 8);
+    property <length> row-h: 21 * Th.dp;
+    height: Th.control - 2 * Th.dp;
+    opacity: enabled ? 1 : 0.4;
+    border-radius: Th.radius;
+    background: ta.pressed ? Th.pressed : ta.has-hover ? Th.hover : Th.raised;
+    animate background { duration: 100ms; }
+    Text {
+        x: 7 * Th.dp;
+        width: parent.width - 24 * Th.dp;
+        text: root.prefix + (root.text != "" ? root.text : (root.index >= 0 && root.index < root.items.length ? root.items[root.index] : ""));
+        color: Th.text;
+        font-size: Th.t-body;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+    Icon {
+        name: "chev";
+        size: 10 * Th.dp;
+        tint: Th.dim;
+        x: parent.width - 16 * Th.dp;
+        y: (parent.height - self.height) / 2;
+    }
+    Ring { on: fs.has-focus && Nav.keys; inset: 3 * Th.dp; }
+    pop := PopupWindow {
+        width: max(root.width, 96 * Th.dp) * root.cols;
+        height: root.rows * root.row-h + 4 * Th.dp;
+        x: root.right ? root.width - self.width : 0;
+        y: root.up ? -self.height - 2 * Th.dp : root.height + 2 * Th.dp;
+        Rectangle {
+            background: Th.bg;
+            border-radius: Th.radius;
+            border-width: 1px;
+            border-color: Th.dim.with-alpha(0.55);
+            for it[i] in root.items: Rectangle {
+                x: 2 * Th.dp + floor(i / 8) * ((parent.width - 4 * Th.dp) / root.cols);
+                y: 2 * Th.dp + mod(i, 8) * root.row-h;
+                width: (parent.width - 4 * Th.dp) / root.cols;
+                height: root.row-h;
+                border-radius: 3px;
+                background: pa.has-hover ? Th.hover : i == root.index ? Th.selected : transparent;
+                Text {
+                    x: 7 * Th.dp;
+                    width: parent.width - 12 * Th.dp;
+                    text: it;
+                    color: Th.text;
+                    font-size: Th.t-body;
+                    font-weight: i == root.index ? 700 : 400;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+                pa := TouchArea {
+                    clicked => {
+                        pop.close();
+                        root.picked(i);
+                    }
+                }
+            }
+        }
+    }
+    fs := FocusScope {
+        enabled: root.enabled;
+        key-pressed(e) => {
+            Nav.keys = true;
+            if (e.text == Key.UpArrow || e.text == Key.LeftArrow) {
+                if (root.index > 0) {
+                    root.picked(root.index - 1);
+                }
+                return accept;
+            }
+            if (e.text == Key.DownArrow || e.text == Key.RightArrow) {
+                if (root.index < root.items.length - 1) {
+                    root.picked(root.index + 1);
+                }
+                return accept;
+            }
+            if (e.text == Key.Return || e.text == " ") {
+                pop.show();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    ta := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            fs.focus();
+            Nav.keys = false;
+            pop.show();
+        }
+        scroll-event(e) => {
+            if (e.delta-y < 0 && root.index < root.items.length - 1) {
+                root.picked(root.index + 1);
+            } else if (e.delta-y > 0 && root.index > 0) {
+                root.picked(root.index - 1);
+            }
+            return accept;
+        }
+    }
+}
+
+// The colour square of the keyboard row; the list is a row of swatches.
+export component ColorBtn inherits Rectangle {
+    in property <string> label;
+    in property <color> value;
+    in property <[color]> colors;
+    in property <int> index;
+    in property <bool> right: true;
+    in property <bool> up: true;
+    callback picked(int);
+    height: Th.control - 2 * Th.dp;
+    border-radius: Th.radius;
+    background: ta.pressed ? Th.pressed : ta.has-hover ? Th.hover : Th.raised;
+    animate background { duration: 100ms; }
+    HorizontalLayout {
+        alignment: center;
+        spacing: 7 * Th.dp;
+        Text { text: root.label; color: Th.text; font-size: Th.t-body; vertical-alignment: center; }
+        Rectangle {
+            width: 14 * Th.dp;
+            height: 14 * Th.dp;
+            y: (parent.height - self.height) / 2;
+            background: root.value;
+            border-radius: 2px;
+            border-width: 1px;
+            border-color: Th.dim.with-alpha(0.6);
+        }
+    }
+    Ring { on: fs.has-focus && Nav.keys; inset: 3 * Th.dp; }
+    pop := PopupWindow {
+        width: root.colors.length * 24 * Th.dp + 8 * Th.dp;
+        height: 32 * Th.dp;
+        x: root.right ? root.width - self.width : 0;
+        y: root.up ? -self.height - 2 * Th.dp : root.height + 2 * Th.dp;
+        Rectangle {
+            background: Th.bg;
+            border-radius: Th.radius;
+            border-width: 1px;
+            border-color: Th.dim.with-alpha(0.55);
+            for c[i] in root.colors: Rectangle {
+                x: 4 * Th.dp + i * 24 * Th.dp;
+                y: 5 * Th.dp;
+                width: 22 * Th.dp;
+                height: 22 * Th.dp;
+                border-radius: 2px;
+                background: c;
+                border-width: i == root.index ? 2px : 1px;
+                border-color: i == root.index ? Th.focus : Th.line;
+                TouchArea {
+                    clicked => {
+                        pop.close();
+                        root.picked(i);
+                    }
+                }
+            }
+        }
+    }
+    fs := FocusScope {
+        key-pressed(e) => {
+            Nav.keys = true;
+            if (e.text == Key.LeftArrow || e.text == Key.UpArrow) {
+                root.picked(max(root.index - 1, 0));
+                return accept;
+            }
+            if (e.text == Key.RightArrow || e.text == Key.DownArrow) {
+                root.picked(min(root.index + 1, root.colors.length - 1));
+                return accept;
+            }
+            if (e.text == Key.Return || e.text == " ") {
+                pop.show();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    ta := TouchArea {
+        clicked => {
+            fs.focus();
+            Nav.keys = false;
+            pop.show();
+        }
+    }
+}
+
+// Horizontal slider: a thin track filled to the value, a round thumb. `moved` while dragging,
+// `released` once it settles. Arrows step (Shift: five steps), Home and End jump, the wheel steps.
 export component Slide inherits Rectangle {
     in property <int> min: 0;
     in property <int> max: 100;
@@ -302,8 +576,8 @@ export component Slide inherits Rectangle {
     property <int> pending: value;
     property <int> shown: ta.pressed ? drag : (settle.running ? pending : value);
     property <float> frac: max > min ? clamp((shown - min) / (max - min), 0, 1) : 0;
-    property <length> thumb: 0.45rem;
-    height: 2rem;
+    property <length> thumb: 14 * Th.dp;
+    height: 18 * Th.dp;
     opacity: enabled ? 1 : 0.4;
     function at(x: length) -> int {
         root.min + round((clamp((x - thumb / 2) / (root.width - thumb), 0, 1) * (root.max - root.min)) / root.step) * root.step
@@ -315,15 +589,13 @@ export component Slide inherits Rectangle {
     }
     Rectangle {
         y: (parent.height - self.height) / 2;
-        height: 0.3rem;
-        border-radius: 1px;
+        height: 4 * Th.dp;
+        border-radius: self.height / 2;
         background: Th.raised;
-        border-width: 1px;
-        border-color: Th.line;
         Rectangle {
             x: 0;
             width: root.frac * (parent.width - root.thumb) + root.thumb / 2;
-            border-radius: 1px;
+            border-radius: parent.border-radius;
             background: root.custom ? root.tint : Th.dim;
             animate width { duration: ta.pressed ? 0ms : 120ms; }
         }
@@ -332,11 +604,13 @@ export component Slide inherits Rectangle {
         x: root.frac * (root.width - root.thumb);
         y: (parent.height - self.height) / 2;
         width: root.thumb;
-        height: 1.3rem;
-        border-radius: 2px;
-        background: ta.pressed ? root.tint : Th.text;
+        height: root.thumb;
+        border-radius: self.width / 2;
+        background: root.custom ? root.tint : Th.dim;
+        border-width: 2px;
+        border-color: ta.pressed ? Th.text : Th.bg;
         animate x { duration: ta.pressed ? 0ms : 120ms; }
-        Ring { on: fs.has-focus && Nav.keys; x: -3px; y: -3px; width: parent.width + 6px; height: parent.height + 6px; }
+        Ring { on: fs.has-focus && Nav.keys; inset: -3px; }
     }
     settle := Timer {
         interval: 350ms;
@@ -409,13 +683,13 @@ export component SlideRow inherits Rectangle {
     in property <int> step: 1;
     in property <bool> enabled: true;
     in property <bool> custom: true;
-    in property <length> label-width: 6rem;
-    in property <length> value-width: 3.6rem;
+    in property <length> label-width: 80 * Th.dp;
+    in property <length> value-width: 48 * Th.dp;
     callback moved(int);
     callback released(int);
-    height: 2rem;
+    height: 22 * Th.dp;
     HorizontalLayout {
-        spacing: Th.u;
+        spacing: Th.gap;
         Cap { text: root.label; width: root.label-width; }
         Slide {
             horizontal-stretch: 1;
@@ -447,10 +721,11 @@ export component Stepper inherits Rectangle {
             horizontal-stretch: 1;
             background: Th.raised;
             border-radius: Th.radius;
-            min-width: 6rem;
+            min-width: 80 * Th.dp;
             Text {
                 text: root.text;
                 color: Th.text;
+                font-size: Th.t-body;
                 horizontal-alignment: center;
                 vertical-alignment: center;
                 overflow: elide;
@@ -466,8 +741,8 @@ export component Row inherits Rectangle {
     in property <length> h: Th.control;
     height: h;
     HorizontalLayout {
-        spacing: Th.u;
-        Text { text: root.label; color: Th.text; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+        spacing: Th.gap;
+        Text { text: root.label; color: Th.text; font-size: Th.t-body; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
         @children
     }
 }

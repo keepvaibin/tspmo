@@ -1,12 +1,12 @@
 import { Th, Nav } from "theme.slint";
 import { Bk, Item } from "bk.slint";
-import { Btn, IconBtn, Seg, Check, Slide, SlideRow, Stepper, Row, Field, Cap, Mono, Rule } from "controls.slint";
+import { Btn, IconBtn, Seg, Check, Slide, SlideRow, Stepper, Row, Head, Cap, Mono, Rule } from "controls.slint";
 import { CurveEditor } from "curve.slint";
 
 // One firmware item: a checkbox, a stepper for choices and numbers, or plain text.
 component HwRow inherits Rectangle {
     in property <Item> item;
-    height: root.item.kind == "toggle" || root.item.kind == "text" || !root.item.writable ? 1.8rem : Th.control;
+    height: root.item.kind == "toggle" || root.item.kind == "text" || !root.item.writable ? 20 * Th.dp : Th.control;
     if root.item.kind == "toggle": Check {
         label: root.item.label;
         on: root.item.on;
@@ -17,7 +17,7 @@ component HwRow inherits Rectangle {
         h: root.height;
         label: root.item.label;
         if root.item.kind != "text" && root.item.writable: Stepper {
-            width: 10rem;
+            width: 130 * Th.dp;
             text: root.item.text;
             prev => { Bk.acti("hw-step:" + root.item.name, -1); }
             next => { Bk.acti("hw-step:" + root.item.name, 1); }
@@ -32,7 +32,7 @@ component Swatches inherits Rectangle {
     in property <int> index;
     callback picked(int);
     property <int> cur: index;
-    height: 1.8rem;
+    height: 20 * Th.dp;
     fs := FocusScope {
         changed has-focus => {
             if (self.has-focus && Nav.keys) {
@@ -56,8 +56,8 @@ component Swatches inherits Rectangle {
             return reject;
         }
         for c[i] in root.colors: Rectangle {
-            x: i * (self.width + 0.3rem);
-            width: (root.width - 0.3rem * (root.colors.length - 1)) / max(root.colors.length, 1);
+            x: i * (self.width + 6 * Th.dp);
+            width: (root.width - 6 * Th.dp * (root.colors.length - 1)) / max(root.colors.length, 1);
             height: root.height;
             border-radius: 2px;
             background: c;
@@ -84,8 +84,8 @@ component Swatches inherits Rectangle {
 component Group inherits VerticalLayout {
     in property <string> title;
     in property <string> value;
-    spacing: 0.4rem;
-    Field { label: root.title; value: root.value; }
+    spacing: 6 * Th.dp;
+    Head { title: root.title; info: root.value; }
     @children
 }
 
@@ -104,15 +104,15 @@ component WinFrame inherits Window {
             return reject;
         }
         VerticalLayout {
-            padding: 1.2rem;
-            spacing: 0.8rem;
+            padding: 16 * Th.dp;
+            spacing: 10 * Th.dp;
             @children
             if Bk.error != "": Text {
                 text: Bk.error;
                 color: Th.danger;
-                font-size: 0.85rem;
+                font-size: Th.t-small;
                 wrap: word-wrap;
-                max-width: 40rem;
+                max-width: 520 * Th.dp;
             }
         }
     }
@@ -124,10 +124,10 @@ component WinFrame inherits Window {
 export component FansWin inherits WinFrame {
     title: "Fans & Power";
     HorizontalLayout {
-        spacing: 1.2rem;
+        spacing: 16 * Th.dp;
         if Bk.has-fans: VerticalLayout {
-            spacing: 0.4rem;
-            min-width: 24rem;
+            spacing: 6 * Th.dp;
+            min-width: 300 * Th.dp;
             Seg {
                 opts: [
                     { id: "power-saver", label: "Silent", tint: Th.mode-color("power-saver"), keyed: true },
@@ -138,41 +138,41 @@ export component FansWin inherits WinFrame {
                 tint: Th.mode-color(["power-saver", "balanced", "performance"][clamp(Bk.fan-mode, 0, 2)]);
                 picked(i) => { Bk.acti("fan-mode", i); }
             }
-            Rectangle { height: 0.4rem; }
-            Field { label: "Fan"; value: Bk.fan-kind; }
+            Rectangle { height: 6 * Th.dp; }
+            Head { title: "Fan"; info: Bk.fan-kind; }
             Seg {
                 opts: Bk.fan-opts;
                 index: Bk.fan-sel;
                 picked(i) => { Bk.acti("fan-sel", i); }
             }
             CurveEditor {
-                height: 14rem;
+                height: 190 * Th.dp;
                 editable: Bk.fan-kind != "full";
             }
             HorizontalLayout {
-                spacing: 0.3rem;
+                spacing: 6 * Th.dp;
                 Btn { horizontal-stretch: 1; preferred-width: 0px; text: "Auto"; active: Bk.fan-kind == "auto"; clicked => { Bk.act("fan-auto", ""); } }
                 Btn { horizontal-stretch: 1; preferred-width: 0px; text: "Full"; active: Bk.fan-kind == "full"; clicked => { Bk.act("fan-full", ""); } }
                 Btn { horizontal-stretch: 1; preferred-width: 0px; text: "Factory"; clicked => { Bk.act("fan-reset", ""); } }
             }
         }
         if Bk.has-power: VerticalLayout {
-            spacing: 0.4rem;
-            min-width: 24rem;
+            spacing: 6 * Th.dp;
+            min-width: 300 * Th.dp;
             Seg {
                 opts: [{ id: "ac", label: "AC", tint: Th.accent }, { id: "battery", label: "Battery", tint: Th.accent }];
                 index: Bk.pw-source;
                 picked(i) => { Bk.acti("pw-source", i); }
             }
-            Rectangle { height: 0.4rem; }
-            Field { label: "Power limits"; }
+            Rectangle { height: 6 * Th.dp; }
+            Head { title: "Power limits"; }
             for l in Bk.limits: HorizontalLayout {
-                spacing: 0.3rem;
+                spacing: 6 * Th.dp;
                 SlideRow {
                     horizontal-stretch: 1;
                     label: l.label;
-                    label-width: 10rem;
-                    value-width: 4.6rem;
+                    label-width: 130 * Th.dp;
+                    value-width: 62 * Th.dp;
                     min: l.min;
                     max: l.max;
                     value-int: l.cur;
@@ -183,7 +183,7 @@ export component FansWin inherits WinFrame {
                 }
                 IconBtn {
                     icon: "reset";
-                    side: 2rem;
+                    side: 26 * Th.dp;
                     enabled: l.custom;
                     opacity: l.custom ? 1 : 0;
                     clicked => { Bk.act("limit-default", l.name); }
@@ -200,8 +200,8 @@ export component FansWin inherits WinFrame {
 export component ScreenWin inherits WinFrame {
     title: "Screen";
     VerticalLayout {
-        spacing: 1.1rem;
-        min-width: 26rem;
+        spacing: 14 * Th.dp;
+        min-width: 320 * Th.dp;
         if Bk.has-refresh: Group {
             title: "Refresh rate";
             value: Bk.refresh-now;
@@ -264,10 +264,10 @@ export component ScreenWin inherits WinFrame {
 export component KeysWin inherits WinFrame {
     title: "Keyboard & Lid";
     HorizontalLayout {
-        spacing: 1.4rem;
+        spacing: 18 * Th.dp;
         if Bk.has-light: VerticalLayout {
-            spacing: 1.1rem;
-            min-width: 24rem;
+            spacing: 14 * Th.dp;
+            min-width: 300 * Th.dp;
             alignment: start;
             Group {
                 title: "Keyboard";
@@ -300,7 +300,7 @@ export component KeysWin inherits WinFrame {
             Group {
                 title: "Backlight on";
                 GridLayout {
-                    spacing: 0.2rem;
+                    spacing: 3 * Th.dp;
                     for s[i] in ["Boot", "Awake", "Sleep", "Shutdown"]: Check {
                         row: floor(i / 2);
                         col: mod(i, 2);
@@ -320,8 +320,8 @@ export component KeysWin inherits WinFrame {
             }
         }
         if Bk.has-slash || Bk.has-anime: VerticalLayout {
-            spacing: 1.1rem;
-            min-width: 24rem;
+            spacing: 14 * Th.dp;
+            min-width: 300 * Th.dp;
             alignment: start;
             if Bk.has-slash: Group {
                 title: "Slash";
@@ -344,7 +344,7 @@ export component KeysWin inherits WinFrame {
             if Bk.has-slash && Bk.slash-show.length > 0: Group {
                 title: "Slash shows on";
                 GridLayout {
-                    spacing: 0.2rem;
+                    spacing: 3 * Th.dp;
                     for it[i] in Bk.slash-show: Check {
                         row: floor(i / 2);
                         col: mod(i, 2);
@@ -370,10 +370,10 @@ export component KeysWin inherits WinFrame {
 export component SystemWin inherits WinFrame {
     title: "System";
     HorizontalLayout {
-        spacing: 1.4rem;
+        spacing: 18 * Th.dp;
         if Bk.has-battery: VerticalLayout {
-            spacing: 1.1rem;
-            min-width: 24rem;
+            spacing: 14 * Th.dp;
+            min-width: 300 * Th.dp;
             alignment: start;
             Group {
                 title: "Charge limit";
@@ -389,15 +389,15 @@ export component SystemWin inherits WinFrame {
                 title: "Battery";
                 value: Bk.bat-line;
                 for r in [["Health", Bk.bat-health], ["Cycles", Bk.bat-cycles], ["Power", Bk.bat-power], ["Time left", Bk.bat-left]]: HorizontalLayout {
-                    height: 1.5rem;
+                    height: 20 * Th.dp;
                     Cap { text: r[0]; horizontal-stretch: 1; }
                     Mono { text: r[1] == "" ? "-" : r[1]; }
                 }
             }
         }
         VerticalLayout {
-            spacing: 1.1rem;
-            min-width: 24rem;
+            spacing: 14 * Th.dp;
+            min-width: 300 * Th.dp;
             alignment: start;
             if Bk.has-fnlock || Bk.system-items.length > 0: Group {
                 title: "Hardware";
@@ -413,7 +413,7 @@ export component SystemWin inherits WinFrame {
                 value: Bk.gpu-state;
                 if Bk.gpu-users.length == 0: Cap { text: "No apps"; }
                 for u in Bk.gpu-users: HorizontalLayout {
-                    height: 1.5rem;
+                    height: 20 * Th.dp;
                     Text { text: u.name; color: Th.text; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
                     Mono { text: u.pid; }
                 }

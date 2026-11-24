@@ -1,7 +1,7 @@
 // The contract between the UI and Rust: plain data in, callbacks out. Each window has its own
 // copy of this global; Rust fills all of them from the same state.
 
-export struct Opt { id: string, label: string, tint: color, keyed: bool }
+export struct Opt { id: string, label: string, tint: color, keyed: bool, icon: string, dim: bool, on: bool }
 export struct GpuUser { pid: int, name: string }
 export struct Pt { t: int, p: int }
 export struct LimitRow { name: string, label: string, unit: string, min: int, max: int, def: int, cur: int, custom: bool }
@@ -22,6 +22,8 @@ export global Bk {
     in property <bool> loaded;
     in property <string> error;
     in property <string> mode;
+    in property <string> mode-title;
+    in property <string> mode-info;
     in property <string> fan-text;
     in property <bool> win-fans;
     in property <bool> win-screen;
@@ -30,6 +32,10 @@ export global Bk {
 
     // gpu
     in property <bool> has-gpu;
+    in property <string> gpu-title;
+    in property <string> gpu-info;
+    in property <int> gpu-index: -1;
+    in property <bool> gpu-locked;
     in property <string> gpu-mode;
     in property <string> gpu-policy;
     in property <string> gpu-switching;
@@ -43,6 +49,13 @@ export global Bk {
     in property <string> refresh-policy;
     in property <string> refresh-now;
     in property <bool> has-refresh;
+    in property <string> screen-title;
+    in property <[Opt]> refresh-opts;
+    in property <int> refresh-idx: -1;
+    in property <[string]> color-labels;
+    in property <[string]> eye-items;
+    in property <int> eye-idx: -1;
+    in property <string> eye-text;
     in property <bool> has-flicker;
     in property <bool> flicker;
     in property <int> brightness: -1;
@@ -85,6 +98,10 @@ export global Bk {
     in property <bool> has-light;
     in property <int> kb-max;
     in property <int> kb-level;
+    in property <string> kb-title;
+    in property <[string]> kb-levels;
+    in property <[string]> kb-effect-labels;
+    in property <int> kb-effect-idx: -1;
     in property <[Opt]> kb-effects;
     in property <string> kb-effect;
     in property <color> kb-color: #ffffff;
@@ -95,6 +112,11 @@ export global Bk {
 
     // lid
     in property <bool> has-slash;
+    in property <string> slash-title;
+    in property <int> slash-bright-idx;
+    in property <int> slash-interval;
+    in property <bool> slash-batt;
+    in property <bool> slash-lid;
     in property <bool> slash-on;
     in property <int> slash-level;
     in property <[string]> slash-modes;

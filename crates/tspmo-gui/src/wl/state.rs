@@ -229,7 +229,7 @@ impl State {
                     layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
                 } else {
                     layer.set_anchor(Anchor::BOTTOM);
-                    layer.set_margin(0, 0, 64, 0);
+                    layer.set_margin(0, 0, self.osd_margin(None), 0);
                     layer.set_keyboard_interactivity(KeyboardInteractivity::None);
                     if let Ok(region) = smithay_client_toolkit::compositor::Region::new(&self.compositor) {
                         s.wl.set_input_region(Some(region.wl_region()));
@@ -338,6 +338,25 @@ impl State {
         s.wl.commit();
     }
 
+    /// The OSD sits 10 % of the screen height above the bottom edge (above a panel too: the
+    /// exclusive zone is 0, so the compositor measures from the usable area). `output` is the one
+    /// the surface is on; before the compositor says, the tallest known output is used.
+    fn osd_margin(&self, output: Option<&wl_output::WlOutput>) -> i32 {
+        let h = |o: &wl_output::WlOutput| {
+            self.outputs
+                .info(o)
+                .and_then(|i| i.logical_size)
+                .map(|(_, h)| h)
+        };
+        let height = output.and_then(h).or_else(|| {
+            self.outputs
+                .outputs()
+                .filter_map(|o| h(&o))
+                .max()
+        });
+        height.map_or(64, |h| (h / 10).max(24))
+    }
+
     fn id_of(&self, surface: &wl_surface::WlSurface) -> Option<usize> {
         self.surfs.iter().find(|(_, s)| &s.wl == surface).map(|(i, _)| *i)
     }
@@ -437,9 +456,20 @@ impl CompositorHandler for State {
         &mut self,
         _: &Connection,
         _: &QueueHandle<Self>,
-        _: &wl_surface::WlSurface,
-        _: &wl_output::WlOutput,
+        surface: &wl_surface::WlSurface,
+        output: &wl_output::WlOutput,
     ) {
+        // The OSD follows the output it landed on.
+        if let Some(id) = self.id_of(surface) {
+            let margin = self.osd_margin(Some(output));
+            if let Some(s) = self.surfs.get(&id)
+                && s.kind == Kind::Osd
+                && let Some(l) = &s.layer
+            {
+                l.set_margin(0, 0, margin, 0);
+                l.commit();
+            }
+        }
     }
     fn surface_leave(
         &mut self,
@@ -480,10 +510,14 @@ impl LayerShellHandler for State {
         _: LayerSurfaceConfigure,
         _: u32,
     ) {
+        let margin = self.osd_margin(None);
         if let Some(id) = self.id_of(layer.wl_surface())
             && let Some(s) = self.surfs.get_mut(&id)
         {
             s.configured = true;
+            if s.kind == Kind::Osd {
+                layer.set_margin(0, 0, margin, 0);
+            }
             crate::trace("layer configured");
             self.out.push(Out::Scale(id));
         }
