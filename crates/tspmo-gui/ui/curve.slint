@@ -1,4 +1,4 @@
-import { Th } from "theme.slint";
+import { Th, Nav } from "theme.slint";
 import { Bk } from "bk.slint";
 
 // Fan curve: 8 draggable points, temperature 20-100 °C across, speed 0-100 % up.
@@ -70,7 +70,7 @@ export component CurveEditor inherits Rectangle {
         font-family: Th.mono;
         font-size: 0.8rem;
         color: Th.text;
-        text: Bk.curve.length > root.sel ? Bk.curve[root.sel].t + " °C  " + Bk.curve[root.sel].p + " %" : "";
+        text: Bk.curve.length > root.sel ? Bk.curve[root.sel].t + " °C  " + Bk.curve[root.sel].p + "%" : "";
     }
 
     // Slint cannot loop over path elements, so the polyline is spelled out for 8 points.
@@ -95,6 +95,7 @@ export component CurveEditor inherits Rectangle {
     fs := FocusScope {
         enabled: root.editable;
         key-pressed(e) => {
+            Nav.keys = true;
             if (!root.editable || Bk.curve.length == 0) {
                 return reject;
             }
@@ -145,7 +146,7 @@ export component CurveEditor inherits Rectangle {
         }
     }
     Rectangle {
-        border-width: fs.has-focus ? 2px : 0;
+        border-width: fs.has-focus && Nav.keys ? 2px : 0;
         border-color: Th.focus;
         border-radius: Th.radius;
     }
@@ -155,7 +156,7 @@ export component CurveEditor inherits Rectangle {
         y: root.py(p.p) - self.height / 2;
         width: 1.8rem;
         height: 1.8rem;
-        property <bool> on: ta.has-hover || ta.pressed || (fs.has-focus && root.sel == i);
+        property <bool> on: ta.has-hover || ta.pressed || (fs.has-focus && Nav.keys && root.sel == i);
         Rectangle {
             width: on ? 0.9rem : 0.6rem;
             height: self.width;
@@ -175,6 +176,7 @@ export component CurveEditor inherits Rectangle {
                 if (e.button == PointerEventButton.left) {
                     if (e.kind == PointerEventKind.down) {
                         fs.focus();
+                        Nav.keys = false;
                         root.sel = i;
                         self.gx = self.mouse-x;
                         self.gy = self.mouse-y;

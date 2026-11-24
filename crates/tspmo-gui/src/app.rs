@@ -195,7 +195,6 @@ fn opt(id: &str, label: &str) -> Opt {
     Opt {
         id: ss(id),
         label: ss(label),
-        hint: ss(""),
         tint: slint::Color::default(),
         keyed: false,
     }
@@ -207,7 +206,11 @@ fn item_of(i: &model::HwItem) -> Item {
         label: ss(&i.label),
         kind: ss(&i.kind),
         on: i.on(),
-        text: ss(&i.current),
+        text: ss(&if i.name == "charge_mode" {
+            model::charger_label(&i.current).to_owned()
+        } else {
+            i.current.clone()
+        }),
         min: i.min as i32,
         max: i.max as i32,
         value: i.current.parse().unwrap_or(0),
@@ -332,7 +335,7 @@ impl App {
         }
         self.live_timer
             .start(TimerMode::Repeated, Duration::from_secs(1), || {
-                with_app(|a| a.tick_and_push());
+                with_app(App::tick);
             });
         if self.loaded {
             self.tick();
@@ -467,7 +470,11 @@ impl App {
     }
 
     fn set_error(&mut self, msg: String) {
-        self.error = msg;
+        // One short line: the popup has no room for more.
+        self.error = match msg.char_indices().nth(60) {
+            Some((i, _)) => format!("{}…", msg[..i].trim_end()),
+            None => msg,
+        };
         self.error_timer
             .start(TimerMode::SingleShot, Duration::from_secs(6), || {
                 with_app(|a| {
@@ -489,11 +496,6 @@ impl App {
 
     fn fetch_gpu_users(&self) {
         self.call(Call::new("Daemon1", "GpuUsers", Vec::new()));
-    }
-
-    fn tick_and_push(&mut self) {
-        self.tick();
-        self.push();
     }
 
     fn tick(&mut self) {
@@ -530,11 +532,19 @@ impl App {
             "gpu" => self.send("Daemon1", "SetGpuMode", &[Arg::s(arg)]),
             "reboot" => bus::reboot(emit),
             "refresh" => self.send(bindings::IFACE, bindings::SET_REFRESH_POLICY, &[Arg::s(arg)]),
-            "flicker" => self.send(
-                bindings::IFACE,
-                bindings::SET_FLICKER_FREE,
-                &[Arg::B(arg == "on")],
-            ),
+            "flicker" => {
+                // On an OLED panel "auto" is "on": send it so the user's default is kept.
+                let text = s
+                    .methods
+                    .get("Display1.SetFlickerFree")
+                    .is_some_and(|v| v.first().is_some_and(|t| t == "s"));
+                let a = if arg == "on" && text && s.get(bindings::IFACE, "Oled").bool() {
+                    Arg::s("auto")
+                } else {
+                    Arg::B(arg == "on")
+                };
+                self.send(bindings::IFACE, bindings::SET_FLICKER_FREE, &[a]);
+            }
             "color" => self.send(bindings::IFACE, bindings::SET_COLOR_MODE, &[Arg::s(arg)]),
             "fnlock" => self.send("Hardware1", "SetFnLock", &[Arg::B(arg == "on")]),
             "hw-toggle" => {
@@ -654,16 +664,13 @@ impl App {
             }
             k if k.starts_with("limit:") => {
                 let name = &k["limit:".len()..];
-                self.send(
-                    "Power1",
-                    "SetLimit",
-                    &[
-                        Arg::s(self.thermal()),
-                        Arg::s(SOURCES[self.pw_source.min(1)]),
-                        Arg::s(name),
-                        Arg::N(n),
-                    ],
-                );
+                let (mode, source) = (self.thermal(), SOURCES[self.pw_source.min(1)]);
+                // Keep sustained <= boost <= fast boost: move the neighbours along.
+                let fixes = model::limit_fixes(&model::limits(s, mode, source), name, n);
+                for (other, v) in fixes {
+                    self.send("Power1", "SetLimit", &[Arg::s(mode), Arg::s(source), Arg::S(other), Arg::N(v)]);
+                }
+                self.send("Power1", "SetLimit", &[Arg::s(mode), Arg::s(source), Arg::s(name), Arg::N(n)]);
             }
             k if k.starts_with("hw-step:") => {
                 let name = &k["hw-step:".len()..];
@@ -821,7 +828,9 @@ impl App {
         );
         bk.set_gpu_pending(ss(&model::color_label(pending)));
         bk.set_gpu_reboot(!pending.is_empty() && pending != mode_raw);
-        bk.set_gpu_message(ss(s.get("Daemon1", "GpuMessage").str()));
+        // One short line: what comes before the first colon of the daemon's explanation.
+        let note = s.get("Daemon1", "GpuMessage").str();
+        bk.set_gpu_message(ss(note.split(':').next().unwrap_or("").trim()));
         bk.set_gpu_state(ss(gpu_state(
             s.get("Daemon1", "GpuMode").str(),
             s.get("Daemon1", "DgpuAsleep").bool(),
@@ -888,11 +897,17 @@ impl App {
             -1
         });
         bk.set_bat_status(ss(s.get(b, "Status").str()));
-        bk.set_bat_power(ss(&model::fmt_watts(if s.has_prop(b, "Power") {
+        let watts = if s.has_prop(b, "Power") {
             s.get(b, "Power").float()
         } else {
             -1.0
-        })));
+        };
+        bk.set_bat_power(ss(&model::fmt_watts(watts)));
+        bk.set_bat_line(ss(&model::battery_line(
+            if s.has_prop(b, "Percent") { s.get(b, "Percent").int() } else { -1 },
+            s.get(b, "Status").str(),
+            watts,
+        )));
         bk.set_bat_left(ss(&model::fmt_duration(s.get(b, "TimeLeft").int())));
         bk.set_bat_limit(s.get(b, "Limit").int() as i32);
         let steps: Vec<i64> = s.get(b, "Steps").list().iter().map(V::int).collect();
@@ -908,7 +923,7 @@ impl App {
         bk.set_charge_once(s.get(b, "ChargeOnce").bool());
         let health = s.get(b, "Health").float();
         bk.set_bat_health(ss(&if health >= 0.0 && s.has_prop(b, "Health") {
-            format!("{health:.0} %")
+            format!("{health:.0}%")
         } else {
             String::new()
         }));
@@ -968,7 +983,11 @@ impl App {
             &self.m.kb_effects,
             s.get(k, "Modes").strings().iter().map(|m| opt(m, m)).collect(),
         );
-        bk.set_kb_effect(ss(&model::color_label(&ef.mode)));
+        bk.set_kb_effect(ss(&if ef.mode.is_empty() {
+            "Firmware".to_owned()
+        } else {
+            model::color_label(&ef.mode)
+        }));
         bk.set_kb_color(slint::Color::from_rgb_u8(ef.color.0, ef.color.1, ef.color.2));
         bk.set_kb_color_idx(
             model::KB_COLORS
@@ -976,7 +995,7 @@ impl App {
                 .position(|c| *c == ef.color)
                 .map_or(-1, |i| i as i32),
         );
-        bk.set_kb_speed(model::KB_SPEEDS.iter().position(|v| *v == ef.speed).unwrap_or(1) as i32);
+        bk.set_kb_speed(model::KB_SPEEDS.iter().position(|v| *v == ef.speed).map_or(-1, |i| i as i32));
         sync(
             &self.m.kb_states,
             s.get(k, "PowerStates").list().iter().map(V::bool).collect(),

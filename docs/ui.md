@@ -27,7 +27,7 @@ dashboard.
 - **Selection = neutral fill + accent bar.** The chosen tile gets the "selected" grey, a 3 px
   bar in the accent on its bottom edge and bold text; the accent is never used as a wash, which
   keeps light and dark themes free of tinted pastels. No outline that doubles as a focus ring,
-  no fill swap that reads as pressed. Focus is a 2 px ring in the text colour, drawn inside the control; hover and pressed
+  no fill swap that reads as pressed. Focus is a 2 px ring in the text colour, drawn inside the control and only for keyboard focus (a click draws none); hover and pressed
   step the surface; disabled is 40 % opacity.
 - **No gradients, glow, blur, shadows or pastel.** Flat fills, a 1 px border, 3 px radius. The
   flyout itself has an 8 px-ish corner (0.6 rem) drawn with anti-aliasing on a transparent
@@ -37,8 +37,8 @@ dashboard.
   kdeglobals) so layout grows with it; Wayland fractional scale is applied to the buffer. The
   spacing unit is 0.6 rem, which is 8 px at the default 10 pt. Windows are as big as their layout
   asks and cannot be resized, so nothing scrolls and nothing clips, from 100 % to 200 %.
-- **Keyboard first.** `1`-`4` choose the mode, `F` `S` `K` `Y` open the windows (hints are shown
-  on the buttons), Tab walks the controls, arrows move inside a control, Enter or Space apply,
+- **Keyboard first.** `1`-`4` choose the mode, `F` `S` `K` `Y` open the windows (no key hints are drawn on the
+  tiles: tiny digits crowded the corners and added noise), Tab walks the controls, arrows move inside a control, Enter or Space apply,
   Esc closes. Arrows in a tile row move a highlight and do not apply: a GPU mode switch should
   never happen by passing over it.
 
@@ -53,6 +53,10 @@ dashboard.
 | System | charge limit and charge once, battery table, Fn lock, firmware toggles, reboot, dGPU users |
 
 A section exists only if the machine has the hardware or the daemon exposes the interface.
+
+Writing: values read `82%`, `240 Hz`, `41.9 W`, `87 °C`, `4800 rpm` (no space before %); watts only
+appear while energy flows; US spelling (Color); a value the firmware has not reported is shown
+as `Firmware`, never as an empty control. Sustained <= boost <= fast boost is kept by the UI.
 
 ## Tokens
 
@@ -80,7 +84,7 @@ Sizes: `rem` = system font size (default 10 pt = 13.33 px). `u` = 0.6 rem.
 |---|---|
 | control height | 2.4 rem (mode tiles 2.8 rem) |
 | radius | 3 px; flyout 0.6 rem |
-| text | 1 rem; captions and readouts 0.85 rem; key hints 0.7 rem |
+| text | 1 rem; captions and readouts 0.85 rem |
 | slider | 0.3 rem track, 0.45 x 1.3 rem thumb, 2 rem hit height |
 | checkbox | 1.1 rem, 2 px radius |
 | flyout | min 26 rem wide, padding 1.2 rem, sections 1.1 rem apart, 0.4 rem inside a section |

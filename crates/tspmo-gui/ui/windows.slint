@@ -1,4 +1,4 @@
-import { Th } from "theme.slint";
+import { Th, Nav } from "theme.slint";
 import { Bk, Item } from "bk.slint";
 import { Btn, IconBtn, Seg, Check, Slide, SlideRow, Stepper, Row, Field, Cap, Mono, Rule } from "controls.slint";
 import { CurveEditor } from "curve.slint";
@@ -6,7 +6,7 @@ import { CurveEditor } from "curve.slint";
 // One firmware item: a checkbox, a stepper for choices and numbers, or plain text.
 component HwRow inherits Rectangle {
     in property <Item> item;
-    height: root.item.kind == "toggle" ? 1.8rem : Th.control;
+    height: root.item.kind == "toggle" || root.item.kind == "text" || !root.item.writable ? 1.8rem : Th.control;
     if root.item.kind == "toggle": Check {
         label: root.item.label;
         on: root.item.on;
@@ -14,6 +14,7 @@ component HwRow inherits Rectangle {
         toggled => { Bk.act("hw-toggle", root.item.name); }
     }
     if root.item.kind != "toggle": Row {
+        h: root.height;
         label: root.item.label;
         if root.item.kind != "text" && root.item.writable: Stepper {
             width: 10rem;
@@ -22,6 +23,60 @@ component HwRow inherits Rectangle {
             next => { Bk.acti("hw-step:" + root.item.name, 1); }
         }
         if root.item.kind == "text" || !root.item.writable: Mono { text: root.item.text; }
+    }
+}
+
+// A row of colour choices. Arrows move, Enter or Space applies, like the tile rows.
+component Swatches inherits Rectangle {
+    in property <[color]> colors;
+    in property <int> index;
+    callback picked(int);
+    property <int> cur: index;
+    height: 1.8rem;
+    fs := FocusScope {
+        changed has-focus => {
+            if (self.has-focus && Nav.keys) {
+                root.cur = max(root.index, 0);
+            }
+        }
+        key-pressed(e) => {
+            Nav.keys = true;
+            if (e.text == Key.LeftArrow) {
+                root.cur = max(root.cur - 1, 0);
+                return accept;
+            }
+            if (e.text == Key.RightArrow) {
+                root.cur = min(root.cur + 1, root.colors.length - 1);
+                return accept;
+            }
+            if (e.text == Key.Return || e.text == " ") {
+                root.picked(root.cur);
+                return accept;
+            }
+            return reject;
+        }
+        for c[i] in root.colors: Rectangle {
+            x: i * (self.width + 0.3rem);
+            width: (root.width - 0.3rem * (root.colors.length - 1)) / max(root.colors.length, 1);
+            height: root.height;
+            border-radius: 2px;
+            background: c;
+            border-width: root.index == i ? 3px : 1px;
+            border-color: root.index == i ? Th.focus : Th.line;
+            Rectangle {
+                border-radius: 2px;
+                border-width: fs.has-focus && Nav.keys && i == root.cur ? 2px : 0;
+                border-color: Th.bg;
+            }
+            TouchArea {
+                clicked => {
+                    fs.focus();
+                    Nav.keys = false;
+                    root.cur = i;
+                    root.picked(i);
+                }
+            }
+        }
     }
 }
 
@@ -41,6 +96,7 @@ component WinFrame inherits Window {
     FocusScope {
         init => { self.focus(); }
         key-pressed(e) => {
+            Nav.keys = true;
             if (e.text == Key.Escape) {
                 Bk.close();
                 return accept;
@@ -71,7 +127,7 @@ export component FansWin inherits WinFrame {
         spacing: 1.2rem;
         if Bk.has-fans: VerticalLayout {
             spacing: 0.4rem;
-            min-width: 28rem;
+            min-width: 24rem;
             Seg {
                 opts: [
                     { id: "power-saver", label: "Silent", tint: Th.mode-color("power-saver"), keyed: true },
@@ -83,7 +139,7 @@ export component FansWin inherits WinFrame {
                 picked(i) => { Bk.acti("fan-mode", i); }
             }
             Rectangle { height: 0.4rem; }
-            Field { label: "Fan"; value: Bk.fan-kind == "custom" ? "custom curve" : Bk.fan-kind == "full" ? "full speed" : "firmware curve"; }
+            Field { label: "Fan"; value: Bk.fan-kind; }
             Seg {
                 opts: Bk.fan-opts;
                 index: Bk.fan-sel;
@@ -102,14 +158,14 @@ export component FansWin inherits WinFrame {
         }
         if Bk.has-power: VerticalLayout {
             spacing: 0.4rem;
-            min-width: 28rem;
+            min-width: 24rem;
             Seg {
                 opts: [{ id: "ac", label: "AC", tint: Th.accent }, { id: "battery", label: "Battery", tint: Th.accent }];
                 index: Bk.pw-source;
                 picked(i) => { Bk.acti("pw-source", i); }
             }
             Rectangle { height: 0.4rem; }
-            Field { label: "Power limits"; value: Bk.pw-needs-fan ? "needs fan curve" : ""; }
+            Field { label: "Power limits"; }
             for l in Bk.limits: HorizontalLayout {
                 spacing: 0.3rem;
                 SlideRow {
@@ -158,7 +214,7 @@ export component ScreenWin inherits WinFrame {
         }
         if Bk.brightness >= 0 || Bk.has-flicker: Group {
             title: "Brightness";
-            value: Bk.brightness >= 0 ? Bk.brightness + " %" : "";
+            value: Bk.brightness >= 0 ? Bk.brightness + "%" : "";
             if Bk.brightness >= 0: Slide {
                 min: 1;
                 max: 100;
@@ -172,7 +228,7 @@ export component ScreenWin inherits WinFrame {
             }
         }
         if Bk.color-modes.length > 0: Group {
-            title: "Colour";
+            title: "Color";
             Seg {
                 opts: Bk.color-modes;
                 index: Bk.color-idx;
@@ -183,7 +239,7 @@ export component ScreenWin inherits WinFrame {
             title: "Eye care";
             value: Bk.eye-kelvin > 0 ? Bk.eye-kelvin + " K" : "off";
             Check {
-                label: "Warm white point";
+                label: "Warm white";
                 on: Bk.eye-kelvin > 0;
                 toggled(v) => { Bk.acti("eye", v ? 4500 : 0); }
             }
@@ -230,17 +286,10 @@ export component KeysWin inherits WinFrame {
                     prev => { Bk.acti("kb-effect-step", -1); }
                     next => { Bk.acti("kb-effect-step", 1); }
                 }
-                HorizontalLayout {
-                    spacing: 0.3rem;
-                    for c[i] in [#ffffff, #ff3b30, #ff9500, #ffd60a, #34c759, #0a84ff, #bf5af2, #ff2d92]: Rectangle {
-                        horizontal-stretch: 1;
-                        height: 1.8rem;
-                        border-radius: 2px;
-                        background: c;
-                        border-width: Bk.kb-color-idx == i ? 3px : 1px;
-                        border-color: Bk.kb-color-idx == i ? Th.focus : Th.line;
-                        TouchArea { clicked => { Bk.acti("kb-color", i); } }
-                    }
+                Swatches {
+                    colors: [#ffffff, #ff3b30, #ff9500, #ffd60a, #34c759, #0a84ff, #bf5af2, #ff2d92];
+                    index: Bk.kb-color-idx;
+                    picked(i) => { Bk.acti("kb-color", i); }
                 }
                 Seg {
                     opts: [{ id: "low", label: "Slow", tint: Th.accent }, { id: "med", label: "Normal", tint: Th.accent }, { id: "high", label: "Fast", tint: Th.accent }];
@@ -276,7 +325,7 @@ export component KeysWin inherits WinFrame {
             alignment: start;
             if Bk.has-slash: Group {
                 title: "Slash";
-                value: Bk.slash-on ? Bk.slash-level + "" : "off";
+                value: Bk.slash-on ? round(Bk.slash-level / 2.55) + "%" : "off";
                 Check { label: "Enabled"; on: Bk.slash-on; toggled(v) => { Bk.act("slash-on", v ? "on" : "off"); } }
                 Slide {
                     min: 0;
@@ -307,7 +356,7 @@ export component KeysWin inherits WinFrame {
             }
             if Bk.has-anime: Group {
                 title: "AniMe Matrix";
-                value: Bk.anime-on ? Bk.anime-level + "" : "off";
+                value: Bk.anime-on ? Bk.anime-level + " / 3" : "off";
                 Check { label: "Enabled"; on: Bk.anime-on; toggled(v) => { Bk.act("anime-on", v ? "on" : "off"); } }
                 Slide { min: 0; max: 3; value: Bk.anime-level; enabled: Bk.anime-on; released(v) => { Bk.acti("anime-level", v); } }
             }
@@ -328,17 +377,17 @@ export component SystemWin inherits WinFrame {
             alignment: start;
             Group {
                 title: "Charge limit";
-                value: Bk.bat-limit > 0 ? Bk.bat-limit + " %" : "none";
+                value: Bk.bat-limit > 0 ? Bk.bat-limit + "%" : "none";
                 if Bk.bat-opts.length > 0: Seg {
                     opts: Bk.bat-opts;
                     index: Bk.bat-idx;
                     picked(i) => { Bk.acti("bat-limit", Bk.bat-values[i]); }
                 }
-                Check { label: "Charge to 100 % once"; on: Bk.charge-once; toggled(v) => { Bk.act("charge-once", v ? "on" : "off"); } }
+                Check { label: "Charge to 100% once"; on: Bk.charge-once; toggled(v) => { Bk.act("charge-once", v ? "on" : "off"); } }
             }
             Group {
                 title: "Battery";
-                value: Bk.bat-percent >= 0 ? Bk.bat-percent + " %  " + Bk.bat-status : "";
+                value: Bk.bat-line;
                 for r in [["Health", Bk.bat-health], ["Cycles", Bk.bat-cycles], ["Power", Bk.bat-power], ["Time left", Bk.bat-left]]: HorizontalLayout {
                     height: 1.5rem;
                     Cap { text: r[0]; horizontal-stretch: 1; }
@@ -360,15 +409,15 @@ export component SystemWin inherits WinFrame {
                 Btn { text: "Reboot"; danger: true; clicked => { Bk.act("reboot", ""); } }
             }
             if Bk.has-gpu: Group {
-                title: "dGPU";
+                title: "GPU";
                 value: Bk.gpu-state;
-                if Bk.gpu-users.length == 0: Cap { text: "no apps"; }
+                if Bk.gpu-users.length == 0: Cap { text: "No apps"; }
                 for u in Bk.gpu-users: HorizontalLayout {
                     height: 1.5rem;
                     Text { text: u.name; color: Th.text; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
                     Mono { text: u.pid; }
                 }
-                if Bk.gpu-message != "": Cap { text: Bk.gpu-message; wrap: word-wrap; }
+                if Bk.gpu-message != "": Cap { text: Bk.gpu-message; }
             }
         }
     }

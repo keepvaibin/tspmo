@@ -12,8 +12,7 @@ pub const IFACE: &str = "Display1";
 // Properties.
 pub const REFRESH_POLICY: &str = "RefreshPolicy"; // s: max | 60 | auto
 pub const REFRESH_NOW: &str = "Refresh"; // d: Hz in use
-pub const REFRESH_MODES: &str = "RefreshModes"; // a(uud): width, height, Hz
-pub const REFRESH_RATES: &str = "Rates"; // au: Hz, older spelling
+pub const REFRESH_RATES: &str = "Rates"; // au: Hz at the current resolution
 pub const FLICKER_FREE: &str = "FlickerFree"; // b
 pub const FLICKER_SETTING: &str = "FlickerSetting"; // s: auto | on | off
 pub const BRIGHTNESS: &str = "Brightness"; // u: 1-100
@@ -36,11 +35,8 @@ pub fn current_hz(s: &Store) -> f64 {
     if hz > 0.0 {
         return hz;
     }
-    // No live rate: the highest of the known modes is the best guess for "Max".
-    let modes = s.get(IFACE, REFRESH_MODES).list();
-    let from_modes = modes.iter().map(|m| m.at(2).float());
-    let rates = s.get(IFACE, REFRESH_RATES).list().iter().map(V::float);
-    from_modes.chain(rates).fold(0.0, f64::max)
+    // No live rate: the highest known rate is the best guess for "Max".
+    s.get(IFACE, REFRESH_RATES).list().iter().map(V::float).fold(0.0, f64::max)
 }
 
 pub fn flicker_on(s: &Store) -> bool {
@@ -83,19 +79,10 @@ mod tests {
     }
 
     #[test]
-    fn refresh_falls_back_to_the_highest_mode() {
-        let s = store(vec![(
-            REFRESH_MODES,
-            V::L(vec![
-                V::L(vec![V::I(2880), V::I(1800), V::F(60.0)]),
-                V::L(vec![V::I(2880), V::I(1800), V::F(240.0)]),
-            ]),
-        )]);
+    fn refresh_falls_back_to_the_highest_rate() {
+        let s = store(vec![(REFRESH_RATES, V::L(vec![V::I(60), V::I(240)]))]);
         assert_eq!(current_hz(&s), 240.0);
-        let s = store(vec![
-            (REFRESH_NOW, V::F(60.0)),
-            (REFRESH_RATES, V::L(vec![V::I(240)])),
-        ]);
+        let s = store(vec![(REFRESH_NOW, V::F(60.0)), (REFRESH_RATES, V::L(vec![V::I(240)]))]);
         assert_eq!(current_hz(&s), 60.0);
     }
 }
