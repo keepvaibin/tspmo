@@ -1,0 +1,56 @@
+# Maintainer: tspmo contributors
+#
+# Local development package: builds the working tree this PKGBUILD lives in.
+#   cd packaging/arch && makepkg -si
+pkgname=tspmo-git
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Thermal & System Power Management Optimizer for ASUS and Lenovo laptops (power profiles, GPU modes, fans, lighting)"
+arch=('x86_64')
+url="https://github.com/tspmo/tspmo"
+license=('GPL-3.0-or-later')
+depends=('dbus' 'polkit' 'upower' 'kmod' 'systemd')
+makedepends=('cargo')
+optdepends=('nvidia-utils: NVIDIA GPU mode switching')
+# tspmod implements the power-profiles D-Bus API itself.
+provides=('tspmo' 'power-profiles-daemon')
+conflicts=('tspmo' 'power-profiles-daemon' 'tuned-ppd')
+options=('!lto' '!debug')
+
+_root() { realpath "$startdir/../.."; }
+
+pkgver() {
+  cd "$(_root)"
+  printf "0.1.0.r%s.g%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+  cd "$(_root)"
+  export CARGO_TARGET_DIR="$srcdir/target"
+  cargo build --release --locked
+}
+
+check() {
+  cd "$(_root)"
+  export CARGO_TARGET_DIR="$srcdir/target"
+  cargo test --release --locked --workspace
+}
+
+package() {
+  local r; r="$(_root)"
+  install -Dm755 "$srcdir/target/release/tspmo"  "$pkgdir/usr/bin/tspmo"
+  install -Dm755 "$srcdir/target/release/tspmod" "$pkgdir/usr/bin/tspmod"
+
+  install -Dm644 "$r/data/systemd/tspmod.service" "$pkgdir/usr/lib/systemd/system/tspmod.service"
+  install -Dm644 "$r/data/systemd/plymouth-quit-timeout.conf" \
+    "$pkgdir/usr/lib/systemd/system/plymouth-quit.service.d/50-tspmo.conf"
+
+  install -Dm644 "$r/data/dbus/org.tspmo.Daemon1.conf" "$pkgdir/usr/share/dbus-1/system.d/org.tspmo.Daemon1.conf"
+  for s in org.tspmo.Daemon1 org.freedesktop.UPower.PowerProfiles net.hadess.PowerProfiles; do
+    install -Dm644 "$r/data/dbus/$s.service" "$pkgdir/usr/share/dbus-1/system-services/$s.service"
+  done
+  install -Dm644 "$r/data/polkit/org.tspmo.policy" "$pkgdir/usr/share/polkit-1/actions/org.tspmo.policy"
+  install -Dm644 "$r/data/environment.d/50-tspmo-gtk.conf" "$pkgdir/usr/lib/environment.d/50-tspmo-gtk.conf"
+
+  install -Dm644 "$r/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

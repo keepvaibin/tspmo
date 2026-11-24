@@ -42,6 +42,8 @@ pub fn run(root: &SysRoot, m: &Machine) -> Vec<Finding> {
         nvidia_runtime_pm,
         gtk_renderer,
         conflicting_daemons,
+        tspmod_running,
+        plymouth_stuck,
         charge_limit,
     ];
     for check in checks {
@@ -59,6 +61,18 @@ fn has_param(root: &SysRoot, key: &str) -> bool {
     cmdline(root)
         .split_whitespace()
         .any(|p| p.split('=').next() == Some(key))
+}
+
+/// Whether the bootloader configuration already carries a parameter (applied at next boot).
+fn bootloader_has(root: &SysRoot, key: &str) -> bool {
+    ["/etc/default/limine", "/etc/kernel/cmdline", "/etc/default/grub"]
+        .iter()
+        .filter_map(|p| root.read_opt(p))
+        .any(|s| {
+            s.lines()
+                .filter(|l| !l.trim_start().starts_with('#'))
+                .any(|l| l.contains(key))
+        })
 }
 
 /// Commands that add a kernel parameter persistently, for the bootloader in use.
@@ -98,6 +112,18 @@ fn oled_dpcd_backlight(root: &SysRoot, m: &Machine, out: &mut Vec<Finding>) {
     let stuck_low = intel.percent() < 2.0;
     let is_oled_hint = m.dmi.vendor() == Vendor::Asus || stuck_low;
     if !is_oled_hint {
+        return;
+    }
+    if bootloader_has(root, "i915.enable_dpcd_backlight") {
+        out.push(Finding {
+            id: "oled-dpcd-backlight",
+            severity: Severity::Info,
+            title: "Brightness fix is installed; reboot to activate it".into(),
+            detail: "i915.enable_dpcd_backlight=3 is in the bootloader configuration but the \
+                     running kernel was started without it."
+                .into(),
+            fix: None,
+        });
         return;
     }
     out.push(Finding {
@@ -255,6 +281,7 @@ fn gtk_renderer(root: &SysRoot, m: &Machine, out: &mut Vec<Finding>) {
     let set = root
         .glob("/etc/environment.d/*.conf")
         .into_iter()
+        .chain(root.glob("/usr/lib/environment.d/*.conf"))
         .chain(["/etc/environment".to_owned()])
         .filter_map(|p| root.read_opt(p))
         .any(|s| s.lines().any(|l| l.trim_start().starts_with("GSK_RENDERER=")));
@@ -320,6 +347,76 @@ fn conflicting_daemons(root: &SysRoot, _m: &Machine, out: &mut Vec<Finding>) {
             names.join(", ")
         ),
         fix: None,
+    });
+}
+
+fn tspmod_running(root: &SysRoot, _m: &Machine, out: &mut Vec<Finding>) {
+    if !running(root, &["tspmod"]).is_empty() || !root.is_real() {
+        return;
+    }
+    let installed = root.exists("/usr/lib/systemd/system/tspmod.service");
+    out.push(Finding {
+        id: "tspmod",
+        severity: Severity::Warn,
+        title: "The tspmo daemon isn't running".into(),
+        detail: "Without tspmod nothing tunes power profiles, follows AC/battery changes or \
+                 switches GPU modes, and the desktop's power-profile switch has no backend."
+            .into(),
+        fix: Some(Fix {
+            summary: if installed {
+                "Start it".into()
+            } else {
+                "Install the package, then start it".into()
+            },
+            commands: if installed {
+                vec!["sudo systemctl enable --now tspmod.service".into()]
+            } else {
+                vec![
+                    "cd packaging/arch && makepkg -si".into(),
+                    "sudo systemctl enable --now tspmod.service".into(),
+                ]
+            },
+            needs_reboot: false,
+        }),
+    });
+}
+
+/// `plymouth quit` can hang on hybrid-GPU laptops, leaving plymouthd running all session
+/// with every GPU's DRM device open (it then keeps the dGPU awake and blocks Eco mode).
+fn plymouth_stuck(root: &SysRoot, _m: &Machine, out: &mut Vec<Finding>) {
+    if running(root, &["plymouthd"]).is_empty() {
+        return;
+    }
+    // Still booting? A graphical session existing means boot is long over.
+    let session_up = !running(root, &["kwin_wayland", "gnome-shell", "Hyprland", "sway", "niri"]).is_empty();
+    if !session_up {
+        return;
+    }
+    let dropin = root.exists("/usr/lib/systemd/system/plymouth-quit.service.d/50-tspmo.conf");
+    let mut commands = vec!["sudo pkill -x plymouthd".to_owned()];
+    if !dropin {
+        commands.insert(
+            0,
+            "sudo install -Dm644 data/systemd/plymouth-quit-timeout.conf /etc/systemd/system/plymouth-quit.service.d/50-tspmo.conf".into(),
+        );
+    }
+    out.push(Finding {
+        id: "plymouth-stuck",
+        severity: Severity::Warn,
+        title: "The boot splash (plymouthd) never exited".into(),
+        detail: "plymouth-quit timed out at boot, so plymouthd has been running all session \
+                 with the GPUs' display devices open. It wastes CPU, can keep the NVIDIA GPU \
+                 awake and blocks switching to Eco."
+            .into(),
+        fix: Some(Fix {
+            summary: if dropin {
+                "Stop it now (tspmo's plymouth-quit timeout fixes it from the next boot)".into()
+            } else {
+                "Make plymouth-quit time out quickly, and stop it now".into()
+            },
+            commands,
+            needs_reboot: false,
+        }),
     });
 }
 

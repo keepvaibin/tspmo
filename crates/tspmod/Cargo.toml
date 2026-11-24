@@ -1,0 +1,16 @@
+[package]
+name = "tspmod"
+description = "tspmo system daemon: power profiles (power-profiles-daemon compatible), GPU modes and hardware control"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+tspmo-sys.workspace = true
+tspmo-core.workspace = true
+zbus.workspace = true
+rustix = { version = "1.1", features = ["event", "fs"] }
+
+[lints]
+workspace = true

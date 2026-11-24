@@ -11,6 +11,7 @@ rust-version = "1.85"
 [workspace.dependencies]
 tspmo-sys = { path = "crates/tspmo-sys" }
 tspmo-core = { path = "crates/tspmo-core" }
+zbus = { version = "5.13", default-features = false, features = ["blocking-api", "async-io"] }
 
 [workspace.lints.rust]
 unsafe_code = "deny"
@@ -25,3 +26,5 @@ codegen-units = 1
 panic = "abort"
 strip = true
 opt-level = 3
+
+# The GUI favours size; the daemon and CLI favour speed.
