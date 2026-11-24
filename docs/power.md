@@ -49,10 +49,17 @@ below about 0.5 W as noise. Your own battery numbers: `sudo tspmo bench --hold-c
 | pkg 5/7 W + uncore 1.2 GHz | 5.0 | 2.22 | 5.37 / 5.95 |
 | uncore 1.6 GHz | 5.3 | 2.32 | 5.40 / 5.98 |
 | E-cores only (`AllowedCPUs=12-21`) | 8.7 | 3.12 | 6.61 / 6.73 |
-| psys 7/9 W | 10.4 | 2.63 | 25.2 / 27.8 (4.7x) |
-| psys 8/11 W | 11.1 | 2.74 | 25.2 / 26.8 (4.7x) |
-| psys 9/12 W | 9.9 | 2.56 | 25.2 / 26.4 (4.7x) |
-| pkg 6/8 W | 6.7 | 2.21 | 5.44 / 5.98 |
+| psys 7/9 W | n/a | n/a | 25.2 / 27.8 (4.7x) |
+| psys 8/11 W | n/a | n/a | 25.2 / 26.8 (4.7x) |
+| psys 9/12 W | n/a | n/a | 25.2 / 26.4 (4.7x) |
+| pkg 6/8 W | n/a | n/a | 5.44 / 5.98 |
+
+Rows marked n/a were measured while the charger was still charging (the limit was set to 40%, which
+the firmware ignores): only their latency columns are valid.
+
+Caveat: two later `tspmo bench` runs of Eco+ (pkg 5/7) showed a p95 chunk time of 95 ms against
+12.5 ms median, while other agents were compiling; not reproduced on a quiet machine, so the
+5/7 W default needs re-measuring (see handoff-power.md).
 
 What this says:
 
