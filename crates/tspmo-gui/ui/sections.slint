@@ -248,7 +248,6 @@ export component FansSection inherits VerticalLayout {
             Btn { text: "Full"; icon: "fan"; active: Bk.fan-kind == "full"; clicked => { Bk.act("fan-full", ""); } }
             Btn { text: "Reset"; icon: "reset"; clicked => { Bk.act("fan-reset", ""); } }
             Rectangle { horizontal-stretch: 1; }
-            Text { text: Bk.cpu-temp; font-size: 13px; color: Th.dim; vertical-alignment: center; }
         }
     }
 }

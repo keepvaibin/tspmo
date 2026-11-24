@@ -37,7 +37,6 @@ pub enum Event {
     /// The first read of every interface is over.
     Ready,
     Offline(String),
-    Rpm(Vec<(u32, u32)>),
     GpuUsers(Vec<(u32, String, String)>),
     Error(String),
 }
@@ -297,29 +296,26 @@ fn run_call(c: &Call) -> zbus::Result<Option<Event>> {
     })
 }
 
-/// Live fan speeds: the one property that is read on each query.
-pub fn read_rpm(emit: impl Fn(Event) + Send + 'static) {
+/// Live readings that the daemon computes on each query (no signal): fan speeds and battery
+/// power. Everything comes from tspmod; the GUI reads no sysfs.
+pub fn read_live(iface: &'static str, prop: &'static str, emit: impl Fn(Event) + Send + 'static) {
     std::thread::Builder::new()
-        .name("rpm".into())
+        .name("live".into())
         .spawn(move || {
-            let r = (|| -> zbus::Result<Vec<(u32, u32)>> {
+            let r = (|| -> zbus::Result<V> {
                 let conn = connect()?;
                 let reply = zbus::block_on(conn.call_method(
                     Some(SERVICE),
                     PATH,
                     Some("org.freedesktop.DBus.Properties"),
                     "Get",
-                    &("org.tspmo.Fans1", "Rpm"),
+                    &(format!("{PREFIX}{iface}"), prop),
                 ))?;
                 let v: OwnedValue = reply.body().deserialize()?;
-                Ok(V::from_value(&v)
-                    .list()
-                    .iter()
-                    .map(|p| (p.at(0).int() as u32, p.at(1).int() as u32))
-                    .collect())
+                Ok(V::from_value(&v))
             })();
-            if let Ok(r) = r {
-                emit(Event::Rpm(r));
+            if let Ok(v) = r {
+                emit(Event::Props(iface.to_owned(), vec![(prop.to_owned(), v)]));
             }
         })
         .ok();

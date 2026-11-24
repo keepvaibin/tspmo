@@ -15,7 +15,6 @@ pub struct Store {
     pub p: HashMap<String, HashMap<String, V>>,
     /// `"Display1.SetFlickerFree"` → input signatures.
     pub methods: HashMap<String, Vec<String>>,
-    pub rpm: Vec<(u32, u32)>,
     pub gpu_users: Vec<(u32, String, String)>,
 }
 
@@ -205,7 +204,11 @@ pub fn move_point(pts: &mut [(u8, u8)], i: usize, t: i32, p: i32) {
 }
 
 pub fn rpm_of(s: &Store, fan: u32) -> u32 {
-    s.rpm.iter().find(|(f, _)| *f == fan).map_or(0, |(_, r)| *r)
+    s.get("Fans1", "Rpm")
+        .list()
+        .iter()
+        .find(|e| e.at(0).int() == i64::from(fan))
+        .map_or(0, |e| e.at(1).int() as u32)
 }
 
 // ---------------------------------------------------------------------------------------------

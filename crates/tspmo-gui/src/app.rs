@@ -6,7 +6,6 @@
 
 use crate::bindings;
 use crate::bus::{self, Call, Event};
-use crate::live;
 use crate::model::{self, Arg, Curve, MODES, SOURCES, Store, THERMAL};
 use crate::value::V;
 use crate::{Bk, FanRow, GpuUser, Item, LimitRow, Main, Opt, Pt, Th};
@@ -14,7 +13,6 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, Timer, TimerMode, Vec
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
-use tspmo_sys::SysRoot;
 
 thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
@@ -63,9 +61,6 @@ struct App {
     error: String,
     error_timer: Timer,
     live_timer: Timer,
-    live_w: Option<f32>,
-    cpu_temp: Option<i32>,
-    root: SysRoot,
 }
 
 fn ss(s: &str) -> SharedString {
@@ -185,9 +180,6 @@ pub fn start(win: &Main, section_hint: Option<String>) {
         error: String::new(),
         error_timer: Timer::default(),
         live_timer: Timer::default(),
-        live_w: None,
-        cpu_temp: None,
-        root: SysRoot::from_env(),
     };
     APP.with(|c| *c.borrow_mut() = Some(app));
     bus::start(emit);
@@ -220,7 +212,6 @@ impl App {
                 self.offline = true;
                 self.error = msg;
             }
-            Event::Rpm(r) => self.store.rpm = r,
             Event::GpuUsers(u) => self.store.gpu_users = u,
             Event::Error(msg) => {
                 if msg.contains("unknown profile") {
@@ -308,11 +299,8 @@ impl App {
 
     fn tick(&mut self) {
         match self.section.as_str() {
-            "fans" => {
-                self.cpu_temp = live::cpu_temp(&self.root);
-                bus::read_rpm(emit);
-            }
-            "battery" => self.live_w = live::battery_watts(&self.root),
+            "fans" => bus::read_live("Fans1", "Rpm", emit),
+            "battery" => bus::read_live("Battery1", "Power", emit),
             _ => {}
         }
     }
@@ -624,7 +612,7 @@ impl App {
         } else {
             mode_color(mode)
         });
-        bk.set_head_text(ss(&head_text(s, self.live_w)));
+        bk.set_head_text(ss(&head_text(s)));
 
         // GPU
         bk.set_gpu_mode(ss(&model::color_label(s.get("Daemon1", "GpuMode").str())));
@@ -699,14 +687,11 @@ impl App {
             -1
         });
         bk.set_bat_status(ss(s.get(b, "Status").str()));
-        let watts = self.live_w.map_or_else(|| s.get(b, "Power").float(), f64::from);
-        bk.set_bat_power(ss(&model::fmt_watts(
-            if s.has_prop(b, "Power") || self.live_w.is_some() {
-                watts
-            } else {
-                -1.0
-            },
-        )));
+        bk.set_bat_power(ss(&model::fmt_watts(if s.has_prop(b, "Power") {
+            s.get(b, "Power").float()
+        } else {
+            -1.0
+        })));
         bk.set_bat_left(ss(&model::fmt_duration(s.get(b, "TimeLeft").int())));
         bk.set_bat_limit(s.get(b, "Limit").int() as i32);
         let steps: Vec<i64> = s.get(b, "Steps").list().iter().map(V::int).collect();
@@ -750,7 +735,6 @@ impl App {
         bk.set_fan_sel(self.fan_sel.min(fan_list.len().saturating_sub(1)) as i32);
         sync(&self.m.fans, fan_list);
         self.push_curve();
-        bk.set_cpu_temp(ss(&self.cpu_temp.map_or(String::new(), |t| format!("{t}°"))));
 
         // Power limits
         bk.set_pw_mode(self.pw_mode as i32);
@@ -844,14 +828,14 @@ pub fn mode_color(mode: &str) -> slint::Color {
     }
 }
 
-fn head_text(s: &Store, live_w: Option<f32>) -> String {
+fn head_text(s: &Store) -> String {
     let b = "Battery1";
     if !s.has(b) {
         return String::new();
     }
     let mut t = format!("{}%", s.get(b, "Percent").int());
-    let w = live_w.map_or_else(|| s.get(b, "Power").float(), f64::from);
-    if w >= 0.0 && (live_w.is_some() || s.has_prop(b, "Power")) {
+    let w = s.get(b, "Power").float();
+    if w >= 0.0 && s.has_prop(b, "Power") {
         t.push_str(&format!(" · {w:.1} W"));
     }
     t

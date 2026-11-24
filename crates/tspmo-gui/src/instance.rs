@@ -7,7 +7,9 @@ use std::os::unix::net::{SocketAddr, UnixListener, UnixStream};
 
 fn addr() -> std::io::Result<SocketAddr> {
     let uid = rustix::process::getuid().as_raw();
-    SocketAddr::from_abstract_name(format!("tspmo-gui-{uid}"))
+    // TSPMO_GUI_ID lets tests run a second, independent popup.
+    let id = std::env::var("TSPMO_GUI_ID").unwrap_or_default();
+    SocketAddr::from_abstract_name(format!("tspmo-gui-{uid}{id}"))
 }
 
 pub enum Role {

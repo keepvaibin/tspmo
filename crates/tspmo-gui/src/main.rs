@@ -12,7 +12,6 @@ mod bindings;
 mod bus;
 mod env;
 mod instance;
-mod live;
 mod model;
 mod osd;
 mod shortcut;
