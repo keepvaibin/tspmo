@@ -14,6 +14,8 @@ mod env;
 mod instance;
 mod model;
 mod osd;
+mod px;
+mod wl;
 mod shortcut;
 mod snapshot;
 mod theme;
@@ -62,9 +64,13 @@ fn popup(args: &[String]) -> Result<(), String> {
         .position(|a| a == "--section")
         .and_then(|i| args.get(i + 1))
         .cloned();
+    let layer = use_layer_shell();
+    wl::next_kind(wl::Kind::Popup);
     let win = Main::new().map_err(|e| e.to_string())?;
-    // After the first component exists (that creates the platform), before it is shown.
-    slint::set_xdg_app_id(APP_ID).map_err(|e| e.to_string())?;
+    if !layer {
+        // After the first component exists (that creates the platform), before it is shown.
+        slint::set_xdg_app_id(APP_ID).map_err(|e| e.to_string())?;
+    }
     win.global::<Th>().set_dark(theme::is_dark());
     app::start(&win, section);
     instance::serve(listener, || {
@@ -74,4 +80,16 @@ fn popup(args: &[String]) -> Result<(), String> {
     });
     win.show().map_err(|e| e.to_string())?;
     slint::run_event_loop().map_err(|e| e.to_string())
+}
+
+/// Install the layer-shell platform when the compositor has it; otherwise Slint's winit backend
+/// runs a normal window.
+fn use_layer_shell() -> bool {
+    if std::env::var_os("TSPMO_NO_LAYER").is_some() {
+        return false;
+    }
+    match wl::connect(APP_ID) {
+        Some(p) => slint::platform::set_platform(Box::new(p)).is_ok(),
+        None => false,
+    }
 }

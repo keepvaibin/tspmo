@@ -4,9 +4,8 @@
 
 use crate::{Main, Th, app, theme};
 use slint::ComponentHandle;
-use slint::platform::software_renderer::{
-    MinimalSoftwareWindow, PremultipliedRgbaColor, RepaintBufferType, TargetPixel,
-};
+use crate::px::Px;
+use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{EventLoopProxy, Platform, WindowAdapter};
 use std::collections::VecDeque;
 use std::rc::Rc;
@@ -52,33 +51,8 @@ impl Platform for Headless {
     }
 }
 
-/// Straight BGRA pixel for the buffer; transparent where nothing is drawn.
-#[derive(Clone, Copy, Default)]
-struct Px {
-    r: u8,
-    g: u8,
-    b: u8,
-    a: u8,
-}
-
-impl TargetPixel for Px {
-    fn blend(&mut self, c: PremultipliedRgbaColor) {
-        let ia = u16::from(255 - c.alpha);
-        self.r = (u16::from(self.r) * ia / 255) as u8 + c.red;
-        self.g = (u16::from(self.g) * ia / 255) as u8 + c.green;
-        self.b = (u16::from(self.b) * ia / 255) as u8 + c.blue;
-        self.a =
-            (u16::from(self.a) + u16::from(c.alpha) - u16::from(self.a) * u16::from(c.alpha) / 255) as u8;
-    }
-    fn from_rgb(r: u8, g: u8, b: u8) -> Self {
-        Px { r, g, b, a: 255 }
-    }
-    fn background() -> Self {
-        Px::default()
-    }
-}
-
 pub fn run(args: &[String]) -> Result<(), String> {
+
     let path = args
         .first()
         .ok_or("usage: --snapshot <file.ppm> [--section main|fans]")?;

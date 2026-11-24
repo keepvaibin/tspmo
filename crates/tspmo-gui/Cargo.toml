@@ -20,10 +20,11 @@ gl = ["slint/renderer-femtovg"]
 zbus.workspace = true
 futures-lite = { version = "2", default-features = false }
 rustix = { version = "1.1", features = ["process"] }
+smithay-client-toolkit = "0.19"
 slint = { version = "1.19", default-features = false, features = [
     "std",
     "compat-1-2",
-    "backend-winit",
+    "backend-winit-wayland",
     "renderer-software",
     "software-renderer-systemfonts",
 ] }
