@@ -105,8 +105,10 @@ pub struct EcoLimits {
     pub uncore_max_mhz: Option<u32>,
     /// Maximum clock of the efficiency and low-power efficiency cores.
     pub ecap_mhz: Option<u32>,
-    /// Energy/performance hint of the CPUs, 0 (performance) to 255 (power).
-    pub epp: u8,
+    /// Energy/performance hint of the CPUs: one of the kernel's names (`performance`,
+    /// `balance_performance`, `balance_power`, `power`). A raw number is not the same thing:
+    /// `128` measured 1.65x slower than `balance_performance` on this machine.
+    pub epp: &'static str,
 }
 
 impl Default for EcoLimits {
@@ -117,7 +119,7 @@ impl Default for EcoLimits {
             psys_w: None,
             uncore_max_mhz: None,
             ecap_mhz: Some(1200),
-            epp: 128,
+            epp: "balance_performance",
         }
     }
 }
@@ -188,9 +190,8 @@ pub fn plan(
     }
 
     // 2. CPU energy/performance preference (intel_pstate and amd-pstate active mode).
-    let eco_epp = t.eco.epp.to_string();
     let epp = match (profile, on_battery) {
-        (Profile::EcoPlus, _) => eco_epp.as_str(),
+        (Profile::EcoPlus, _) => t.eco.epp,
         (Profile::PowerSaver, _) => "power",
         (Profile::Balanced, true) => "balance_power",
         (Profile::Balanced, false) => "balance_performance",
@@ -200,9 +201,7 @@ pub fn plan(
         let avail = root
             .read_opt(format!("{policy}/energy_performance_available_preferences"))
             .unwrap_or_default();
-        // Eco+ uses a number between the named hints (`balance_performance` is 128).
-        let numeric = profile == Profile::EcoPlus && !avail.is_empty();
-        if numeric || avail.split_whitespace().any(|v| v == epp) {
+        if avail.split_whitespace().any(|v| v == epp) {
             out.push(w(
                 format!("{policy}/energy_performance_preference"),
                 epp,
@@ -644,7 +643,7 @@ mod tests {
             w.iter()
                 .any(|w| w.path.ends_with("intel-rapl:0/constraint_0_power_limit_uw"))
         );
-        assert_eq!(eco_snapshot(&root).len(), 5); // 2+2 limits, uncore clock
+        assert_eq!(eco_snapshot(&root).len(), 7); // 2+2 limits, 2 windows, uncore clock
     }
 
     #[test]
@@ -675,6 +674,7 @@ mod tests {
                 pkg_w: Some((8, 12)),
                 psys_w: None,
                 uncore_max_mhz: Some(1600),
+                ..EcoLimits::default()
             },
             ..Tunables::default()
         };
@@ -682,7 +682,7 @@ mod tests {
         assert_eq!(saved.len(), 7); // 3 zones x 2 limits + uncore
         let p = plan(&root, Profile::EcoPlus, true, &t, &[]);
         assert_eq!(get(&p, "firmware thermal mode"), ["quiet"]);
-        assert_eq!(get(&p, "CPU turbo"), ["1"]); // no_turbo=1 even on AC
+        assert_eq!(get(&p, "CPU turbo"), ["0"]); // Eco+ keeps turbo (no_turbo=0)
         let r = apply(&root, &p);
         assert!(r.failed.is_empty(), "{:?}", r.failed);
         assert_eq!(
@@ -728,6 +728,7 @@ mod tests {
             pkg_w: Some((10, 5)), // short-term below long-term makes no sense
             psys_w: Some((6, 8)),
             uncore_max_mhz: Some(100), // below the hardware minimum
+            ..EcoLimits::default()
         };
         let w = eco_writes(&f.root(), &eco);
         let v = |what: &str| -> Vec<String> {

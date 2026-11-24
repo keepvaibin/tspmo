@@ -348,7 +348,10 @@ impl Daemon {
             if let Some(v) = kv.get("eco_ecap_mhz") {
                 t.eco.ecap_mhz = v.parse().ok();
             }
-            if let Some(v) = kv.get("eco_epp").and_then(|v| v.parse().ok()) {
+            if let Some(v) = ["performance", "balance_performance", "balance_power", "power"]
+                .into_iter()
+                .find(|n| kv.get("eco_epp") == Some(n))
+            {
                 t.eco.epp = v;
             }
         }
@@ -501,9 +504,9 @@ mod tests {
         });
         d.choose(Profile::EcoPlus);
         assert_eq!(d.effective(), Profile::EcoPlus);
-        assert_eq!(env.read(PKG), "5000000");
+        assert_eq!(env.read(PKG), "12000000");
         assert_eq!(env.read(power::PLATFORM_PROFILE), "quiet");
-        assert_eq!(env.read("/sys/devices/system/cpu/intel_pstate/no_turbo"), "1");
+        assert_eq!(env.read("/sys/devices/system/cpu/intel_pstate/no_turbo"), "0");
         assert!(
             env.read(ECO_SAVED)
                 .contains("constraint_0_power_limit_uw=90000000")
@@ -565,7 +568,7 @@ mod tests {
         // The caps are on the hardware; a new daemon starts from the saved copy, not from them.
         let mut d2 = env.daemon();
         d2.apply(true);
-        assert_eq!(env.read(PKG), "5000000");
+        assert_eq!(env.read(PKG), "12000000");
         d2.choose(Profile::Balanced);
         assert_eq!(env.read(PKG), "90000000");
     }

@@ -16,7 +16,6 @@ mod thermal;
 use crate::{events, polkit, session};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock, mpsc};
-use tspmo_core::power::Profile;
 use tspmo_sys::SysRoot;
 use zbus::blocking::connection::Builder;
 use zbus::message::Header;
