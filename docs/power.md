@@ -10,21 +10,108 @@ Choosing `power-saver` there while Eco+ is active keeps Eco+; any other choice l
 | | Eco+ | power-saver | balanced | performance |
 |---|---|---|---|---|
 | Firmware thermal mode | quiet | quiet | balanced | performance |
-| CPU energy preference / bias | power / 15 | power / 15 | balance_power or balance_performance | performance / 0 |
-| Turbo | off | off on battery | on | on |
-| Package power limit (RAPL) | 5 W / 7 W | firmware | firmware | firmware |
-| Uncore maximum clock | 1.6 GHz | firmware | firmware | firmware |
+| CPU energy preference / bias | balance_performance / 8 | power / 15 | balance_power or balance_performance | performance / 0 |
+| Turbo | on | off on battery | on | on |
+| Package power limit (RAPL) | PL1 12 W over 10 s, PL2 28 W | firmware | firmware | firmware |
+| Efficiency-core maximum clock | 1.2 GHz | firmware | firmware | firmware |
+| Background jobs | on the efficiency cores, weight 10 | | | |
+| NVIDIA GPU | off (Eco) | policy | policy | policy |
+| Fans | stopped below 58-66 C, steep ramp | firmware | firmware | firmware |
+| Keyboard backlight | dark after 10 s idle | as set | as set | as set |
+| Slash | dark | as set | as set | as set |
 | Screen | 60 Hz | refresh policy | refresh policy | refresh policy |
 
 On battery every mode also gets PCIe link power saving, audio codec power-down and lazier disk
 writeback. All writes skip values that are already set, because on ASUS each `platform_profile`
-write makes the EC notify the NVIDIA driver and wakes the dGPU.
+write makes the EC notify the NVIDIA driver and wakes the dGPU (the driver then logs
+`NVRM: ... failed to get platform power mode from SBIOS` assertions: harmless, and absent once
+the GPU is off).
 
-Eco+ saves the original RAPL and uncore values in `/run/tspmo/rapl-orig` when it starts and
-writes them back when it ends, when `tspmod` stops (`ExecStopPost`) and after a daemon crash (the
-file is read again at start-up).
+Eco+ saves the original RAPL limits and windows and the efficiency cores' clock in
+`/run/tspmo/rapl-orig` when it starts and writes them back when it ends, when `tspmod` stops
+(`ExecStopPost`) and after a daemon crash (the file is read again at start-up).
 
-## How Eco+ was tuned
+## Eco+ design
+
+Eco+ is the maximum-battery mode, selectable on AC and on battery. It must also stay snappy:
+the first design (package 5/7 W flat, turbo off, uncore 1.6 GHz) made the laptop unusable
+while a build ran. A power limit slows every core alike, so a build on all cores starved the
+foreground of both budget and clock. Eco+ now separates the two:
+
+1. **Latency for the foreground.** Turbo stays, the energy hint is `balance_performance`
+   (a raw number, even 128, measured 1.65x slower: use the kernel's names). Bursts finish at
+   full clock and the cores idle again.
+2. **Background work is confined.** The *guard* (`crates/tspmod/src/guard.rs`) moves heavy jobs
+   to `tspmobg.slice`: efficiency cores only, CPU weight 10, clock capped at 1.2 GHz. The
+   compositor, shell and every graphical app that is not a terminal are never moved. Terminals
+   (where builds run), services, login sessions and the indexer are. A job is moved from its
+   root (the `make`, not the shell), with everything it starts afterwards.
+3. **A sustained budget, not a cap.** PL1 12 W averaged over 10 s, PL2 28 W. Ten efficiency
+   cores at 1.2 GHz draw about 3 W over the idle package, so the budget is never hit by background
+   work and bursts are never throttled.
+
+The guard samples `/proc/stat` every 4 s while Eco+ is active (nothing otherwise) and scans
+processes only while more than half a core is busy. It reacts after about 6 s. Everything goes
+back when Eco+ ends or the daemon stops (`/run/tspmo/guard` remembers where each process came
+from).
+
+Fans: a custom curve per fan while Eco+ is active (`fans::eco_curve`). Off up to four degrees
+past the first step of the firmware's own quiet curve, clamped to 58-66 C (the idle laptop at 5 W
+settles near 57 C with the fans stopped), then 12 % within 3 C and 100 % from Tjmax - 20 C
+(90 C); from 75 C never below the firmware's curve. Stopping needs 0 % to be honoured by the EC:
+it is (measured: 0 rpm on all three fans).
+
+### Measured (AC, charging held, 4 rounds interleaved, `tspmo bench`)
+
+The load is 2 workers doing a 5.4 ms chunk at 10 Hz ("burst"); `--bg 20` adds 20 busy threads
+as a service outside the desktop. p95 ratio is against balanced at 60 Hz in the same run.
+The machine was in use meanwhile (other builds), so absolute watts carry noise; the ratios are
+what the interleaving protects.
+
+| Condition | burst median / p95 ms | p95 vs balanced | wake-up p95 us | package W | psys W |
+|---|---|---|---|---|---|
+| balanced | 7.03 / 7.72 | 1.00x | 58 | 6.2 | 31.0 |
+| power-saver | 12.32 / 12.95 | 1.68x | 75 | 4.1 | 29.0 |
+| **Eco+** | 6.94 / 7.32 | **0.95x** | 67 | 6.1 | 27.3 |
+| balanced, 20 background threads | 8.46 / 10.62 | 1.00x | 55 | 24.2 | 49.6 |
+| power-saver, 20 background threads | 9.87 / 10.93 | 1.03x | 57 | 19.6 | 44.1 |
+| **Eco+, 20 background threads** | 6.53 / 7.30 | **0.69x** | 67 | 8.8 | 26.9 |
+| first Eco+ (5/7 W), 20 background threads | 97 / 197 | 6.8x | 181 | 7.8 | 36.7 |
+
+Acceptance (interactive p95 at most 1.3x balanced, with and without background load): met,
+0.95x and 0.69x. With the background load Eco+ draws a third of balanced's package power.
+
+### Light load, nothing running (`--no-load --no-wake`, 6 rounds, 25 s each)
+
+| Condition | psys W | package W |
+|---|---|---|
+| balanced, 60 Hz | 17.3 | 4.9 |
+| **Eco+** | **12.1** | **3.9** |
+
+Eco+ saves 5.2 W at the platform (30 %) and 1.0 W at the package against balanced at 60 Hz, in a
+session where the NVIDIA GPU stays in Hybrid (it sleeps most of the time but wakes every ~22 s
+for ~25 s; Eco removes that too, once the session can switch). The screen was at 100 %
+brightness on an OLED, which is most of the 12 W: psys includes the panel.
+
+**What 5 W on the battery means in psys.** The earlier runs (below) put the battery about
+1.9 W (1.34x) above psys for the same light load: 7.37 W on the battery at 60 Hz against 5.5 W
+psys on AC. A 5 W battery draw is therefore about 3.1-3.7 W psys, and 7 W bursts about 5-5.5 W.
+The panel is the floor: at 100 % brightness this OLED alone keeps psys near 12 W, so the figure
+is reachable only with the screen dimmed. Not measured on the battery (the machine stayed on AC).
+
+Tuning runs that led here (same method, noisier):
+
+- energy hint: `balance_performance` 6.9 ms; `balance_power` 12.3 ms (1.56x); raw 112 to 176 12.2 ms.
+- background confined to efficiency cores at weight 20, clock cap 1.2 GHz, PL1 15 W: p95 1.14x
+  of an unprotected balanced run; at PL1 8 W or 12 W the budget binds and the foreground slows
+  2x to 2.5x. Hence the clock cap on the efficiency cores instead of a low PL1.
+- power of ten efficiency cores kept busy (package, whole machine in light use): 7.0 W at
+  1.2 GHz, 9.8 W at 2.0 GHz, 16.5 W uncapped.
+- background on the two LP-E cores only: p95 1.35x, no better than the ten cores at 1.2 GHz.
+
+## First Eco+ design (superseded)
+
+Kept for the numbers: these runs led to the first, flat 5/7 W design.
 
 Hardware: ROG Zephyrus G16 GU605MI, Core Ultra 9 185H, 2560x1600 OLED, 72 Wh battery.
 
@@ -82,12 +169,17 @@ What this says:
 
 ## Tunables
 
-`/var/lib/tspmo/state` (edit while `tspmod` is stopped):
+`/var/lib/tspmo/state` (edit while `tspmod` is stopped; Eco+ values are read only with
+`eco_version=2`, which `tspmod` writes):
 
 ```
-eco_pkg_w=5,7        # long-term, short-term watts, or "off"
+eco_version=2
+eco_pkg_w=12,28          # PL1, PL2 watts, or "off"
+eco_pkg_window_ms=10000  # PL1 averaging window
 eco_psys_w=off
-eco_uncore_mhz=1600  # or "off"
+eco_uncore_mhz=off       # or a clock
+eco_ecap_mhz=1200        # efficiency cores' maximum clock, or "off"
+eco_epp=balance_performance
 ```
 
 ## Topology
@@ -134,3 +226,33 @@ system went to emergency mode. Rules now:
 - GPU changes asked for before then (`SetGpuMode`) get "The system is still starting; try again
   in a minute."
 - The unit keeps `Before=display-manager.service` for the compositor environment only.
+
+**3. The NVIDIA GPU is awake about 20 s in every 30 s in Hybrid, with `tspmod` stopped too.**
+Not tspmo, not an app. Traced with the kernel's runtime-PM events (`rpm_resume` with a stack
+trigger on `0000:01:00.0`, 10 minutes, `tspmod` running):
+
+- Every resume that no process asked for comes from `rm_acpi_nvpcf_notify` called by
+  `acpi_ev_notify_dispatch`: the platform firmware notifies the driver through the ACPI device
+  `NVDA0820` (NVPCF, Dynamic Boost) about every 22 s (sometimes two periods). The driver resumes
+  the GPU, holds it about 7 s, and suspends it about 25 s after the resume.
+- It continues with `nvidia-powerd` stopped, and with the charge held (not charging).
+- The only other resumes were process exits that closed `/dev/nvidia*` (a browser's media
+  decoder) and `nvidia-powerd` starting or stopping.
+- Nothing in tspmo resumed the GPU during the 10 minutes. The driver exposes no autosuspend
+  delay (`power/autosuspend_delay_ms` is unreadable), and the notification comes from the EC.
+
+What helps: Eco (the GPU is off, no driver, no notifications). The default policy Optimized
+already does that on battery. `tspmo doctor` names the cause (`nvidia-nvpcf`), or the apps
+that hold the GPU (`nvidia-held`), or a desktop that loaded the driver (`compositor-nvidia`:
+KWin started before tspmo's compositor setting existed holds `/dev/nvidia*`, so Eco cannot
+unload the driver until the next login).
+
+### On the battery (first runs, light load, nothing running)
+
+`tspmo bench --no-load --no-wake`, 30-95 % brightness (the user's), other builds running: the
+absolute watts are not usable, but the pattern is. Every condition that starts with a
+thermal-mode change (power-saver, Eco+, and the balanced that follows them) measured 10-14 W
+higher at the platform than the one that did not (`hz=60` after balanced: 11.5 W against 20-23 W).
+The cause is the dGPU: each `platform_profile` write makes the EC notify the NVIDIA driver, which
+wakes the GPU for about 25 s, longer than the 8-12 s settle. Compare conditions only with a
+settle of 35 s or more, or with the GPU off (Eco): with the GPU off there is no driver to wake.

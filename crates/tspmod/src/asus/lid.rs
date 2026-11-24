@@ -109,6 +109,8 @@ pub struct Lid {
     anime: Option<Anime>,
     file: PathBuf,
     st: Mutex<State>,
+    /// Eco+ is active: the light bar stays dark.
+    eco: std::sync::atomic::AtomicBool,
 }
 
 impl Lid {
@@ -129,6 +131,7 @@ impl Lid {
             slash,
             anime,
             root,
+            eco: false.into(),
         };
         lid.load();
         Some(lid)
@@ -206,14 +209,14 @@ impl Lid {
         }
     }
 
-    /// Lit now: enabled, and either on AC or allowed on battery.
-    fn lit(c: &SlashCfg, on_battery: bool) -> bool {
-        c.enabled && (!on_battery || c.battery)
+    /// Lit now: enabled, never in Eco+, and either on AC or allowed on battery.
+    fn lit(c: &SlashCfg, on_battery: bool, eco: bool) -> bool {
+        c.enabled && !eco && (!on_battery || c.battery)
     }
 
     fn display_packets(&self, c: &SlashCfg, on_battery: bool) -> [Vec<u8>; 2] {
         let id = self.report();
-        let lit = Self::lit(c, on_battery);
+        let lit = Self::lit(c, on_battery, self.eco.load(std::sync::atomic::Ordering::Relaxed));
         [
             slash::enable(id, lit),
             slash::options(id, lit, c.brightness, c.interval),
@@ -340,6 +343,18 @@ impl Lid {
         let a = self.anime.as_ref().ok_or("no AniMe Matrix on this laptop")?;
         let (w, h) = a.kind.size();
         self.show_grid(&Grid::from_pgm(pgm, w, h)?)
+    }
+
+    /// Eco+ starts or ends: the light bar goes dark, or back to what the settings say.
+    pub fn set_eco(&self, eco: bool) {
+        if self.eco.swap(eco, std::sync::atomic::Ordering::Relaxed) == eco || self.slash.is_none() {
+            return;
+        }
+        let (c, on_battery) = {
+            let st = lock(&self.st);
+            (st.cfg.clone(), st.on_battery)
+        };
+        self.send(&self.display_packets(&c, on_battery));
     }
 
     pub fn on_power_source(&self, on_battery: bool) {
@@ -708,6 +723,27 @@ mod tests {
         assert_eq!(b[6 + 8], 1);
         // Brightness is carried.
         assert_eq!(b[6 + 10], 255);
+    }
+
+    #[test]
+    fn eco_plus_keeps_the_light_bar_dark_and_leaving_it_lights_it_again() {
+        let fx = Fix::new("lid-eco");
+        fx.set("/sys/class/power_supply/ACAD/online", "1\n");
+        let l = lid(&fx);
+        clear(&fx);
+        l.set_eco(true);
+        assert_eq!(sent(&fx)[6 + 8], 0, "options: disabled");
+        // A settings change in Eco+ stays dark.
+        clear(&fx);
+        l.set_brightness(100).unwrap();
+        assert_eq!(sent(&fx)[6 + 8], 0);
+        clear(&fx);
+        l.set_eco(false);
+        assert_eq!(sent(&fx)[6 + 8], 1);
+        // No change, no packet.
+        clear(&fx);
+        l.set_eco(false);
+        assert!(sent(&fx).is_empty());
     }
 
     #[test]

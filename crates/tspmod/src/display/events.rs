@@ -19,6 +19,7 @@ pub fn exclusive<T>(f: impl FnOnce() -> T) -> T {
 pub fn apply_all(conn: &zbus::Connection, shared: &Shared) {
     let _g = COMPOSITOR.lock().unwrap_or_else(|p| p.into_inner());
     lock(shared).message.clear();
+    lock(shared).color.forget_source();
     let note = |what: &str, r: Result<(), String>| {
         if let Err(e) = r {
             eprintln!("tspmod: display {what}: {e}");
@@ -47,7 +48,7 @@ pub fn start(conn: &zbus::Connection, shared: &Shared) {
                 } => (Some(*on_battery), Some(*eco_plus)),
                 Event::PowerSource { on_battery } => (Some(*on_battery), None),
                 Event::Resumed => (None, None),
-                Event::Key(_) => return,
+                Event::Key(_) | Event::FanKey => return,
             };
             let (conn, shared) = (conn.clone(), Arc::clone(&shared));
             spawn("display-event", move || {

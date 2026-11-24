@@ -232,6 +232,7 @@ fn pressed(a: &Asus, source: Source, code: u16) {
         Some(Hotkey::AuraNext) => a.aura_key(true),
         Some(Hotkey::AuraPrev) => a.aura_key(false),
         // The kernel cycles the thermal mode itself and the daemon follows it; the OSD comes with that.
+        Some(Hotkey::Fan) if source == Source::Keyboard => events::publish(&events::Event::FanKey),
         Some(Hotkey::Fan | Hotkey::Rog) | None => {}
     }
 }

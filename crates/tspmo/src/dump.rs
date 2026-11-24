@@ -34,7 +34,11 @@ const PATTERNS: &[&str] = &[
     "/sys/class/firmware-attributes/*/attributes/*",
     "/sys/class/firmware-attributes/*/attributes/*/*",
     // vendor platform drivers
-    "/sys/devices/platform/asus-nb-wmi/*",
+    // (not the attributes that moved to firmware-attributes: reading them makes the kernel log a
+    // deprecation warning)
+    "/sys/devices/platform/asus-nb-wmi/throttle_thermal_policy",
+    "/sys/devices/platform/asus-nb-wmi/cpufv",
+    "/sys/devices/platform/asus-nb-wmi/fan_boost_mode",
     "/sys/bus/platform/devices/VPC2004:*/*",
     "/sys/devices/platform/thinkpad_acpi/*",
     // fans and sensors

@@ -15,8 +15,7 @@ mod thermal;
 
 use crate::{events, polkit, session};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock, mpsc};
-use tspmo_core::power::Profile;
+use std::sync::{Arc, OnceLock, mpsc};
 use tspmo_sys::SysRoot;
 use zbus::blocking::connection::Builder;
 use zbus::message::Header;
@@ -57,8 +56,6 @@ pub struct Asus {
     root: SysRoot,
     lighting: Option<Arc<lighting::Lighting>>,
     lid: Option<Arc<lid::Lid>>,
-    /// The last thermal mode an OSD announced.
-    shown_mode: Mutex<Option<Profile>>,
     thermal: Option<Arc<thermal::Thermal>>,
     battery: Option<Arc<battery::Battery>>,
     hardware: Option<Arc<hardware::Hardware>>,
@@ -69,25 +66,6 @@ impl Asus {
     fn emit(&self, f: impl AsyncFn(&zbus::Connection)) {
         if let Some(c) = self.conn.get() {
             zbus::block_on(f(c.inner()));
-        }
-    }
-
-    /// Show the thermal mode on screen when it changes (Fn+F5 cycles it in the kernel).
-    fn announce_mode(&self, p: Profile) {
-        let mut last = shown(&self.shown_mode);
-        let first = last.is_none();
-        if *last != Some(p) {
-            *last = Some(p);
-            if !first {
-                let (icon, text) = match p {
-                    Profile::PowerSaver | Profile::EcoPlus => {
-                        ("power-profile-power-saver-symbolic", "Power saver")
-                    }
-                    Profile::Balanced => ("power-profile-balanced-symbolic", "Balanced"),
-                    Profile::Performance => ("power-profile-performance-symbolic", "Performance"),
-                };
-                session::osd(icon, text, None);
-            }
         }
     }
 
@@ -109,10 +87,19 @@ impl Asus {
         use events::Event::*;
         match e {
             ProfileApplied {
-                profile, on_battery, ..
+                profile,
+                on_battery,
+                eco_plus,
             } => {
-                self.announce_mode(*profile);
+                if let Some(l) = &self.lighting {
+                    l.set_eco(*eco_plus);
+                    hotkeys::rearm();
+                }
+                if let Some(l) = &self.lid {
+                    l.set_eco(*eco_plus);
+                }
                 if let Some(t) = &self.thermal {
+                    t.set_eco(*eco_plus);
                     t.on_profile(*profile, *on_battery);
                     self.emit(async |c| {
                         fans::changed(c).await;
@@ -159,7 +146,7 @@ impl Asus {
                 // The USB keyboard may have re-enumerated while asleep.
                 hotkeys::rearm();
             }
-            Key(_) => {}
+            Key(_) | FanKey => {}
         }
     }
 }
@@ -170,7 +157,6 @@ impl Asus {
             root: root.clone(),
             lighting: lighting::Lighting::new(root.clone(), dir.clone()).map(Arc::new),
             lid: lid::Lid::new(root.clone(), dir.clone()).map(Arc::new),
-            shown_mode: Mutex::new(None),
             thermal: thermal::Thermal::new(root.clone(), dir.clone()).map(Arc::new),
             battery: battery::Battery::new(root.clone(), dir.clone()).map(Arc::new),
             hardware: hardware::Hardware::new(root.clone(), dir).map(Arc::new),
@@ -220,10 +206,6 @@ pub fn register<'a>(mut b: Builder<'a>, asus: &Asus) -> zbus::Result<Builder<'a>
         b = b.serve_at(PATH, lid::Lid1(Arc::clone(l)))?;
     }
     Ok(b)
-}
-
-fn shown(m: &Mutex<Option<Profile>>) -> std::sync::MutexGuard<'_, Option<Profile>> {
-    m.lock().unwrap_or_else(|p| p.into_inner())
 }
 
 fn lock_limits_empty(t: &thermal::Thermal) -> bool {

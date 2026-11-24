@@ -265,6 +265,7 @@ fn tspmo_props(d: &Daemon) -> Vec<(&'static str, OwnedValue)> {
         ("ProfileBattery", ov(d.profile_battery.as_str())),
         ("OnBattery", ov(d.on_battery)),
         ("GpuMode", ov(g.mode.as_str())),
+        ("GpuWanted", ov(wanted_gpu(d).as_str())),
         ("GpuPolicy", ov(d.gpu_policy.as_str())),
         ("GpuPending", ov(g.pending.map_or("", Mode::as_str))),
         ("DgpuAsleep", ov(g.dgpu_asleep)),
@@ -281,7 +282,30 @@ fn announce(before: Profile, after: Profile) {
         (Profile::EcoPlus, Profile::PowerSaver) => "Power saver",
         _ => return,
     };
-    crate::session::osd("battery-profile-powersave", text, None);
+    crate::session::osd(
+        if text == "Eco+" {
+            "eco-plus"
+        } else {
+            "battery-profile-powersave"
+        },
+        text,
+        None,
+    );
+}
+
+fn wanted_gpu(d: &Daemon) -> Mode {
+    gpu::wanted_mode(d.gpu_policy, d.on_battery, d.effective().is_eco_plus())
+}
+
+/// The on-screen note for a mode chosen with a key.
+pub fn osd_mode(p: Profile) {
+    let (icon, text) = match p {
+        Profile::EcoPlus => ("eco-plus", "Eco+"),
+        Profile::PowerSaver => ("battery-profile-powersave", "Power saver"),
+        Profile::Balanced => ("battery-profile-balanced", "Balanced"),
+        Profile::Performance => ("battery-profile-performance", "Performance"),
+    };
+    crate::session::osd(icon, text, None);
 }
 
 pub struct Tspmo(pub Shared);
@@ -315,6 +339,13 @@ impl Tspmo {
     #[zbus(property)]
     fn gpu_mode(&self) -> String {
         lock(&self.0).gpu_status().mode.as_str().to_owned()
+    }
+    /// The mode the hardware is being brought to: `eco` while Eco+ is active, else what the
+    /// policy says for this power source. `GpuMode` is what it is now (they differ while a
+    /// switch is pending, or refused because an app or the desktop holds the GPU).
+    #[zbus(property)]
+    fn gpu_wanted(&self) -> String {
+        wanted_gpu(&lock(&self.0)).as_str().to_owned()
     }
     #[zbus(property)]
     fn gpu_policy(&self) -> String {
@@ -379,6 +410,32 @@ impl Tspmo {
         Ok(next.as_str().to_owned())
     }
 
+    /// What `tspmo doctor` prints: `(severity, topic, text)` for every finding, severity
+    /// `error`, `warn` or `info`. The text is the title and detail; a fix is appended as
+    /// `Fix: <command>` lines. Runs the checks on each call (a few milliseconds, no hardware
+    /// access beyond sysfs and `/proc`); never touches the NVIDIA GPU.
+    fn doctor(&self) -> Vec<(String, String, String)> {
+        let root = lock(&self.0).root.clone();
+        let m = tspmo_core::machine::Machine::probe(&root);
+        tspmo_core::doctor::run(&root, &m)
+            .into_iter()
+            .map(|f| {
+                let sev = match f.severity {
+                    tspmo_core::doctor::Severity::Error => "error",
+                    tspmo_core::doctor::Severity::Warn => "warn",
+                    tspmo_core::doctor::Severity::Info => "info",
+                };
+                let mut text = format!("{}. {}", f.title, f.detail);
+                if let Some(fix) = f.fix {
+                    for c in fix.commands {
+                        text.push_str(&format!("\nFix: {c}"));
+                    }
+                }
+                (sev.to_owned(), f.id.to_owned(), text)
+            })
+            .collect()
+    }
+
     /// Set the GPU policy: `eco`, `hybrid`, `ultimate` or `optimized`. Returns a message for the user.
     async fn set_gpu_mode(
         &self,
@@ -390,6 +447,17 @@ impl Tspmo {
             .ok_or_else(|| zbus::fdo::Error::InvalidArgs(format!("unknown GPU mode '{mode}'")))?;
         let sender = hdr.sender().map(|s| s.to_string());
         polkit::check(conn, sender.as_deref(), polkit::SET_GPU).await?;
+        // Eco+ keeps the GPU off whatever is chosen: the choice is kept for when it ends.
+        if lock(&self.0).effective().is_eco_plus() && policy != Policy::Fixed(Mode::Ultimate) {
+            let msg = {
+                let mut d = lock(&self.0);
+                d.gpu_policy = policy;
+                d.save();
+                "Saved. Eco+ keeps the GPU off.".to_owned()
+            };
+            emit_changed(conn, &self.0).await;
+            return Ok(msg);
+        }
         let (target, current) = {
             let d = lock(&self.0);
             let st = d.gpu_status();

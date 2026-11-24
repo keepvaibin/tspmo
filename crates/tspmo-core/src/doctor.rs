@@ -40,6 +40,7 @@ pub fn run(root: &SysRoot, m: &Machine) -> Vec<Finding> {
         usb_hid_autosuspend,
         numlock_led,
         nvidia_runtime_pm,
+        nvidia_wakes,
         gtk_renderer,
         conflicting_daemons,
         tspmod_running,
@@ -253,17 +254,6 @@ fn nvidia_runtime_pm(root: &SysRoot, m: &Machine, out: &mut Vec<Finding>) {
         let dpm_ok = matches!(dpm, Some(2 | 3));
         let control_ok = gpu.pm_control.as_deref() == Some("auto");
         if dpm_ok && control_ok {
-            if !gpu.is_asleep() && !gpu.boot_vga {
-                out.push(Finding {
-                    id: "nvidia-awake",
-                    severity: Severity::Info,
-                    title: format!("The NVIDIA GPU ({}) is awake", gpu.address),
-                    detail: "Something is using it right now. tspmo's dGPU view (milestone 4) \
-                             lists the processes holding it."
-                        .into(),
-                    fix: None,
-                });
-            }
             continue;
         }
         out.push(Finding {
@@ -285,6 +275,76 @@ fn nvidia_runtime_pm(root: &SysRoot, m: &Machine, out: &mut Vec<Finding>) {
                 needs_reboot: true,
             }),
         });
+    }
+}
+
+/// Why an NVIDIA GPU that should be asleep is awake: the apps holding it, a desktop that
+/// loaded its driver, or the firmware's own periodic notification. Names the culprit.
+fn nvidia_wakes(root: &SysRoot, m: &Machine, out: &mut Vec<Finding>) {
+    for gpu in m.gpus.iter().filter(|g| g.vendor == pci::VENDOR_NVIDIA) {
+        if gpu.driver.as_deref() != Some("nvidia") || gpu.pm_control.as_deref() != Some("auto") {
+            continue;
+        }
+        let users = crate::gpu::users(root, Some(&gpu.address));
+        let apps: Vec<String> = users
+            .iter()
+            .filter(|u| u.kind == crate::gpu::UseKind::Render)
+            .filter(|u| {
+                !crate::gpu::NVIDIA_SERVICES
+                    .iter()
+                    .any(|(comm, _)| u.name == *comm)
+            })
+            .map(|u| format!("{} ({})", u.name, u.pid))
+            .collect();
+        let desktop_driver = users
+            .iter()
+            .find(|u| u.kind == crate::gpu::UseKind::Display && u.driver_handles);
+        if !apps.is_empty() && !gpu.is_asleep() {
+            out.push(Finding {
+                id: "nvidia-held",
+                severity: Severity::Warn,
+                title: format!("NVIDIA GPU held awake by {}", apps.join(", ")),
+                detail: "Apps started with the NVIDIA GPU keep it awake while they run. Close them, \
+                         or start them on the iGPU."
+                    .into(),
+                fix: None,
+            });
+        }
+        if let Some(d) = desktop_driver {
+            out.push(Finding {
+                id: "compositor-nvidia",
+                severity: Severity::Info,
+                title: format!("{} loaded the NVIDIA driver", d.name),
+                detail: "The desktop started before tspmo's compositor setting existed, so Eco can't \
+                         unload the driver. Log out and in once."
+                    .into(),
+                fix: None,
+            });
+        }
+        // Nothing holds it, yet it is awake much of the time: the platform wakes it.
+        if apps.is_empty() && gpu.awake_share().is_some_and(|s| s > 0.15) {
+            let acpi = root.exists("/sys/bus/acpi/devices/NVDA0820:00");
+            let pct = (gpu.awake_share().unwrap_or(0.0) * 100.0).round();
+            out.push(Finding {
+                id: "nvidia-nvpcf",
+                severity: Severity::Warn,
+                title: format!("NVIDIA GPU awake {pct}% of the time with nothing using it"),
+                detail: if acpi {
+                    "The firmware's NVPCF device (ACPI NVDA0820) notifies the driver about every 22 s; \
+                     each time the driver resumes the GPU for about 25 s. No app or tspmo causes it. \
+                     Eco turns the GPU off."
+                        .into()
+                } else {
+                    "Something wakes it about every 22 s and no process holds it. Eco turns the GPU off."
+                        .into()
+                },
+                fix: Some(Fix {
+                    summary: "Turn the NVIDIA GPU off (Eco)".into(),
+                    commands: vec!["tspmo gpu eco".into()],
+                    needs_reboot: false,
+                }),
+            });
+        }
     }
 }
 
@@ -585,6 +645,74 @@ mod tests {
             out[0].fix.as_ref().unwrap().commands,
             ["tspmo display dimming auto"]
         );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    fn awake_nvidia(tag: &str, active: u64, suspended: u64, holder: bool) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("tspmo-doctor-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let dev = d.join("sys/bus/pci/devices/0000:01:00.0");
+        std::fs::create_dir_all(dev.join("power")).unwrap();
+        for (f, v) in [
+            ("class", "0x030200\n"),
+            ("vendor", "0x10de\n"),
+            ("power/runtime_status", "active\n"),
+            ("power/control", "auto\n"),
+        ] {
+            std::fs::write(dev.join(f), v).unwrap();
+        }
+        std::fs::write(dev.join("power/runtime_active_time"), format!("{active}\n")).unwrap();
+        std::fs::write(dev.join("power/runtime_suspended_time"), format!("{suspended}\n")).unwrap();
+        std::fs::create_dir_all(d.join("sys/bus/pci/drivers/nvidia")).unwrap();
+        std::os::unix::fs::symlink("../../../bus/pci/drivers/nvidia", dev.join("driver")).unwrap();
+        std::fs::create_dir_all(d.join("sys/bus/acpi/devices/NVDA0820:00")).unwrap();
+        if holder {
+            let fd = d.join("proc/4242/fd");
+            std::fs::create_dir_all(&fd).unwrap();
+            std::fs::write(d.join("proc/4242/comm"), "firefox\n").unwrap();
+            std::os::unix::fs::symlink("/dev/nvidia0", fd.join("7")).unwrap();
+        }
+        d
+    }
+
+    #[test]
+    fn an_awake_nvidia_gpu_with_no_holder_is_blamed_on_the_firmware() {
+        let d = awake_nvidia("nvpcf", 600, 400, false);
+        let root = SysRoot::new(&d);
+        let m = Machine::probe(&root);
+        let mut out = Vec::new();
+        nvidia_wakes(&root, &m, &mut out);
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert_eq!(out[0].id, "nvidia-nvpcf");
+        assert!(out[0].detail.contains("NVDA0820"));
+        assert_eq!(out[0].fix.as_ref().unwrap().commands, ["tspmo gpu eco"]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn an_app_holding_the_nvidia_gpu_is_named() {
+        let d = awake_nvidia("held", 600, 400, true);
+        let root = SysRoot::new(&d);
+        let m = Machine::probe(&root);
+        let mut out = Vec::new();
+        nvidia_wakes(&root, &m, &mut out);
+        assert!(
+            out.iter()
+                .any(|f| f.id == "nvidia-held" && f.title.contains("firefox")),
+            "{out:?}"
+        );
+        assert!(!out.iter().any(|f| f.id == "nvidia-nvpcf"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_gpu_that_sleeps_is_not_reported() {
+        let d = awake_nvidia("asleep", 50, 950, false);
+        let root = SysRoot::new(&d);
+        let m = Machine::probe(&root);
+        let mut out = Vec::new();
+        nvidia_wakes(&root, &m, &mut out);
+        assert!(out.is_empty(), "{out:?}");
         let _ = std::fs::remove_dir_all(&d);
     }
 }

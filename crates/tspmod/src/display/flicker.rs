@@ -12,11 +12,23 @@
 use super::{Shared, State, Tri, color, lock};
 use crate::session;
 use std::io::{Read, Seek, SeekFrom};
+use std::sync::OnceLock;
+use std::time::Instant;
 use tspmo_core::display::dimming;
 use tspmo_sys::{SysRoot, backlight};
 
-/// How long the backlight must hold still before the daemon treats it as the user's choice.
-const SETTLE: std::time::Duration = std::time::Duration::from_millis(120);
+/// `TSPMOD_TRACE_DIM=1`: log every backlight read and write and profile load with a timestamp
+/// (the sequence one key press produces; see docs/display.md).
+pub fn trace(what: &str) {
+    static ON: OnceLock<Option<Instant>> = OnceLock::new();
+    let start = ON.get_or_init(|| std::env::var_os("TSPMOD_TRACE_DIM").map(|_| Instant::now()));
+    if let Some(t) = start {
+        eprintln!(
+            "tspmod: dim {:>8.1} ms  {what}",
+            t.elapsed().as_secs_f64() * 1000.0
+        );
+    }
+}
 
 /// The daemon's view of brightness.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -67,10 +79,23 @@ fn backlight_pct(b: &backlight::Backlight) -> f64 {
     f64::from(b.actual.unwrap_or(b.brightness)) * 100.0 / f64::from(b.max.max(1))
 }
 
+/// The last backlight value (percent) the daemon wrote and when: for a moment after the write,
+/// the backlight showing it was us. Later, the same value is a change by someone else that
+/// lands exactly there (KDE choosing the floor itself from below it).
+static OWN: std::sync::Mutex<(f64, Option<Instant>)> = std::sync::Mutex::new((-1.0, None));
+
+/// How long after our own write the backlight showing that value is taken as our echo.
+const ECHO: std::time::Duration = std::time::Duration::from_millis(250);
+
 fn write_backlight(root: &SysRoot, b: &backlight::Backlight, pct: f64) -> Result<(), String> {
     let raw = (pct / 100.0 * f64::from(b.max))
         .round()
         .clamp(1.0, f64::from(b.max)) as u32;
+    *OWN.lock().unwrap_or_else(|p| p.into_inner()) = (
+        f64::from(raw) * 100.0 / f64::from(b.max.max(1)),
+        Some(Instant::now()),
+    );
+    trace(&format!("write backlight {raw}"));
     root.write(
         format!("{}/{}/brightness", backlight::CLASS, b.name),
         &raw.to_string(),
@@ -112,11 +137,22 @@ fn apply_level(shared: &Shared, level: f64) -> Result<(), String> {
     if before.level != next.level {
         lock(shared).save();
     }
-    if split.dimming_pct < 99.5 || lock(shared).color.dimmed {
+    // The profile for this dimming is already in force (KDE's steps often end on the same one):
+    // loading it again is 50 ms of compositor work for nothing.
+    let in_force = {
+        let s = lock(shared);
+        s.color.icc_loaded
+            && s.color.dimmed
+            && before.dimming_pct.round() == next.dimming_pct.round()
+            && split.dimming_pct < 99.5
+    };
+    if (split.dimming_pct < 99.5 || lock(shared).color.dimmed) && !in_force {
+        trace(&format!("load profile, dimming {:.0}%", split.dimming_pct));
         if let Err(e) = color::apply_profile(shared) {
             record(before);
             return Err(e);
         }
+        trace("profile loaded");
     }
     write_backlight(&root, &dev, split.backlight_pct)?;
     Ok(())
@@ -176,6 +212,7 @@ pub fn reapply(shared: &Shared) -> Result<(), String> {
 /// Something else changed the backlight (KDE's slider or keys, power management): that is the
 /// new level. KDE keeps its own value rather than re-reading the backlight the daemon holds at
 /// the floor, so its next key step starts from the level, not from the floor.
+#[cfg(test)]
 pub fn follow(shared: &Shared) -> Result<(), String> {
     let (root, connector, written, on) = {
         let s = lock(shared);
@@ -192,6 +229,15 @@ pub fn follow(shared: &Shared) -> Result<(), String> {
         return Ok(()); // our own write
     }
     if on {
+        trace(&format!("backlight moved to {now:.1}% (we wrote {written:.1}%)"));
+        // KDE just wrote a value below the floor: the screen is darker than asked, flickering,
+        // and stays so until the compositor call below returns. Put the backlight back at
+        // once (a plain write, microseconds); the picture is darkened right after, so the
+        // screen only ever gets darker, never darker and then back.
+        let floor = lock(shared).floor_pct;
+        if let Some(pin) = pin_for(now, floor) {
+            write_backlight(&root, &dev, pin)?;
+        }
         return apply_level(shared, now);
     }
     // Plain backlight: just keep track.
@@ -203,8 +249,85 @@ pub fn follow(shared: &Shared) -> Result<(), String> {
     Ok(())
 }
 
-/// Block until the backlight changes, call [`follow`] each time. The kernel signals changes of
-/// `actual_brightness` with POLLPRI, so the thread sleeps in `poll(2)` and costs nothing idle.
+/// How long KDE's steps must pause before the level is checked against KDE's own.
+const QUIET: std::time::Duration = std::time::Duration::from_millis(350);
+
+/// KDE's brightness service for the internal panel: its object path and its maximum, found once.
+fn kde_display(root: &SysRoot) -> Option<&'static (String, f64)> {
+    static DISPLAY: OnceLock<Option<(String, f64)>> = OnceLock::new();
+    DISPLAY
+        .get_or_init(|| {
+            const SVC: &str = "org.kde.ScreenBrightness";
+            let iface = "org.kde.ScreenBrightness.Display";
+            let call = |args: &[&str]| -> Option<String> {
+                let mut a = vec!["--user", "--timeout=2", "get-property", SVC];
+                a.extend_from_slice(args);
+                let out = session::run_in_session(root, "busctl", &a)?;
+                out.ok.then_some(out.stdout)
+            };
+            let names = call(&["/org/kde/ScreenBrightness", SVC, "DisplaysDBusNames"])?;
+            for name in names.split('"').skip(1).step_by(2) {
+                let path = format!("/org/kde/ScreenBrightness/{name}");
+                if !call(&[&path, iface, "IsInternal"])?.contains("true") {
+                    continue;
+                }
+                let max: f64 = call(&[&path, iface, "MaxBrightness"])?
+                    .split_whitespace()
+                    .nth(1)?
+                    .parse()
+                    .ok()?;
+                return (max > 0.0).then_some((path, max));
+            }
+            None
+        })
+        .as_ref()
+}
+
+/// What KDE's brightness service holds for the internal panel, percent: the level the user chose
+/// with the keys or the slider. KDE sets it to the *target* at once and then eases the backlight
+/// towards it in steps, so it is known before the steps arrive (and the steps themselves, which
+/// KDE shapes by what it sees us write, are not a reliable way to learn it).
+fn kde_level(root: &SysRoot) -> Option<f64> {
+    let (path, max) = kde_display(root)?;
+    let out = session::run_in_session(
+        root,
+        "busctl",
+        &[
+            "--user",
+            "--timeout=2",
+            "get-property",
+            "org.kde.ScreenBrightness",
+            path,
+            "org.kde.ScreenBrightness.Display",
+            "Brightness",
+        ],
+    )?;
+    let v: f64 = out
+        .ok
+        .then_some(out.stdout)?
+        .split_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()?;
+    Some((v * 100.0 / max).clamp(1.0, 100.0))
+}
+
+/// Where the backlight must be put back to when something wrote `now` percent: the floor when
+/// `now` is below it, nothing otherwise.
+fn pin_for(now: f64, floor: u32) -> Option<f64> {
+    let pin = dimming::split(now, floor).backlight_pct;
+    (now < pin - 0.3).then_some(pin)
+}
+
+/// Follow the backlight. Two threads, because the two jobs have different deadlines:
+///
+/// * `backlight` sleeps in `poll(2)` (the kernel signals changes of `actual_brightness` with
+///   POLLPRI, so it costs nothing idle). When something other than the daemon moved the
+///   backlight, it records the value as the new level and, if that is below the floor, writes
+///   the floor back at once. KDE eases in steps, so this happens for every step, and the screen
+///   spends microseconds, not the length of a compositor call, below the floor.
+/// * `backlight-apply` then loads the dimming for the newest level (about 50 ms), and the
+///   screen only ever gets darker on the way down.
 pub fn watch(conn: zbus::Connection, shared: Shared) {
     let (root, connector) = {
         let s = lock(&shared);
@@ -217,40 +340,90 @@ pub fn watch(conn: zbus::Connection, shared: Shared) {
     let Ok(mut file) = std::fs::File::open(path) else {
         return;
     };
+    // Where the backlight is at start is not a change: whoever left it there (the daemon, at
+    // the floor, or KDE at login) is handled by `reapply`.
+    {
+        let mut own = OWN.lock().unwrap_or_else(|p| p.into_inner());
+        if own.0 < 0.0 {
+            own.0 = backlight_pct(&dev);
+        }
+    }
+    let pending: std::sync::Arc<std::sync::Mutex<Option<f64>>> = Default::default();
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    {
+        let (shared, conn, pending) = (shared.clone(), conn.clone(), pending.clone());
+        let root_for_kde = root.clone();
+        let _ = std::thread::Builder::new()
+            .name("backlight-apply".into())
+            .stack_size(256 * 1024)
+            .spawn(move || {
+                let apply = |level: f64| {
+                    let _g = super::events::COMPOSITOR
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner());
+                    if let Err(e) = apply_level(&shared, level) {
+                        eprintln!("tspmod: brightness: {e}");
+                    }
+                    super::dbus::emit_changed_blocking(&conn, &shared);
+                };
+                while rx.recv().is_ok() {
+                    // Keep applying the newest level while KDE's steps keep coming.
+                    loop {
+                        if let Some(seen) = pending.lock().unwrap_or_else(|p| p.into_inner()).take() {
+                            // The target KDE is easing towards, not the step it is at.
+                            apply(kde_level(&root_for_kde).unwrap_or(seen));
+                        }
+                        if rx.recv_timeout(QUIET).is_err() {
+                            break;
+                        }
+                    }
+                    // KDE's last write can land exactly on the pinned floor, where the backlight
+                    // does not change and nothing is seen: ask KDE what it thinks the level is.
+                    let level = lock(&shared).flicker_state.level;
+                    if let Some(kde) = kde_level(&root_for_kde) {
+                        if (kde - level).abs() >= 1.0 {
+                            trace(&format!("KDE says {kde:.0}%, we had {level:.0}%"));
+                            apply(kde);
+                        }
+                    }
+                }
+            });
+    }
     let _ = std::thread::Builder::new()
         .name("backlight".into())
         .stack_size(256 * 1024)
         .spawn(move || {
             use rustix::event::{PollFd, PollFlags, poll};
             let mut buf = String::with_capacity(16);
-            let mut read = |file: &mut std::fs::File| -> Option<String> {
-                buf.clear();
-                file.seek(SeekFrom::Start(0)).ok()?;
-                file.read_to_string(&mut buf).ok()?;
-                Some(buf.clone())
+            let mut known = {
+                let s = lock(&shared);
+                (s.flicker_free(), s.floor_pct)
             };
             loop {
-                // KDE eases the backlight in small steps: wait until it stops moving, so the
-                // last value (the one the user asked for) is the one we act on.
-                let Some(mut last) = read(&mut file) else {
+                buf.clear();
+                if file.seek(SeekFrom::Start(0)).is_err() || file.read_to_string(&mut buf).is_err() {
                     return;
-                };
-                loop {
-                    std::thread::sleep(SETTLE);
-                    match read(&mut file) {
-                        Some(v) if v == last => break,
-                        Some(v) => last = v,
-                        None => return,
-                    }
                 }
-                if lock(&shared).flicker_free() {
-                    let _g = super::events::COMPOSITOR
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner());
-                    if let Err(e) = follow(&shared) {
-                        eprintln!("tspmod: brightness: {e}");
+                let now = buf
+                    .trim()
+                    .parse::<f64>()
+                    .map_or(-1.0, |v| v * 100.0 / f64::from(dev.max.max(1)));
+                let (own, at) = *OWN.lock().unwrap_or_else(|p| p.into_inner());
+                let echo = (now - own).abs() < 0.3 && at.is_none_or(|t| t.elapsed() < ECHO);
+                // The state lock can be held for a while by the thread that loads profiles (it
+                // builds a new one under it): never wait for it here, the pin is time-critical.
+                if let Ok(s) = shared.try_lock() {
+                    known = (s.flicker_free(), s.floor_pct);
+                }
+                if known.0 && now >= 0.0 && !echo {
+                    trace(&format!("backlight moved to {now:.1}% (we wrote {own:.1}%)"));
+                    if let Some(pin) = pin_for(now, known.1) {
+                        if let Err(e) = write_backlight(&root, &dev, pin) {
+                            eprintln!("tspmod: brightness: {e}");
+                        }
                     }
-                    super::dbus::emit_changed_blocking(&conn, &shared);
+                    *pending.lock().unwrap_or_else(|p| p.into_inner()) = Some(now);
+                    let _ = tx.send(());
                 }
                 let mut fds = [PollFd::new(&file, PollFlags::PRI | PollFlags::ERR)];
                 if poll(&mut fds, None).is_err() {
@@ -263,6 +436,14 @@ pub fn watch(conn: zbus::Connection, shared: Shared) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn below_the_floor_the_backlight_is_pinned_at_the_floor() {
+        assert_eq!(pin_for(25.0, 30), Some(30.0));
+        assert_eq!(pin_for(1.0, 30), Some(30.0));
+        assert_eq!(pin_for(30.0, 30), None);
+        assert_eq!(pin_for(55.0, 30), None);
+    }
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
 

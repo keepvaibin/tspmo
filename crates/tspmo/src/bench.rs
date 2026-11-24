@@ -25,7 +25,9 @@ A condition is `base` or settings joined with `+`:
     pkg=<long>/<short>      CPU package power limit, watts (RAPL)
     psys=<long>/<short>     platform power limit, watts (RAPL)
     uncore=<mhz>            uncore maximum clock
-    noturbo                 CPU turbo off
+    noturbo | turbo         CPU turbo off | on
+    epp=<preference>        energy preference of every CPU (power, balance_power, ...)
+    pcap=<mhz>              maximum clock of the performance cores
     cpus=e | lpe | p | <list>   run everything on these CPUs only
     profile=<mode>          tspmo power mode (eco-plus, power-saver, ...)
     pkgwin=<ms>             package power limit (PL1) time window
@@ -40,6 +42,7 @@ OPTIONS:
     --measure S     seconds measured per condition (default 20)
     --workers N     load threads (default 2)
     --no-load       measure an idle system
+    --no-wake       also leave out the 1 ms timer thread (it keeps the CPU out of deep idle)
     --bg N          run N busy threads as a background load (in a systemd scope; see bgcpus,
                     bgweight)
     --hold-charge   stop charging while measuring, when on AC (the battery then reads zero;
@@ -89,6 +92,12 @@ pub enum Setting {
     Psys(u32, u32),
     Uncore(u32),
     NoTurbo,
+    /// Turbo forced on (undoes a profile's no-turbo).
+    Turbo,
+    /// Energy preference of every CPU (`power`, `balance_power`, ...).
+    Epp(String),
+    /// Maximum clock of the performance cores, MHz.
+    Pcap(u32),
     Cpus(String),
     Profile(String),
     /// Package power limit time window, milliseconds (PL1).
@@ -134,6 +143,9 @@ pub fn parse_condition(text: &str) -> Result<Condition, String> {
             }
             "uncore" => Setting::Uncore(v.parse().map_err(|_| format!("uncore={v}: not a number"))?),
             "noturbo" => Setting::NoTurbo,
+            "turbo" => Setting::Turbo,
+            "epp" if !v.is_empty() => Setting::Epp(v.to_owned()),
+            "pcap" => Setting::Pcap(v.parse().map_err(|_| format!("pcap={v}: not a number"))?),
             "pkgwin" => Setting::PkgWindow(v.parse().map_err(|_| format!("pkgwin={v}: not a number"))?),
             "ecap" => Setting::Ecap(v.parse().map_err(|_| format!("ecap={v}: not a number"))?),
             "bgcpus" if !v.is_empty() => Setting::BgCpus(v.to_owned()),
@@ -358,6 +370,19 @@ impl Rig {
                     &(mhz * 1000).to_string(),
                 ),
                 Setting::NoTurbo => self.write("/sys/devices/system/cpu/intel_pstate/no_turbo", "1"),
+                Setting::Turbo => self.write("/sys/devices/system/cpu/intel_pstate/no_turbo", "0"),
+                Setting::Epp(v) => {
+                    let glob = "/sys/devices/system/cpu/cpufreq/policy*/energy_performance_preference";
+                    for p in SysRoot::default().glob(glob) {
+                        self.write(&p, v);
+                    }
+                }
+                Setting::Pcap(mhz) => {
+                    for cpu in self.topo.performance.clone() {
+                        let p = format!("/sys/devices/system/cpu/cpu{cpu}/cpufreq/scaling_max_freq");
+                        self.write(&p, &(mhz * 1000).to_string());
+                    }
+                }
                 Setting::PkgWindow(ms) => {
                     for z in tspmo_core::power::rapl_zones(&SysRoot::default()) {
                         if z.is_package() {
@@ -467,15 +492,22 @@ fn start_jitter(stop: Arc<AtomicBool>, log: Arc<Mutex<Vec<(Instant, f64)>>>) -> 
     })
 }
 
-/// The background load: `n` busy threads in a transient systemd scope, so their CPUs and weight
-/// can be set like a build's would be. Stopped by killing the scope's process.
+/// The background load: `n` busy threads in a transient systemd service, so their CPUs and weight
+/// can be set like a build's would be. Stopped with the slice.
 fn start_background(n: usize, c: &Condition, topo: &topology::Topology) -> Option<std::process::Child> {
     if n == 0 {
         return None;
     }
     let exe = std::env::current_exe().ok()?;
     let mut cmd = Command::new("systemd-run");
-    cmd.args(["--scope", "--quiet", "--collect", "--slice=tspmo-bench.slice"]);
+    // A service, not a scope: its parent is systemd, as for a build started from a terminal's
+    // job, and unlike the bench's own foreground threads it is not mistaken for their child.
+    cmd.args([
+        "--quiet",
+        "--collect",
+        "--slice=tspmo-bench.slice",
+        "--unit=tspmo-bench-load",
+    ]);
     for s in &c.settings {
         match s {
             Setting::BgWeight(w) => {
@@ -558,7 +590,7 @@ fn zone_energy(psys: bool) -> Option<(String, u64)> {
 
 fn bench(args: &[String]) -> Result<(), String> {
     let (mut rounds, mut settle, mut measure, mut workers) = (3usize, 8u64, 20u64, 2usize);
-    let (mut load, mut hold) = (true, false);
+    let (mut load, mut hold, mut wake) = (true, false, true);
     let mut bg = 0usize;
     let mut conds = Vec::new();
     let mut it = args.iter();
@@ -574,6 +606,7 @@ fn bench(args: &[String]) -> Result<(), String> {
             "--measure" => measure = num("--measure")?.max(2),
             "--workers" => workers = num("--workers")? as usize,
             "--no-load" => load = false,
+            "--no-wake" => wake = false,
             "--bg" => bg = num("--bg")? as usize,
             "--hold-charge" => hold = true,
             c => conds.push(parse_condition(c)?),
@@ -616,7 +649,7 @@ fn bench(args: &[String]) -> Result<(), String> {
         let cap = read_u64("/sys/class/power_supply/BAT1/capacity").unwrap_or(50);
         let orig = std::fs::read_to_string(charge).ok().map(|v| v.trim().to_owned());
         let status = || std::fs::read_to_string("/sys/class/power_supply/BAT1/status").unwrap_or_default();
-        let chosen = (20..cap).rev().find(|n| {
+        let chosen = (20..=cap).rev().find(|n| {
             if std::fs::write(charge, n.to_string()).is_err() || read_u64(charge) != Some(*n) {
                 return false;
             }
@@ -649,7 +682,9 @@ fn bench(args: &[String]) -> Result<(), String> {
         Vec::new()
     };
     let wake_log = Arc::new(Mutex::new(Vec::new()));
-    threads.push(start_jitter(stop.clone(), wake_log.clone()));
+    if wake {
+        threads.push(start_jitter(stop.clone(), wake_log.clone()));
+    }
     let pkg = zone_energy(false);
     let psys = zone_energy(true);
 
@@ -703,6 +738,11 @@ fn bench(args: &[String]) -> Result<(), String> {
                 // The scope's own processes die with the unit.
                 let _ = Command::new("systemctl")
                     .args(["stop", "--quiet", "tspmo-bench.slice"])
+                    .stderr(Stdio::null())
+                    .status();
+                // Eco+'s guard may have moved the load out of the unit: stop it by name.
+                let _ = Command::new("pkill")
+                    .args(["-f", "bench --burn"])
                     .stderr(Stdio::null())
                     .status();
             }

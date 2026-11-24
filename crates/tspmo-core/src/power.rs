@@ -85,25 +85,41 @@ impl Profile {
     }
 }
 
-/// Caps Eco+ puts on top of power-saver (watts; `None` leaves that limit alone).
+/// What Eco+ puts on top of power-saver (watts, MHz; `None` leaves that limit alone).
+///
+/// Eco+ is a sustained-power budget with room for bursts, not a flat cap: the first design
+/// (package 5/7 W, no turbo, uncore 1.6 GHz) starved the desktop whenever a build ran, because
+/// a power limit slows every core alike. Now a long-term limit (PL1) averaged over a window and
+/// a high short-term limit (PL2) bound the draw; the efficiency cores that background work runs
+/// on are held to a low clock (see `tspmod`'s guard), which keeps that work cheap and leaves
+/// the performance cores' share of the budget to the foreground. Measurements: docs/power.md.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EcoLimits {
-    /// CPU package: (long-term, short-term).
+    /// CPU package: (long-term PL1, short-term PL2).
     pub pkg_w: Option<(u32, u32)>,
+    /// PL1 averaging window.
+    pub pkg_window_ms: Option<u32>,
     /// Whole platform (RAPL `psys`): (long-term, short-term).
     pub psys_w: Option<(u32, u32)>,
     /// Uncore (ring/L3/memory fabric) maximum clock.
     pub uncore_max_mhz: Option<u32>,
+    /// Maximum clock of the efficiency and low-power efficiency cores.
+    pub ecap_mhz: Option<u32>,
+    /// Energy/performance hint of the CPUs: one of the kernel's names (`performance`,
+    /// `balance_performance`, `balance_power`, `power`). A raw number is not the same thing:
+    /// `128` measured 1.65x slower than `balance_performance` on this machine.
+    pub epp: &'static str,
 }
 
 impl Default for EcoLimits {
     fn default() -> Self {
         Self {
-            // The user's target (5 W sustained, 7 W burst) works at the package; see docs/power.md.
-            // A platform (psys) cap does not: at 9/12 W light work slows 4.7x (400 MHz).
-            pkg_w: Some((5, 7)),
+            pkg_w: Some((12, 28)),
+            pkg_window_ms: Some(10_000),
             psys_w: None,
-            uncore_max_mhz: Some(1600),
+            uncore_max_mhz: None,
+            ecap_mhz: Some(1200),
+            epp: "balance_performance",
         }
     }
 }
@@ -175,7 +191,8 @@ pub fn plan(
 
     // 2. CPU energy/performance preference (intel_pstate and amd-pstate active mode).
     let epp = match (profile, on_battery) {
-        (Profile::PowerSaver | Profile::EcoPlus, _) => "power",
+        (Profile::EcoPlus, _) => t.eco.epp,
+        (Profile::PowerSaver, _) => "power",
         (Profile::Balanced, true) => "balance_power",
         (Profile::Balanced, false) => "balance_performance",
         (Profile::Performance, _) => "performance",
@@ -195,7 +212,8 @@ pub fn plan(
 
     // 3. Intel energy-performance bias (affects uncore/package decisions besides HWP).
     let epb = match (profile, on_battery) {
-        (Profile::PowerSaver | Profile::EcoPlus, _) => "15",
+        (Profile::EcoPlus, _) => "8",
+        (Profile::PowerSaver, _) => "15",
         (Profile::Balanced, true) => "8",
         (Profile::Balanced, false) => "6",
         (Profile::Performance, _) => "0",
@@ -205,8 +223,9 @@ pub fn plan(
     }
 
     // 4. Turbo.
-    let turbo = !(profile == Profile::EcoPlus
-        || (profile == Profile::PowerSaver && on_battery && t.saver_no_turbo_on_battery));
+    // Eco+ keeps turbo: a burst that finishes fast costs less than a slow one that keeps the
+    // package out of its idle states, and the budget (PL1) bounds the average anyway.
+    let turbo = !(profile == Profile::PowerSaver && on_battery && t.saver_no_turbo_on_battery);
     if root.exists(format!("{CPU}/intel_pstate/no_turbo")) {
         out.push(w(
             format!("{CPU}/intel_pstate/no_turbo"),
@@ -327,12 +346,38 @@ pub fn eco_snapshot(root: &SysRoot) -> Vec<Write> {
                 out.push(w(path.clone(), v, "power limit"));
             }
         }
+        if let Some(win) = z.long.as_ref().map(|l| window_path(l)) {
+            if let Some(v) = root.read_opt(&win) {
+                out.push(w(win, v, "power limit window"));
+            }
+        }
+    }
+    for p in efficiency_clock_paths(root) {
+        if let Some(v) = root.read_opt(&p) {
+            out.push(w(p, v, "efficiency core clock"));
+        }
     }
     let max = format!("{UNCORE}/max_freq_khz");
     if let Some(v) = root.read_opt(&max) {
         out.push(w(max, v, "uncore clock"));
     }
     out
+}
+
+/// The time-window file next to a long-term limit file.
+fn window_path(limit: &str) -> String {
+    limit.replace("power_limit_uw", "time_window_us")
+}
+
+/// `scaling_max_freq` of every efficiency and low-power efficiency core.
+fn efficiency_clock_paths(root: &SysRoot) -> Vec<String> {
+    let t = crate::topology::detect(root);
+    [t.efficiency, t.low_power]
+        .concat()
+        .into_iter()
+        .map(|c| format!("{CPU}/cpu{c}/cpufreq/scaling_max_freq"))
+        .filter(|p| root.exists(p))
+        .collect()
 }
 
 fn uw(watts: u32) -> String {
@@ -353,6 +398,27 @@ pub fn eco_writes(root: &SysRoot, eco: &EcoLimits) -> Vec<Write> {
         }
         if let Some(p) = &z.short {
             out.push(w(p.clone(), uw(short.max(long)), "power limit"));
+        }
+        if let (Some(ms), Some(l), true) = (eco.pkg_window_ms, &z.long, z.is_package()) {
+            let win = window_path(l);
+            if root.exists(&win) {
+                out.push(w(win, (u64::from(ms) * 1000).to_string(), "power limit window"));
+            }
+        }
+    }
+    if let Some(mhz) = eco.ecap_mhz {
+        for p in efficiency_clock_paths(root) {
+            let max: u32 = root
+                .read_parse(p.replace("scaling_max_freq", "cpuinfo_max_freq"))
+                .unwrap_or(u32::MAX);
+            let min: u32 = root
+                .read_parse(p.replace("scaling_max_freq", "cpuinfo_min_freq"))
+                .unwrap_or(0);
+            out.push(w(
+                p,
+                (mhz * 1000).clamp(min, max).to_string(),
+                "efficiency core clock",
+            ));
         }
     }
     if let Some(mhz) = eco.uncore_max_mhz {
@@ -581,7 +647,7 @@ mod tests {
             w.iter()
                 .any(|w| w.path.ends_with("intel-rapl:0/constraint_0_power_limit_uw"))
         );
-        assert_eq!(eco_snapshot(&root).len(), 5); // 2+2 limits, uncore clock
+        assert_eq!(eco_snapshot(&root).len(), 7); // 2+2 limits, 2 windows, uncore clock
     }
 
     #[test]
@@ -612,6 +678,7 @@ mod tests {
                 pkg_w: Some((8, 12)),
                 psys_w: None,
                 uncore_max_mhz: Some(1600),
+                ..EcoLimits::default()
             },
             ..Tunables::default()
         };
@@ -619,7 +686,7 @@ mod tests {
         assert_eq!(saved.len(), 7); // 3 zones x 2 limits + uncore
         let p = plan(&root, Profile::EcoPlus, true, &t, &[]);
         assert_eq!(get(&p, "firmware thermal mode"), ["quiet"]);
-        assert_eq!(get(&p, "CPU turbo"), ["1"]); // no_turbo=1 even on AC
+        assert_eq!(get(&p, "CPU turbo"), ["0"]); // Eco+ keeps turbo (no_turbo=0)
         let r = apply(&root, &p);
         assert!(r.failed.is_empty(), "{:?}", r.failed);
         assert_eq!(
@@ -665,6 +732,7 @@ mod tests {
             pkg_w: Some((10, 5)), // short-term below long-term makes no sense
             psys_w: Some((6, 8)),
             uncore_max_mhz: Some(100), // below the hardware minimum
+            ..EcoLimits::default()
         };
         let w = eco_writes(&f.root(), &eco);
         let v = |what: &str| -> Vec<String> {

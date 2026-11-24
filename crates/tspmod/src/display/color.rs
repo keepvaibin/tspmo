@@ -48,9 +48,19 @@ pub struct Settings {
     pub saved_nightlight: Option<[String; 3]>,
     /// A dimming profile is loaded in the compositor (so it must be replaced to undim).
     pub dimmed: bool,
+    /// The compositor's colour source for the panel is ICC (set by us since the last
+    /// [`Settings::forget_source`]). Setting it again makes KWin re-apply the output and write
+    /// the backlight to 100 % for a moment: a flash, on every brightness step.
+    pub icc_loaded: bool,
 }
 
 impl Settings {
+    /// The compositor may have reset the output (login, resume, a mode change): the next
+    /// profile load sets the source again.
+    pub fn forget_source(&mut self) {
+        self.icc_loaded = false;
+    }
+
     pub fn load(&mut self, key: &str, v: &str) {
         match key {
             "color_mode" => self.mode = Mode::parse(v).unwrap_or(self.mode),
@@ -123,7 +133,7 @@ fn build_profile(s: &State, mode: Mode, dim_pct: u32) -> Result<Vec<u8>, String>
 /// Make the compositor show the colour mode and dimming in force now. Profiles are files named
 /// by mode and dimming, written once and kept (the compositor identifies them by path).
 pub fn apply_profile(shared: &Shared) -> Result<(), String> {
-    let (root, connector, dim_pct, path, bytes) = {
+    let (root, connector, dim_pct, path, bytes, icc_loaded) = {
         let s = lock(shared);
         let dim_pct = s.flicker_state.dimming_pct.round().clamp(1.0, 100.0) as u32;
         let mode = s.color.mode;
@@ -144,7 +154,14 @@ pub fn apply_profile(shared: &Shared) -> Result<(), String> {
             };
             (Some(path), bytes)
         };
-        (s.root.clone(), connector, dim_pct, path, bytes)
+        (
+            s.root.clone(),
+            connector,
+            dim_pct,
+            path,
+            bytes,
+            s.color.icc_loaded,
+        )
     };
     let mut args: Vec<String> = Vec::new();
     match &path {
@@ -153,13 +170,19 @@ pub fn apply_profile(shared: &Shared) -> Result<(), String> {
                 write_profile_file(p, &bytes)?;
             }
             args.push(kscreen::set_icc_profile(&connector, &p.to_string_lossy()));
-            args.push(kscreen::set_color_source(&connector, "ICC"));
+            if !icc_loaded {
+                args.push(kscreen::set_color_source(&connector, "ICC"));
+            }
         }
         None => args.push(kscreen::set_color_source(&connector, "sRGB")),
     }
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     kscreen_doctor(&root, &refs)?;
-    lock(shared).color.dimmed = dim_pct < 100;
+    {
+        let mut s = lock(shared);
+        s.color.dimmed = dim_pct < 100;
+        s.color.icc_loaded = path.is_some();
+    }
     if let Some(p) = &path {
         prune(p.parent(), p);
     }
@@ -313,6 +336,7 @@ mod tests {
             eyecare_k: 4500,
             saved_nightlight: Some(["".into(), "Automatic".into(), "4000".into()]),
             dimmed: false,
+            icc_loaded: false,
         };
         let text = s.save();
         let mut t = Settings::default();

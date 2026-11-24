@@ -9,6 +9,7 @@ mod dbus;
 mod display;
 mod events;
 mod gpu;
+mod guard;
 mod polkit;
 mod session;
 mod state;
@@ -21,7 +22,9 @@ fn main() {
     // `tspmod --restore-limits`, run by systemd when the daemon stops: Eco+'s power caps must
     // not outlive the daemon that set them.
     if std::env::args().nth(1).as_deref() == Some("--restore-limits") {
-        state::restore_saved(&SysRoot::from_env());
+        let root = SysRoot::from_env();
+        state::restore_saved(&root);
+        guard::shutdown(&root);
         return;
     }
     if let Err(e) = run() {
@@ -36,6 +39,12 @@ fn run() -> zbus::Result<()> {
     let mut daemon = state::Daemon::new(root);
     // Tune the machine before anyone can ask: the profile, then the GPU policy.
     daemon.apply(true);
+    // Background jobs a previous daemon moved aside: back, unless Eco+ keeps them there.
+    if daemon.effective().is_eco_plus() {
+        guard::set_active(&daemon.root, true);
+    } else {
+        guard::shutdown(&daemon.root);
+    }
     let n = tspmo_core::usbpm::apply(&daemon.root);
     if n > 0 {
         eprintln!("tspmod: internal USB devices allowed to sleep: {n}");
@@ -97,11 +106,39 @@ fn run() -> zbus::Result<()> {
                 let mut l = last.lock().unwrap_or_else(|p| p.into_inner());
                 if *l != *eco_plus {
                     *l = *eco_plus;
+                    guard::set_active(&SysRoot::from_env(), *eco_plus);
                     let (c, s) = (c.clone(), Arc::clone(&s));
                     let _ = std::thread::Builder::new()
                         .name("eco-plus-gpu".into())
                         .spawn(move || gpu::enforce(&c, &s));
                 }
+            }
+        });
+    }
+
+    // Fn+F5 with Fn-lock on reaches the keyboard driver as a plain key that nothing cycles:
+    // if the kernel did not change the thermal mode, the daemon does.
+    {
+        let (c, s) = (conn.inner().clone(), Arc::clone(&shared));
+        events::subscribe(move |e| {
+            if let events::Event::FanKey = e {
+                let (c, s) = (c.clone(), Arc::clone(&s));
+                let before = SysRoot::from_env().read_opt(tspmo_core::power::PLATFORM_PROFILE);
+                let _ = std::thread::Builder::new().name("fan-key".into()).spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(400));
+                    let root = SysRoot::from_env();
+                    if root.read_opt(tspmo_core::power::PLATFORM_PROFILE) != before {
+                        return; // the kernel cycled it; the watcher follows
+                    }
+                    let next = {
+                        let mut d = s.lock().unwrap_or_else(|p| p.into_inner());
+                        let next = d.chosen().next();
+                        d.choose(next);
+                        next
+                    };
+                    dbus::osd_mode(next);
+                    zbus::block_on(dbus::emit_changed(&c, &s));
+                });
             }
         });
     }

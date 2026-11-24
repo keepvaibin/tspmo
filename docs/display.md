@@ -46,15 +46,62 @@ Measured on the GU605MI: with the 40% profile loaded, platform power was about 1
 both of two runs (60 Hz, AC; 22.0 to 20.0 W and 20.3 to 18.5 W; a busy desktop), so the darkening
 reaches the panel. Screenshots do not show it (they are taken before the colour transform).
 
-How the level is tracked. KDE's brightness keys and slider write the backlight
-(`/sys/class/backlight/intel_backlight/brightness`). `tspmod` sleeps in `poll(2)` on
-`actual_brightness`, waits for the value to stop moving (KDE eases it in 20 ms steps), and treats
-the final value as the new level. KDE keeps its own copy of the value and does not adopt the
-backlight the daemon holds at the floor, so the next key press steps from the level, not from the
-floor. Measured through KDE's own API (`org.kde.ScreenBrightness`): setting 10, 7, 20, 15, 35 and
-10 percent gave backlight 30, 30, 30, 30, 35, 30 percent and levels 10, 7, 20, 15, 35, 10; six
-`AdjustBrightnessStep` presses moved the level 15, 20, 25, 20, 15, 10. The brightness OSD is
-KDE's own.
+How the level is tracked. KDE's brightness keys and slider (`org.kde.ScreenBrightness`) set a
+target and then ease the backlight towards it in steps about 24 ms apart, writing
+`/sys/class/backlight/intel_backlight/brightness` through its helper. `tspmod` has two threads
+for this, because the two jobs have different deadlines:
+
+- `backlight` sleeps in `poll(2)` on `actual_brightness`. For every value that is not its own
+  write and is below the floor, it writes the floor back at once (a plain sysfs write, about
+  1 ms after KDE's) and hands the newest value on.
+- `backlight-apply` asks KDE for its target (`Brightness` of the internal display, one `busctl`
+  call), loads the dimming for it (about 50 ms) and writes the backlight. A profile already in
+  force is not loaded again. When KDE's steps stop, it checks KDE's value once more: KDE's last
+  write can land exactly on the floor, where the backlight does not change and nothing is seen.
+
+Brightness is `backlight x dimming`, and each step only ever lowers it on the way down.
+
+### The pulse (fixed)
+
+Symptom: at low brightness each key press made the screen go darker and then settle at the
+intended level. Measured with `tools/test/dim-trace.py` (samples the backlight about every
+millisecond while KDE moves from 40 to 25 percent; floor 30 %):
+
+```
+before:   40.0  38.5  30.9  25.4 ........... (261 ms at 25 %, below the floor) ......  30.1
+after:    40.0  38.5  33.8  30.1 (29.3 for 1.4 ms)  30.1  (25.2 for 1.2 ms)  30.1
+```
+
+Cause. The daemon waited for KDE's easing to stop (120 ms) and then loaded the profile (50 to
+100 ms) *before* putting the backlight back at the floor. For about 260 ms the backlight was at
+KDE's value, below the floor, with the old dimming still in force: darker than the level asked
+for (and in the flickering range), then the profile and the floor arrived and the screen came
+back up to the level.
+
+Also found with a backlight sampler and the kernel's function tracer on
+`backlight_device_set_brightness` (writers: KDE's `backlighthelper` and `tspmod` only):
+
+- `colorProfileSource.ICC` was sent with every profile. KWin re-applies the output then and
+  writes the backlight to 100 % for about 1 ms, 150 to 250 ms later: a flash on every step. It
+  is now sent once; later loads send only the profile path (verified: no write at all, and
+  `kscreen-doctor -o` shows the new profile). It is sent again after login, resume and refresh
+  changes (a reset output).
+- KDE's own easing writes transient values (down to 0 % and up to 100 % were seen) for one
+  sample each, with or without tspmo. Those are pinned within about 1 ms now.
+- KDE shapes its next steps by what it reads back from the backlight, so the steps seen while
+  tspmod pins the floor are not the user's level (a target of 25 produced steps down to 7.6 %).
+  The level is read from KDE's `Brightness` property instead, which holds the target from the
+  first moment.
+- The state lock was held while a new profile was built (about 10 ms): the thread that pins
+  never waits for it (`try_lock`, last known floor).
+
+Result (six steps, 40 to 25, 25 to 15, 15 to 8, 8 to 22, 22 to 30, 30 to 45): the backlight is
+below the floor for 1 to 1.5 ms per KDE step (4 to 5 steps), the final level is exact every time,
+the dimming goes straight to the target in one load, nothing changes above the floor. A step that
+KDE makes exactly onto the floor from below (30 from 25) is caught by the check of KDE's value.
+
+`TSPMOD_TRACE_DIM=1` in the daemon's environment logs every backlight write and profile load with a
+timestamp (`journalctl -u tspmod -o short-precise`).
 
 The level is remembered in `/var/lib/tspmo/display`; after a restart, a backlight still where
 the daemon left it keeps the remembered level, any other value (KDE restoring its own at login)

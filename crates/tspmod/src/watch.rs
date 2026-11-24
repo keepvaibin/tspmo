@@ -69,8 +69,14 @@ pub fn platform_profile(conn: Connection, shared: Shared) {
                 return;
             }
             let value = buf.trim().to_owned();
-            let changed = lock(&shared).platform_changed(&value);
+            let (changed, now) = {
+                let mut d = lock(&shared);
+                (d.platform_changed(&value), d.effective())
+            };
             if changed {
+                // The thermal key (Fn+F5) is the one change from the user's hands with no app
+                // involved: say what it chose.
+                crate::dbus::osd_mode(now);
                 emit_changed_blocking(&conn, &shared);
             }
             let mut fds = [PollFd::new(&file, PollFlags::PRI | PollFlags::ERR)];

@@ -101,6 +101,16 @@ impl Fans1 {
             .collect()
     }
 
+    /// `(°C, label)` of the CPU package, read on each query (no change signal).
+    /// Never the NVIDIA GPU: reading its sensors wakes it.
+    #[zbus(property(emits_changed_signal = "false"))]
+    fn temps(&self) -> Vec<(u32, String)> {
+        tspmo_sys::hwmon::find(&self.0.root, "coretemp")
+            .and_then(|h| self.0.root.read_parse::<i32>(format!("{}/temp1_input", h.dir)))
+            .map(|t| vec![((t.max(0) as u32 + 500) / 1000, "CPU".to_owned())])
+            .unwrap_or_default()
+    }
+
     /// Run a custom curve (`(°C, percent)`, eight points) on `fan` (0 = all) in `mode`.
     async fn set_curve(
         &self,

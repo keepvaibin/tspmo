@@ -216,7 +216,7 @@ fn gpu(arg: Option<&str>) -> ExitCode {
         None | Some("status") => status(),
         Some("users") => match client::gpu_users() {
             Ok(u) if u.is_empty() => {
-                println!("Nothing is using the NVIDIA GPU.");
+                println!("Nothing uses the NVIDIA GPU.");
                 ExitCode::SUCCESS
             }
             Ok(u) => {
