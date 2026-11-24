@@ -1,0 +1,122 @@
+// The contract between the UI and Rust: plain data in, callbacks out.
+
+export struct Opt { id: string, label: string, icon: string }
+export struct GpuUser { pid: int, name: string }
+export struct FanRow { label: string, rpm: int, kind: string }
+export struct Pt { t: int, p: int }
+export struct LimitRow { name: string, label: string, unit: string, min: int, max: int, def: int, cur: int, custom: bool }
+export struct Item {
+    name: string,
+    label: string,
+    kind: string,
+    on: bool,
+    text: string,
+    choices: [string],
+    idx: int,
+    min: int,
+    max: int,
+    value: int,
+    writable: bool,
+}
+
+export global Bk {
+    // general
+    in property <bool> loaded;
+    in property <string> error;
+    in property <string> section;
+    in property <[Opt]> sections;
+    in property <string> mode;
+    in property <string> mode-label;
+    in property <string> fan-text;
+    in property <bool> has-gpu;
+    in property <bool> has-battery;
+    in property <bool> has-fans;
+    in property <bool> has-power;
+    in property <bool> has-light;
+    in property <bool> has-lid;
+    in property <bool> eco-available: true;
+    in property <bool> on-battery;
+    in property <string> head-text;
+    in property <string> hint;
+
+    // gpu
+    in property <string> gpu-mode;
+    in property <string> gpu-policy;
+    in property <string> gpu-switching;
+    in property <string> gpu-pending;
+    in property <bool> gpu-reboot;
+    in property <string> gpu-message;
+    in property <bool> dgpu-asleep;
+    in property <[GpuUser]> gpu-users;
+
+    // screen
+    in property <string> refresh-policy;
+    in property <string> refresh-now;
+    in property <bool> has-refresh;
+    in property <bool> has-flicker;
+    in property <bool> flicker;
+    in property <int> brightness: -1;
+    in property <[Opt]> color-modes;
+    in property <string> color-mode;
+    in property <int> color-idx;
+    in property <bool> has-eye;
+    in property <int> eye-kelvin;
+    in property <[Item]> screen-items;
+
+    // battery
+    in property <int> bat-percent: -1;
+    in property <string> bat-status;
+    in property <string> bat-power;
+    in property <string> bat-left;
+    in property <int> bat-limit;
+    in property <[Opt]> bat-opts;
+    in property <[int]> bat-values;
+    in property <int> bat-idx;
+    in property <bool> charge-once;
+    in property <string> bat-health;
+    in property <string> bat-cycles;
+
+    // fans
+    in property <int> fan-mode: 1;
+    in property <int> fan-sel: 0;
+    in property <[FanRow]> fans;
+    in property <string> fan-kind;
+    in property <[Pt]> curve;
+
+    // power limits
+    in property <int> pw-mode: 1;
+    in property <int> pw-source: 0;
+    in property <[LimitRow]> limits;
+    in property <bool> pw-needs-fan;
+
+    // lighting
+    in property <int> kb-max;
+    in property <int> kb-level;
+    in property <[Opt]> kb-effects;
+    in property <string> kb-effect;
+    in property <color> kb-color: #ffffff;
+    in property <int> kb-speed;
+    in property <[bool]> kb-states;
+    in property <int> kb-idle;
+
+    // lid
+    in property <bool> has-slash;
+    in property <bool> slash-on;
+    in property <int> slash-level;
+    in property <[string]> slash-modes;
+    in property <int> slash-mode-idx;
+    in property <[Item]> slash-show;
+    in property <bool> has-anime;
+    in property <bool> anime-on;
+    in property <int> anime-level;
+
+    // system
+    in property <[Item]> system-items;
+    in property <bool> reboot-pending;
+
+    callback act(string, string);
+    callback acti(string, int);
+    callback curve-move(int, int, int);
+    callback curve-commit();
+    callback quit();
+}

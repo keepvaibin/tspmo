@@ -1,0 +1,25 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "tspmo contributors"
+            }
+        ],
+        "Category": "System Information",
+        "Description": "Eco+, Silent, Balanced, Turbo and GPU mode",
+        "EnabledByDefault": true,
+        "FormFactors": [
+            "desktop",
+            "mediacenter",
+            "handset"
+        ],
+        "Icon": "battery-profile-balanced",
+        "Id": "org.tspmo.power",
+        "License": "GPL-3.0-or-later",
+        "Name": "Power Mode",
+        "Version": "0.1.0",
+        "Website": "https://github.com/keepvaibin/tspmo"
+    },
+    "X-Plasma-API-Minimum-Version": "6.0"
+}

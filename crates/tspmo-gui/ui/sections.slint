@@ -1,0 +1,435 @@
+import { Th } from "theme.slint";
+import { Bk, Item, LimitRow } from "bk.slint";
+import { Icon, Card, Btn, Toggle, Seg, Row, Slide, Stepper, Dim } from "controls.slint";
+import { CurveEditor } from "curve.slint";
+
+// A firmware item: toggle, choice or number, as the daemon describes it.
+component ItemRow inherits Row {
+    in property <Item> item;
+    label: item.label;
+    if item.kind == "toggle": Toggle {
+        on: item.on;
+        enabled: item.writable;
+        toggled => { Bk.act("hw-toggle", item.name); }
+        y: (parent.height - self.height) / 2;
+    }
+    if (item.kind == "choice" || item.kind == "number") && item.writable: Stepper {
+        text: item.text;
+        prev => { Bk.acti("hw-step:" + item.name, -1); }
+        next => { Bk.acti("hw-step:" + item.name, 1); }
+        y: (parent.height - self.height) / 2;
+    }
+    if (item.kind == "choice" || item.kind == "number") && !item.writable: Text {
+        text: item.text;
+        color: Th.dim;
+        font-size: 12px;
+        vertical-alignment: center;
+    }
+    if item.kind == "text": Text {
+        text: item.text;
+        color: Th.dim;
+        font-size: 12px;
+        vertical-alignment: center;
+    }
+}
+
+export component GpuSection inherits VerticalLayout {
+    spacing: 10px;
+    property <bool> busy: Bk.gpu-switching != "";
+    Seg {
+        opts: [
+            { id: "eco", label: "Eco", icon: "eco-plus" },
+            { id: "hybrid", label: "Hybrid", icon: "hybrid" },
+            { id: "ultimate", label: "Ultimate", icon: "ultimate" },
+            { id: "optimized", label: "Auto", icon: "auto" },
+        ];
+        index: Bk.gpu-policy == "eco" ? 0 : Bk.gpu-policy == "hybrid" ? 1 : Bk.gpu-policy == "ultimate" ? 2 : 3;
+        enabled: !root.busy;
+        picked(i) => { Bk.act("gpu", ["eco", "hybrid", "ultimate", "optimized"][i]); }
+    }
+    Card {
+        Row {
+            icon: "gpu";
+            label: Bk.gpu-switching != "" ? "→ " + Bk.gpu-switching : Bk.gpu-mode;
+            value: Bk.dgpu-asleep ? "dGPU off" : "dGPU on";
+        }
+        if Bk.gpu-reboot: Row {
+            icon: "reboot";
+            label: Bk.gpu-pending;
+            Btn { text: "Reboot"; icon: "reboot"; primary: true; clicked => { Bk.act("reboot", ""); } }
+        }
+        if Bk.gpu-message != "": Dim { text: Bk.gpu-message; wrap: word-wrap; }
+    }
+    if Bk.gpu-users.length > 0: Card {
+        for u in Bk.gpu-users: Row {
+            icon: "warn";
+            label: u.name;
+            value: u.pid;
+            height: 28px;
+        }
+    }
+}
+
+export component ScreenSection inherits VerticalLayout {
+    spacing: 10px;
+    if Bk.has-refresh: Card {
+        Row { icon: "screen"; label: "Refresh"; value: Bk.refresh-now; }
+        Seg {
+            opts: [
+                { id: "max", label: "Max", icon: "performance" },
+                { id: "60", label: "60", icon: "eco-plus" },
+                { id: "auto", label: "Auto", icon: "auto" },
+            ];
+            index: Bk.refresh-policy == "max" ? 0 : Bk.refresh-policy == "60" ? 1 : 2;
+            picked(i) => { Bk.act("refresh", ["max", "60", "auto"][i]); }
+        }
+    }
+    if Bk.has-flicker || Bk.brightness >= 0: Card {
+        if Bk.has-flicker: Row {
+            icon: "sun";
+            label: "Flicker-free";
+            Toggle { on: Bk.flicker; toggled(v) => { Bk.act("flicker", v ? "on" : "off"); } y: (parent.height - self.height) / 2; }
+        }
+        if Bk.brightness >= 0: Row {
+            icon: "sun";
+            label: "Brightness";
+            value: Bk.brightness + "%";
+        }
+        if Bk.brightness >= 0: Slide {
+            min: 1;
+            max: 100;
+            value: Bk.brightness;
+            released(v) => { Bk.acti("brightness", v); }
+        }
+    }
+    if Bk.color-modes.length > 0 || Bk.has-eye: Card {
+        if Bk.color-modes.length > 0: Row { icon: "palette"; label: "Colour"; }
+        if Bk.color-modes.length > 0: Seg {
+            opts: Bk.color-modes;
+            index: Bk.color-idx;
+            show-icons: false;
+            picked(i) => { Bk.act("color", Bk.color-modes[i].id); }
+        }
+        if Bk.has-eye: Row {
+            icon: "eye";
+            label: "Eye care";
+            value: Bk.eye-kelvin > 0 ? Bk.eye-kelvin + " K" : "";
+            Toggle { on: Bk.eye-kelvin > 0; toggled(v) => { Bk.acti("eye", v ? 4500 : 0); } y: (parent.height - self.height) / 2; }
+        }
+        if Bk.has-eye && Bk.eye-kelvin > 0: Slide {
+            min: 1000;
+            max: 6500;
+            step: 100;
+            value: Bk.eye-kelvin;
+            released(v) => { Bk.acti("eye", v); }
+        }
+    }
+    if Bk.screen-items.length > 0: Card {
+        for it in Bk.screen-items: ItemRow { item: it; }
+    }
+}
+
+component Stat inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+    horizontal-stretch: 1;
+    height: 46px;
+    background: Th.surface;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: Th.line;
+    VerticalLayout {
+        alignment: center;
+        spacing: 1px;
+        Text { text: root.value; font-size: 15px; font-weight: 600; color: Th.text; horizontal-alignment: center; }
+        Text { text: root.label; font-size: 10.5px; color: Th.dim; horizontal-alignment: center; }
+    }
+}
+
+export component BatterySection inherits VerticalLayout {
+    spacing: 10px;
+    Card {
+        HorizontalLayout {
+            spacing: 10px;
+            Text {
+                text: Bk.bat-percent >= 0 ? Bk.bat-percent + "%" : "-";
+                font-size: 34px;
+                font-weight: 700;
+                color: Th.text;
+                vertical-alignment: center;
+            }
+            VerticalLayout {
+                alignment: center;
+                Text { text: Bk.bat-status; font-size: 13px; color: Th.text; }
+                Dim { text: Bk.bat-left; }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Text {
+                text: Bk.bat-power;
+                font-size: 18px;
+                font-weight: 600;
+                color: Th.accent;
+                vertical-alignment: center;
+            }
+        }
+        Rectangle {
+            height: 6px;
+            border-radius: 3px;
+            background: Th.surface2;
+            Rectangle {
+                width: parent.width * max(0, Bk.bat-percent) / 100;
+                border-radius: 3px;
+                background: Th.accent;
+                animate width { duration: 300ms; easing: ease-out; }
+            }
+            if Bk.bat-limit > 0 && Bk.bat-limit < 100: Rectangle {
+                x: parent.width * Bk.bat-limit / 100 - 1px;
+                width: 2px;
+                background: Th.text;
+            }
+        }
+    }
+    if Bk.bat-opts.length > 0: Card {
+        Row { icon: "battery"; label: "Limit"; value: Bk.bat-limit > 0 ? Bk.bat-limit + "%" : ""; }
+        Seg {
+            opts: Bk.bat-opts;
+            index: Bk.bat-idx;
+            show-icons: false;
+            picked(i) => { Bk.acti("bat-limit", Bk.bat-values[i]); }
+        }
+        Row {
+            icon: "plus";
+            label: "100% once";
+            Toggle { on: Bk.charge-once; toggled(v) => { Bk.act("charge-once", v ? "on" : "off"); } y: (parent.height - self.height) / 2; }
+        }
+    }
+    HorizontalLayout {
+        spacing: 8px;
+        Stat { label: "Health"; value: Bk.bat-health; }
+        Stat { label: "Cycles"; value: Bk.bat-cycles; }
+    }
+}
+
+export component FansSection inherits VerticalLayout {
+    spacing: 10px;
+    Seg {
+        opts: [
+            { id: "power-saver", label: "Silent", icon: "power-saver" },
+            { id: "balanced", label: "Balanced", icon: "balanced" },
+            { id: "performance", label: "Turbo", icon: "performance" },
+        ];
+        index: Bk.fan-mode;
+        picked(i) => { Bk.acti("fan-mode", i); }
+    }
+    HorizontalLayout {
+        spacing: 8px;
+        for f[i] in Bk.fans: Rectangle {
+            height: 52px;
+            horizontal-stretch: 1;
+            border-radius: 10px;
+            background: Th.surface;
+            border-width: i == Bk.fan-sel ? 1.5px : 1px;
+            border-color: i == Bk.fan-sel ? Th.accent : Th.line;
+            animate border-color { duration: 140ms; }
+            VerticalLayout {
+                alignment: center;
+                spacing: 1px;
+                Text { text: f.rpm > 0 ? f.rpm : "-"; font-size: 17px; font-weight: 600; color: Th.text; horizontal-alignment: center; }
+                Text { text: f.label + (f.kind == "custom" ? " •" : f.kind == "full" ? " ▲" : ""); font-size: 10.5px; color: Th.dim; horizontal-alignment: center; }
+            }
+            TouchArea { clicked => { Bk.acti("fan-sel", i); } }
+        }
+    }
+    Card {
+        CurveEditor { editable: Bk.fan-kind != "full"; }
+        HorizontalLayout {
+            spacing: 6px;
+            Btn { text: "Auto"; icon: "auto"; active: Bk.fan-kind == "auto"; clicked => { Bk.act("fan-auto", ""); } }
+            Btn { text: "Full"; icon: "fan"; active: Bk.fan-kind == "full"; clicked => { Bk.act("fan-full", ""); } }
+            Btn { text: "Reset"; icon: "reset"; clicked => { Bk.act("fan-reset", ""); } }
+            Rectangle { horizontal-stretch: 1; }
+        }
+    }
+}
+
+export component PowerSection inherits VerticalLayout {
+    spacing: 10px;
+    HorizontalLayout {
+        spacing: 8px;
+        Seg {
+            horizontal-stretch: 3;
+            opts: [
+                { id: "power-saver", label: "Silent", icon: "power-saver" },
+                { id: "balanced", label: "Balanced", icon: "balanced" },
+                { id: "performance", label: "Turbo", icon: "performance" },
+            ];
+            index: Bk.pw-mode;
+            show-icons: false;
+            picked(i) => { Bk.acti("pw-mode", i); }
+        }
+        Seg {
+            horizontal-stretch: 2;
+            opts: [{ id: "ac", label: "AC", icon: "ac" }, { id: "battery", label: "Bat", icon: "battery" }];
+            index: Bk.pw-source;
+            show-icons: false;
+            picked(i) => { Bk.acti("pw-source", i); }
+        }
+    }
+    Card {
+        for l in Bk.limits: VerticalLayout {
+            spacing: 0px;
+            Row {
+                height: 26px;
+                label: l.label;
+                value: l.cur + " " + l.unit;
+                if l.custom: Btn {
+                    icon: "reset";
+                    width: 26px;
+                    height: 22px;
+                    clicked => { Bk.act("limit-default", l.name); }
+                    y: (parent.height - self.height) / 2;
+                }
+            }
+            Slide {
+                min: l.min;
+                max: l.max;
+                value: l.cur;
+                custom: l.custom;
+                enabled: l.max > l.min;
+                released(v) => { Bk.acti("limit:" + l.name, v); }
+            }
+        }
+        Btn { text: "Default"; icon: "reset"; clicked => { Bk.act("limit-reset", ""); } }
+    }
+}
+
+export component LightSection inherits VerticalLayout {
+    spacing: 10px;
+    Card {
+        Row { icon: "light"; label: "Brightness"; value: Bk.kb-level + "/" + Bk.kb-max; }
+        Slide {
+            min: 0;
+            max: max(Bk.kb-max, 1);
+            value: Bk.kb-level;
+            released(v) => { Bk.acti("kb-level", v); }
+        }
+    }
+    if Bk.kb-effects.length > 0: Card {
+        Row {
+            icon: "palette";
+            label: "Effect";
+            Stepper {
+                text: Bk.kb-effect;
+                prev => { Bk.acti("kb-effect-step", -1); }
+                next => { Bk.acti("kb-effect-step", 1); }
+                y: (parent.height - self.height) / 2;
+            }
+        }
+        HorizontalLayout {
+            spacing: 6px;
+            alignment: center;
+            for c[i] in [#ffffff, #ff3b30, #ff9500, #ffd60a, #34c759, #0a84ff, #bf5af2, #ff2d92]: Rectangle {
+                width: 26px;
+                height: 26px;
+                border-radius: 13px;
+                background: c;
+                border-width: 2px;
+                border-color: Bk.kb-color == c ? Th.text : transparent;
+                TouchArea { clicked => { Bk.acti("kb-color", i); } }
+            }
+        }
+        Seg {
+            opts: [{ id: "low", label: "Low", icon: "" }, { id: "med", label: "Med", icon: "" }, { id: "high", label: "High", icon: "" }];
+            index: Bk.kb-speed;
+            picked(i) => { Bk.acti("kb-speed", i); }
+        }
+    }
+    Card {
+        for s[i] in ["Boot", "Awake", "Sleep", "Shutdown"]: Row {
+            height: 30px;
+            label: s;
+            Toggle {
+                on: Bk.kb-states.length > i && Bk.kb-states[i];
+                toggled(v) => { Bk.acti("kb-state:" + i, v ? 1 : 0); }
+                y: (parent.height - self.height) / 2;
+            }
+        }
+        Row {
+            label: "Idle";
+            Stepper {
+                text: Bk.kb-idle == 0 ? "Off" : Bk.kb-idle + " s";
+                prev => { Bk.acti("kb-idle-step", -1); }
+                next => { Bk.acti("kb-idle-step", 1); }
+                y: (parent.height - self.height) / 2;
+            }
+        }
+    }
+}
+
+export component LidSection inherits VerticalLayout {
+    spacing: 10px;
+    if Bk.has-slash: Card {
+        Row {
+            icon: "lid";
+            label: "Slash";
+            Toggle { on: Bk.slash-on; toggled(v) => { Bk.act("slash-on", v ? "on" : "off"); } y: (parent.height - self.height) / 2; }
+        }
+        Slide {
+            min: 0;
+            max: 255;
+            step: 5;
+            value: Bk.slash-level;
+            enabled: Bk.slash-on;
+            released(v) => { Bk.acti("slash-level", v); }
+        }
+        if Bk.slash-modes.length > 0: Row {
+            label: "Mode";
+            Stepper {
+                text: Bk.slash-modes[Bk.slash-mode-idx];
+                prev => { Bk.acti("slash-mode-step", -1); }
+                next => { Bk.acti("slash-mode-step", 1); }
+                y: (parent.height - self.height) / 2;
+            }
+        }
+    }
+    if Bk.has-slash && Bk.slash-show.length > 0: Card {
+        for it in Bk.slash-show: ItemRow { item: it; height: 30px; }
+    }
+    if Bk.has-anime: Card {
+        Row {
+            icon: "lid";
+            label: "AniMe";
+            Toggle { on: Bk.anime-on; toggled(v) => { Bk.act("anime-on", v ? "on" : "off"); } y: (parent.height - self.height) / 2; }
+        }
+        Slide {
+            min: 0;
+            max: 3;
+            value: Bk.anime-level;
+            enabled: Bk.anime-on;
+            released(v) => { Bk.acti("anime-level", v); }
+        }
+    }
+}
+
+export component SystemSection inherits VerticalLayout {
+    spacing: 10px;
+    if Bk.reboot-pending: Card {
+        Row {
+            icon: "reboot";
+            label: "Reboot";
+            Btn { text: "Reboot"; icon: "reboot"; primary: true; clicked => { Bk.act("reboot", ""); } }
+        }
+    }
+    Card {
+        for it in Bk.system-items: ItemRow { item: it; }
+    }
+}
+
+export component Skeleton inherits VerticalLayout {
+    spacing: 10px;
+    for h in [34px, 120px, 90px]: Rectangle {
+        height: h;
+        border-radius: 12px;
+        background: Th.surface;
+    }
+}
