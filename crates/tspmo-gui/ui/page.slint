@@ -61,7 +61,7 @@ export component MainPage inherits VerticalLayout {
         Head {
             icon: "gpu";
             title: "GPU Mode: " + (Bk.gpu-switching != "" ? "→ " + Bk.gpu-switching : Bk.gpu-mode);
-            right: Bk.dgpu-asleep ? "dGPU off" : "dGPU on";
+            right: Bk.gpu-state;
         }
         OptRow {
             opts: [
