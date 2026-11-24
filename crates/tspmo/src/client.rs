@@ -87,3 +87,47 @@ pub fn gpu_users() -> Result<Vec<(u32, String, String)>, String> {
     let conn = connect()?;
     proxy(&conn)?.call("GpuUsers", &()).map_err(explain)
 }
+
+fn display_proxy(conn: &Connection) -> Result<Proxy<'_>, String> {
+    Proxy::new(conn, NAME, PATH, "org.tspmo.Display1").map_err(|e| e.to_string())
+}
+
+/// `org.tspmo.Display1`: the full state in one call.
+pub fn display_state() -> Result<HashMap<String, OwnedValue>, String> {
+    let conn = connect()?;
+    display_proxy(&conn)?.call("GetState", &()).map_err(explain)
+}
+
+/// Call a `Display1` method taking one string; returns the message for the user.
+pub fn display_set(method: &str, value: &str) -> Result<String, String> {
+    let conn = connect()?;
+    display_proxy(&conn)?.call(method, &(value,)).map_err(explain)
+}
+
+/// Call a `Display1` method taking one number; returns the message for the user.
+pub fn display_set_num(method: &str, value: u32) -> Result<String, String> {
+    let conn = connect()?;
+    display_proxy(&conn)?.call(method, &(value,)).map_err(explain)
+}
+
+pub fn get_u32(state: &HashMap<String, OwnedValue>, key: &str) -> u32 {
+    state.get(key).and_then(|v| u32::try_from(v).ok()).unwrap_or(0)
+}
+
+pub fn get_f64(state: &HashMap<String, OwnedValue>, key: &str) -> f64 {
+    state.get(key).and_then(|v| f64::try_from(v).ok()).unwrap_or(0.0)
+}
+
+pub fn get_strs(state: &HashMap<String, OwnedValue>, key: &str) -> Vec<String> {
+    state
+        .get(key)
+        .and_then(|v| Vec::<String>::try_from(v.try_clone().ok()?).ok())
+        .unwrap_or_default()
+}
+
+pub fn get_u32s(state: &HashMap<String, OwnedValue>, key: &str) -> Vec<u32> {
+    state
+        .get(key)
+        .and_then(|v| Vec::<u32>::try_from(v.try_clone().ok()?).ok())
+        .unwrap_or_default()
+}

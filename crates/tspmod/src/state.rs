@@ -9,6 +9,9 @@ use tspmo_core::gpu::{self, Policy};
 use tspmo_core::power::{self, Profile, Tunables};
 use tspmo_sys::{SysRoot, power_supply};
 
+/// Where the pre-Eco+ limits are kept while Eco+ is active (cleared at boot with /run).
+pub const ECO_SAVED: &str = "/run/tspmo/rapl-orig";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hold {
     pub cookie: u32,
@@ -41,6 +44,8 @@ pub struct Daemon {
     pub gpu_message: String,
     /// Settings the kernel refused with EPERM/EACCES (firmware-owned); never retried.
     refused: std::collections::HashSet<String>,
+    /// The RAPL/uncore values from before Eco+ was applied (empty when Eco+ is not active).
+    eco_saved: Vec<power::Write>,
     /// What was last applied, to avoid redundant firmware writes.
     applied: Option<(Profile, bool)>,
     state_file: PathBuf,
@@ -75,10 +80,15 @@ impl Daemon {
             gpu_waiting: false,
             gpu_message: String::new(),
             refused: std::collections::HashSet::new(),
+            eco_saved: Vec::new(),
             applied: None,
             state_file: state_dir.join("state"),
         };
         d.load();
+        // A daemon restart while Eco+ was active: the originals are still on disk.
+        if let Some(text) = d.root.read_opt(ECO_SAVED) {
+            d.eco_saved = power::parse_snapshot(&text);
+        }
         d.gpu_cache = gpu::status(&d.root, d.boot_mux);
         d
     }
@@ -92,12 +102,17 @@ impl Daemon {
         }
     }
 
-    /// The profile in force: holds win (performance over power-saver), as in power-profiles-daemon.
+    /// The mode in force: holds win (performance over power-saver), as in power-profiles-daemon.
+    /// A power-saver hold never lowers Eco+, which already saves more.
     pub fn effective(&self) -> Profile {
         if self.holds.iter().any(|h| h.profile == Profile::Performance) {
             Profile::Performance
         } else if self.holds.iter().any(|h| h.profile == Profile::PowerSaver) {
-            Profile::PowerSaver
+            if self.chosen() == Profile::EcoPlus {
+                Profile::EcoPlus
+            } else {
+                Profile::PowerSaver
+            }
         } else {
             self.chosen()
         }
@@ -109,7 +124,21 @@ impl Daemon {
         if !force && self.applied == Some(key) {
             return;
         }
-        let mut plan = power::plan(&self.root, key.0, key.1, &self.tunables);
+        // Eco+ changes limits the firmware owns: remember them on entering, put them back on leaving.
+        let restore = if key.0.is_eco_plus() {
+            if self.eco_saved.is_empty() {
+                self.eco_saved = power::eco_snapshot(&self.root);
+                let path = self.root.path(ECO_SAVED);
+                if let Some(dir) = path.parent() {
+                    let _ = std::fs::create_dir_all(dir);
+                }
+                let _ = std::fs::write(path, power::snapshot_text(&self.eco_saved));
+            }
+            Vec::new()
+        } else {
+            std::mem::take(&mut self.eco_saved)
+        };
+        let mut plan = power::plan(&self.root, key.0, key.1, &self.tunables, &restore);
         plan.retain(|w| !self.refused.contains(&w.path));
         let r = power::apply(&self.root, &plan);
         for (w, e) in &r.failed {
@@ -133,10 +162,15 @@ impl Daemon {
                 r.changed.len()
             );
         }
+        if !key.0.is_eco_plus() {
+            let _ = std::fs::remove_file(self.root.path(ECO_SAVED));
+        }
         self.applied = Some(key);
+        // Eco+ is a power-saver with extras: listeners keyed on the three profiles see
+        // `power-saver` and can look at `eco_plus` for the rest.
         crate::events::publish(&crate::events::Event::ProfileApplied {
-            profile: key.0,
-            eco_plus: false,
+            profile: key.0.ppd(),
+            eco_plus: key.0.is_eco_plus(),
             on_battery: key.1,
         });
     }
@@ -154,10 +188,20 @@ impl Daemon {
         self.apply(false);
     }
 
-    /// The firmware changed `platform_profile` itself (Fn+F5 on ASUS, Fn+Q on Lenovo).
+    /// KDE/GNOME chose a power-profiles profile. Choosing `power-saver` while Eco+ is active
+    /// keeps Eco+ (it already is a power-saver); anything else leaves it.
+    pub fn choose_ppd(&mut self, p: Profile) {
+        if p == Profile::PowerSaver && self.chosen() == Profile::EcoPlus {
+            return;
+        }
+        self.choose(p);
+    }
+
+    /// The firmware changed `platform_profile` itself (Fn+F5 on ASUS, Fn+Q on Lenovo). Our own
+    /// writes come back here too: they match the mode in force and change nothing.
     pub fn platform_changed(&mut self, value: &str) -> bool {
         match Profile::from_platform(value) {
-            Some(p) if p != self.effective() => {
+            Some(p) if p != self.effective().ppd() => {
                 self.choose(p);
                 true
             }
@@ -282,6 +326,15 @@ impl Daemon {
             self.gpu_policy = p;
         }
         let t = &mut self.tunables;
+        if let Some(pair) = kv.get("eco_pkg_w").and_then(|v| parse_pair(v)) {
+            t.eco.pkg_w = pair;
+        }
+        if let Some(pair) = kv.get("eco_psys_w").and_then(|v| parse_pair(v)) {
+            t.eco.psys_w = pair;
+        }
+        if let Some(v) = kv.get("eco_uncore_mhz") {
+            t.eco.uncore_max_mhz = v.parse().ok();
+        }
         if let Some(b) = get_b("saver_no_turbo_on_battery") {
             t.saver_no_turbo_on_battery = b;
         }
@@ -302,7 +355,8 @@ impl Daemon {
             "# tspmod state (managed by tspmod; safe to edit while it is stopped)\n\
              profile_ac={}\nprofile_battery={}\ngpu_policy={}\n\
              saver_no_turbo_on_battery={}\naspm_on_battery={}\n\
-             audio_power_save_on_battery={}\nlazy_writeback_on_battery={}\n",
+             audio_power_save_on_battery={}\nlazy_writeback_on_battery={}\n\
+             eco_pkg_w={}\neco_psys_w={}\neco_uncore_mhz={}\n",
             self.profile_ac.as_str(),
             self.profile_battery.as_str(),
             self.gpu_policy.as_str(),
@@ -310,6 +364,11 @@ impl Daemon {
             t.aspm_on_battery,
             t.audio_power_save_on_battery,
             t.lazy_writeback_on_battery,
+            fmt_pair(t.eco.pkg_w),
+            fmt_pair(t.eco.psys_w),
+            t.eco
+                .uncore_max_mhz
+                .map_or(String::from("off"), |m| m.to_string()),
         );
         if let Some(dir) = self.state_file.parent() {
             let _ = std::fs::create_dir_all(dir);
@@ -320,4 +379,30 @@ impl Daemon {
             let _ = std::fs::rename(&tmp, &self.state_file);
         }
     }
+}
+
+/// Put back the limits Eco+ changed (the file survives a daemon crash, so this also works
+/// after one). Used when the daemon stops.
+pub fn restore_saved(root: &SysRoot) {
+    let Some(text) = root.read_opt(ECO_SAVED) else {
+        return;
+    };
+    let r = power::apply(root, &power::parse_snapshot(&text));
+    for (w, e) in &r.failed {
+        eprintln!("tspmod: can't restore {}: {e}", w.path);
+    }
+    let _ = std::fs::remove_file(root.path(ECO_SAVED));
+}
+
+/// `10,15` (long-term, short-term watts) or `off`.
+fn parse_pair(v: &str) -> Option<Option<(u32, u32)>> {
+    if v == "off" {
+        return Some(None);
+    }
+    let (a, b) = v.split_once(',')?;
+    Some(Some((a.trim().parse().ok()?, b.trim().parse().ok()?)))
+}
+
+fn fmt_pair(p: Option<(u32, u32)>) -> String {
+    p.map_or_else(|| "off".into(), |(a, b)| format!("{a},{b}"))
 }

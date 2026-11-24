@@ -1,6 +1,8 @@
 //! `tspmo` — Thermal & System Power Management Optimizer, command line.
 
+mod bench;
 mod client;
+mod display;
 mod dump;
 mod info;
 mod session_env;
@@ -17,8 +19,10 @@ USAGE:
 COMMANDS:
     info              What this laptop is and which controls it exposes
     status            Current profile, power source and GPU mode (from tspmod)
-    profile [<name>]  Show or set the power profile: power-saver | balanced | performance
-    profile cycle     Next profile (what Fn+F5 does)
+    profile [<name>]  Show or set the power mode: eco-plus | power-saver | balanced | performance
+    profile cycle     Next mode
+    display ...       Screen: refresh rate, brightness, dimming, colour (tspmo display help)
+    bench ...         Measure what a setting costs or saves (tspmo bench help)
     gpu [<mode>]      Show or set the GPU mode: eco | hybrid | ultimate | optimized
     gpu users         Apps keeping the NVIDIA GPU awake
     doctor            Find what breaks features or costs battery, with exact fixes
@@ -62,6 +66,8 @@ fn main() -> ExitCode {
         }
         Some("profile") => profile(args.get(1).map(String::as_str)),
         Some("gpu") => gpu(args.get(1).map(String::as_str)),
+        Some("display") => display::run(&args[1..]),
+        Some("bench") => bench::run(&args[1..]),
         Some("dump") => match args.get(1) {
             Some(dir) => match dump::dump(&root, dir.as_ref()) {
                 Ok(n) => {
@@ -113,6 +119,7 @@ fn status() -> ExitCode {
         s("ProfileBattery")
     );
     println!("power:    {}", if on_batt { "battery" } else { "AC" });
+    display::status_line();
     let pending = s("GpuPending");
     println!(
         "gpu:      {} (policy {}){}{}",
@@ -161,7 +168,7 @@ fn profile(arg: Option<&str>) -> ExitCode {
                 Err(e) => fail(e),
             },
             None => fail(format!(
-                "unknown profile '{p}' (power-saver, balanced, performance)"
+                "unknown profile '{p}' (eco-plus, power-saver, balanced, performance)"
             )),
         },
     }

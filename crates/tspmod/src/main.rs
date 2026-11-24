@@ -4,6 +4,7 @@
 //! power-profiles-daemon) and `org.tspmo.Daemon1`.
 
 mod dbus;
+mod display;
 mod events;
 mod gpu;
 mod polkit;
@@ -15,6 +16,12 @@ use std::sync::{Arc, Mutex};
 use tspmo_sys::SysRoot;
 
 fn main() {
+    // `tspmod --restore-limits`, run by systemd when the daemon stops: Eco+'s power caps must
+    // not outlive the daemon that set them.
+    if std::env::args().nth(1).as_deref() == Some("--restore-limits") {
+        state::restore_saved(&SysRoot::from_env());
+        return;
+    }
     if let Err(e) = run() {
         eprintln!("tspmod: {e}");
         std::process::exit(1);
@@ -32,7 +39,10 @@ fn run() -> zbus::Result<()> {
     }
     daemon.write_compositor_env();
     gpu::enforce_at_boot(&mut daemon);
+    let on_battery = daemon.on_battery;
+    let root = daemon.root.clone();
     let shared: dbus::Shared = Arc::new(Mutex::new(daemon));
+    let screen: display::Shared = Arc::new(Mutex::new(display::State::new(root, on_battery)));
 
     // TSPMOD_BUS=session runs against the session bus (development, with TSPMO_SYSROOT).
     let builder = match std::env::var("TSPMOD_BUS").as_deref() {
@@ -43,6 +53,7 @@ fn run() -> zbus::Result<()> {
         .serve_at(dbus::PPD_PATH, dbus::PowerProfiles(Arc::clone(&shared)))?
         .serve_at(dbus::HADESS_PATH, dbus::HadessPowerProfiles(Arc::clone(&shared)))?
         .serve_at(dbus::TSPMO_PATH, dbus::Tspmo(Arc::clone(&shared)))?
+        .serve_at(display::dbus::PATH, display::dbus::Display1(Arc::clone(&screen)))?
         .name(dbus::PPD_NAME)?
         .name(dbus::HADESS_NAME)?
         .name(dbus::TSPMO_NAME)?
@@ -65,6 +76,7 @@ fn run() -> zbus::Result<()> {
     }
 
     watch::all(&conn, &shared);
+    display::start(conn.inner(), &screen);
 
     // All work happens on the D-Bus executor and the watcher threads.
     loop {

@@ -13,6 +13,8 @@ Wants=upower.service
 Type=dbus
 BusName=org.freedesktop.UPower.PowerProfiles
 ExecStart=/usr/bin/tspmod
+# Eco+ caps the CPU's power limits: put them back whenever the daemon stops.
+ExecStopPost=/usr/bin/tspmod --restore-limits
 StateDirectory=tspmo
 RuntimeDirectory=tspmo
 RuntimeDirectoryPreserve=yes
