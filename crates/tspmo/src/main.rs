@@ -136,7 +136,7 @@ fn usage_error(what: &str) -> ExitCode {
 }
 
 /// The lines of the usage text that belong to `cmd` (a command, then its indented continuations).
-fn command_help(cmd: &str) -> ExitCode {
+fn help_lines(cmd: &str) -> String {
     let text = format!("{USAGE}\n{}", asus_cli::USAGE);
     let mut out = String::new();
     let mut inside = false;
@@ -151,6 +151,11 @@ fn command_help(cmd: &str) -> ExitCode {
             out.push('\n');
         }
     }
+    out
+}
+
+fn command_help(cmd: &str) -> ExitCode {
+    let out = help_lines(cmd);
     if out.is_empty() {
         return usage_error(&format!("unknown command '{cmd}'"));
     }
@@ -406,4 +411,32 @@ fn wrap(text: &str, indent: usize, width: usize) -> String {
         col += word.len();
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::help_lines;
+
+    #[test]
+    fn every_command_has_its_own_help() {
+        for cmd in [
+            "info", "status", "profile", "gpu", "doctor", "dump", "ping", "fans", "limits", "battery", "hw",
+            "light", "lid",
+        ] {
+            let h = help_lines(cmd);
+            assert!(
+                h.lines().next().is_some_and(|l| l.trim_start().starts_with(cmd)),
+                "{cmd}"
+            );
+            // Only that command's lines.
+            assert!(
+                h.lines()
+                    .filter(|l| l.starts_with("    ") && !l.starts_with("     "))
+                    .all(|l| l.split_whitespace().next() == Some(cmd)),
+                "{cmd}"
+            );
+        }
+        assert!(help_lines("nothing").is_empty());
+        assert!(help_lines("fans").contains("temp:percent"));
+    }
 }

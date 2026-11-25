@@ -320,11 +320,8 @@ impl Guard {
             let _ = std::fs::remove_file(path);
             return;
         }
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
         let text: String = self.moved.iter().map(|(p, c)| format!("{p}\t{c}\n")).collect();
-        let _ = std::fs::write(path, text);
+        let _ = tspmo_sys::write_atomic(&path, &text);
     }
 
     fn demote(&mut self, pid: u32, from: String) {

@@ -96,11 +96,7 @@ fn run() -> zbus::Result<()> {
         );
     }
 
-    // The display listens before the watchers can publish anything.
-    display::start(conn.inner(), &screen);
-    watch::all(&conn, &shared);
-    // The GPU policy waits for the boot to settle (see boot.rs).
-    boot::start(conn.inner(), &shared);
+    // Every listener is in place before a watcher or the display can publish anything.
     // Entering or leaving Eco+ changes what the GPU policy wants (Eco+ is dGPU off). The event
     // fires under the power daemon's lock: hand off to a thread.
     {
@@ -148,6 +144,11 @@ fn run() -> zbus::Result<()> {
         });
     }
 
+    // The display listens before the watchers can publish anything.
+    display::start(conn.inner(), &screen);
+    watch::all(&conn, &shared);
+    // The GPU policy waits for the boot to settle (see boot.rs).
+    boot::start(conn.inner(), &shared);
     // All work happens on the D-Bus executor and the watcher threads.
     loop {
         std::thread::park();

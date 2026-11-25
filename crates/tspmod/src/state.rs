@@ -132,11 +132,10 @@ impl Daemon {
         let restore = if key.0.is_eco_plus() {
             if self.eco_saved.is_empty() {
                 self.eco_saved = power::eco_snapshot(&self.root);
-                let path = self.root.path(ECO_SAVED);
-                if let Some(dir) = path.parent() {
-                    let _ = std::fs::create_dir_all(dir);
-                }
-                let _ = std::fs::write(path, power::snapshot_text(&self.eco_saved));
+                let _ = tspmo_sys::write_atomic(
+                    &self.root.path(ECO_SAVED),
+                    &power::snapshot_text(&self.eco_saved),
+                );
             }
             Vec::new()
         } else {
@@ -300,11 +299,7 @@ impl Daemon {
             ),
             _ => "# Managed by tspmod: no compositor overrides in this GPU mode.\n".to_owned(),
         };
-        let path = self.root.path(FILE);
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        if let Err(e) = std::fs::write(&path, text) {
+        if let Err(e) = tspmo_sys::write_atomic(&self.root.path(FILE), &text) {
             eprintln!("tspmod: can't write {FILE}: {e}");
         }
     }
