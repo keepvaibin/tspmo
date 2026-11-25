@@ -34,6 +34,7 @@ export component PopupBody inherits VerticalLayout {
         Head { icon: "gauge"; title: Bk.mode-title; info: Bk.mode-info; }
         Seg {
             wheel: true;
+            wrap: Bk.win-fans;
             opts: Bk.win-fans ? [
                 { id: "eco-plus", label: "Eco+", tint: Th.mode-color("eco-plus"), keyed: true, icon: "eco-plus", dim: false, on: false },
                 { id: "power-saver", label: "Silent", tint: Th.mode-color("power-saver"), keyed: true, icon: "power-saver", dim: false, on: false },
