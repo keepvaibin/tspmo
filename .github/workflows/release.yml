@@ -1,0 +1,72 @@
+name: Release
+# Push a tag such as v0.9.0 to publish a GitHub Release.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: archlinux:base-devel
+    steps:
+      - uses: actions/checkout@v5
+      - name: Version from the tag
+        id: v
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          crate=$(sed -n '/^\[workspace.package\]/,/^$/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          [ "$ver" = "$crate" ] || { echo "tag $ver != Cargo.toml version $crate" >&2; exit 1; }
+          echo "ver=$ver" >> "$GITHUB_OUTPUT"
+      - name: Build the Arch packages
+        run: |
+          pacman -Syu --noconfirm --needed git rust fontconfig libxkbcommon wayland pkgconf
+          useradd -m builder
+          install -d -o builder /home/builder/pkg
+          cp packaging/arch/PKGBUILD.release /home/builder/pkg/PKGBUILD
+          cp packaging/arch/tspmo.install /home/builder/pkg/
+          sed -i "s/^pkgver=.*/pkgver=${{ steps.v.outputs.ver }}/" /home/builder/pkg/PKGBUILD
+          chown -R builder /home/builder/pkg "$GITHUB_WORKSPACE"
+          # Tests run in ci.yml; the tag must already be green there.
+          su builder -c "cd /home/builder/pkg && TSPMO_SRC='$GITHUB_WORKSPACE' makepkg -f --nodeps --nocheck"
+      - name: Collect release files
+        run: |
+          ver='${{ steps.v.outputs.ver }}'
+          out="$PWD/dist"; mkdir -p "$out"
+          cp /home/builder/pkg/*.pkg.tar.zst "$out/"
+          # Tarball: the packaged binaries + data + the shared file list.
+          t="tspmo-$ver-x86_64-linux"
+          mkdir -p "$t/bin" "$t/packaging"
+          bsdtar -xf "/home/builder/pkg/tspmo-$ver-1-x86_64.pkg.tar.zst" -C "$t/bin" --strip-components=2 usr/bin
+          cp -r data LICENSE "$t/"
+          cp -r packaging/dkms "$t/packaging/"
+          cp packaging/install-files.sh "$t/packaging/"
+          cp packaging/install-files.sh "$t/"
+          tar -czf "$out/$t.tar.gz" "$t"
+          ls -la "$out"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+      - name: SHA256SUMS and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+            --title "tspmo ${GITHUB_REF_NAME#v}" --generate-notes ./*
