@@ -15,15 +15,15 @@ use tspmo_sys::{SysRoot, dmi::Dmi, power_supply};
 
 pub fn mode_index(p: Profile) -> usize {
     match p {
-        // Eco+ is power-saver for the firmware's modes (and so for fan curves and limits).
-        Profile::PowerSaver | Profile::EcoPlus => 0,
+        // Eco+ shares Silent's firmware mode, so its fan curves and limits.
+        Profile::Silent | Profile::EcoPlus => 0,
         Profile::Balanced => 1,
         Profile::Performance => 2,
     }
 }
 
 pub fn mode_from_index(i: usize) -> Profile {
-    Profile::ALL[i]
+    Profile::THERMAL[i]
 }
 
 pub fn source_name(on_battery: bool) -> &'static str {
@@ -33,7 +33,7 @@ pub fn source_name(on_battery: bool) -> &'static str {
 #[derive(Debug)]
 pub struct State {
     pub mode: Profile,
-    /// Eco+ is active (the thermal mode is power-saver's): fans follow [`fans::eco_curve`].
+    /// Eco+ or Silent is active (fans stop while cool): fans follow [`fans::eco_curve`].
     pub eco: bool,
     pub on_battery: bool,
     /// `(mode, fan)` → what the fan does there. Missing means Auto.
@@ -119,7 +119,7 @@ impl Thermal {
                 let (Some(kind), Some(mode), Some(fan)) = (w.first(), w.get(1), w.get(2)) else {
                     continue;
                 };
-                let (Some(mode), Ok(fan)) = (Profile::parse(mode), fan.parse::<u32>()) else {
+                let (Some(mode), Ok(fan)) = (Profile::parse_stored(mode), fan.parse::<u32>()) else {
                     continue;
                 };
                 let key = (mode_index(mode), fan);
@@ -148,7 +148,7 @@ impl Thermal {
             for line in text.lines() {
                 let w: Vec<&str> = line.split_whitespace().collect();
                 if let ["limit", mode, src, name, value] = w[..] {
-                    if let (Some(mode), Ok(v)) = (Profile::parse(mode), value.parse::<i64>()) {
+                    if let (Some(mode), Ok(v)) = (Profile::parse_stored(mode), value.parse::<i64>()) {
                         if limits::is_limit(name) && matches!(src, "ac" | "battery") {
                             st.custom
                                 .insert((mode_index(mode), src == "battery", name.to_owned()), v);
@@ -608,9 +608,9 @@ mod tests {
         fx.set(power::PLATFORM_PROFILE, "low-power\n");
         let t = thermal(&fx);
         // A user curve for power-saver does not survive Eco+ ...
-        t.set_fan(Profile::PowerSaver, 0, Setting::Full).unwrap();
+        t.set_fan(Profile::Silent, 0, Setting::Full).unwrap();
         t.set_eco(true);
-        t.on_profile(Profile::PowerSaver, false);
+        t.on_profile(Profile::Silent, false);
         for fan in 1..=3 {
             assert_eq!(fx.get(&format!("{HW}/pwm{fan}_enable")), "1");
             assert_eq!(
@@ -626,9 +626,9 @@ mod tests {
         }
         // ... and is back, not Eco+'s curve, when Eco+ ends.
         t.set_eco(false);
-        t.on_profile(Profile::PowerSaver, false);
+        t.on_profile(Profile::Silent, false);
         assert_eq!(fx.get(&format!("{HW}/pwm1_auto_point1_pwm")), "255");
-        t.set_fan(Profile::PowerSaver, 0, Setting::Auto).unwrap();
+        t.set_fan(Profile::Silent, 0, Setting::Auto).unwrap();
         assert_eq!(fx.get(&format!("{HW}/pwm1_enable")), "2");
     }
 
@@ -659,14 +659,14 @@ mod tests {
         on_ac(&fx);
         {
             let t = thermal(&fx);
-            t.set_fan(Profile::PowerSaver, 0, Setting::Full).unwrap();
+            t.set_fan(Profile::Silent, 0, Setting::Full).unwrap();
             t.set_limit(Profile::Balanced, false, "ppt_pl1_spl", Some(50))
                 .unwrap();
             t.set_limit(Profile::Balanced, true, "ppt_pl1_spl", Some(30))
                 .unwrap();
         }
         let t = thermal(&fx);
-        assert_eq!(t.setting(Profile::PowerSaver, 3), Setting::Full);
+        assert_eq!(t.setting(Profile::Silent, 3), Setting::Full);
         let st = lock(&t.state);
         assert_eq!(st.custom.get(&(1, false, "ppt_pl1_spl".into())), Some(&50));
         assert_eq!(st.custom.get(&(1, true, "ppt_pl1_spl".into())), Some(&30));

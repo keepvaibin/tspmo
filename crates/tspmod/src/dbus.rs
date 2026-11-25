@@ -54,11 +54,12 @@ fn cpu_driver(d: &Daemon) -> &'static str {
 fn profiles(d: &Daemon) -> Vec<HashMap<String, OwnedValue>> {
     let cpu = cpu_driver(d);
     let platform = d.root.exists("/sys/firmware/acpi/platform_profile");
-    Profile::ALL
+    // The API's three names; Eco+ is `power-saver`, Silent has none (it reads `balanced`).
+    ["power-saver", "balanced", "performance"]
         .iter()
         .map(|p| {
             let mut m = HashMap::new();
-            m.insert("Profile".into(), ov(p.as_str()));
+            m.insert("Profile".into(), ov(*p));
             m.insert("Driver".into(), ov("multiple"));
             m.insert("CpuDriver".into(), ov(cpu));
             if platform {
@@ -75,7 +76,7 @@ fn holds(d: &Daemon) -> Vec<HashMap<String, OwnedValue>> {
         .map(|h| {
             let mut m = HashMap::new();
             m.insert("ApplicationId".into(), ov(h.app_id.clone()));
-            m.insert("Profile".into(), ov(h.profile.as_str()));
+            m.insert("Profile".into(), ov(h.profile.ppd_name()));
             m.insert("Reason".into(), ov(h.reason.clone()));
             m
         })
@@ -88,7 +89,7 @@ fn holds(d: &Daemon) -> Vec<HashMap<String, OwnedValue>> {
 pub async fn emit_changed(conn: &zbus::Connection, shared: &Shared) {
     let (active, hold_list, tspmo) = {
         let d = lock(shared);
-        (d.effective().ppd().as_str(), holds(&d), tspmo_props(&d))
+        (d.effective().ppd_name(), holds(&d), tspmo_props(&d))
     };
     for (path, iface) in [(PPD_PATH, PPD_NAME), (HADESS_PATH, HADESS_NAME)] {
         let Ok(emitter) = SignalEmitter::new(conn, path) else {
@@ -135,7 +136,7 @@ macro_rules! ppd_interface {
         impl $ty {
             #[zbus(property)]
             fn active_profile(&self) -> String {
-                lock(&self.0).effective().ppd().as_str().to_owned()
+                lock(&self.0).effective().ppd_name().to_owned()
             }
 
             #[zbus(property)]
@@ -145,8 +146,8 @@ macro_rules! ppd_interface {
                 #[zbus(header)] hdr: Option<Header<'_>>,
                 #[zbus(connection)] conn: &zbus::Connection,
             ) -> zbus::fdo::Result<()> {
-                let p = Profile::parse(&profile)
-                    .filter(|p| !p.is_eco_plus())
+                // `power-saver` selects Eco+.
+                let p = Profile::from_ppd(&profile)
                     .ok_or_else(|| zbus::fdo::Error::InvalidArgs(format!("unknown profile '{profile}'")))?;
                 let sender = hdr.as_ref().and_then(|h| h.sender()).map(|s| s.to_string());
                 polkit::check(conn, sender.as_deref(), polkit::SWITCH_PROFILE).await?;
@@ -207,8 +208,8 @@ macro_rules! ppd_interface {
                 #[zbus(header)] hdr: Header<'_>,
                 #[zbus(connection)] conn: &zbus::Connection,
             ) -> zbus::fdo::Result<u32> {
-                let p = match Profile::parse(&profile) {
-                    Some(p @ (Profile::PowerSaver | Profile::Performance)) => p,
+                let p = match Profile::from_ppd(&profile) {
+                    Some(p @ (Profile::EcoPlus | Profile::Performance)) => p,
                     _ => {
                         return Err(zbus::fdo::Error::InvalidArgs(
                             "only power-saver and performance can be held".into(),
@@ -291,38 +292,20 @@ fn tspmo_props(d: &Daemon) -> Vec<(&'static str, OwnedValue)> {
     ]
 }
 
-/// Show an on-screen note for the changes KDE's own power-profile OSD can't show: it sees
-/// Eco+ as power-saver, so moving between those two changes nothing it knows about.
-fn announce(before: Profile, after: Profile) {
-    let text = match (before, after) {
-        (b, Profile::EcoPlus) if b != Profile::EcoPlus => "Eco+",
-        (Profile::EcoPlus, Profile::PowerSaver) => "Power saver",
-        _ => return,
-    };
-    crate::session::osd(
-        if text == "Eco+" {
-            "eco-plus"
-        } else {
-            "battery-profile-powersave"
-        },
-        text,
-        None,
-    );
-}
-
 fn wanted_gpu(d: &Daemon) -> Mode {
     gpu::wanted_mode(d.gpu_policy, d.on_battery, d.effective().is_eco_plus())
 }
 
-/// The on-screen note for a mode chosen with a key.
+/// The on-screen note for a mode the user chose (a key, the GUI, the CLI). One call, one
+/// note: the OSD is a single window that updates in place.
 pub fn osd_mode(p: Profile) {
-    let (icon, text) = match p {
-        Profile::EcoPlus => ("eco-plus", "Eco+"),
-        Profile::PowerSaver => ("battery-profile-powersave", "Power saver"),
-        Profile::Balanced => ("battery-profile-balanced", "Balanced"),
-        Profile::Performance => ("battery-profile-performance", "Performance"),
+    let icon = match p {
+        Profile::EcoPlus => "eco-plus",
+        Profile::Silent => "silent",
+        Profile::Balanced => "battery-profile-balanced",
+        Profile::Performance => "battery-profile-performance",
     };
-    crate::session::osd(icon, text, None);
+    crate::session::osd(icon, p.display_name(), None);
 }
 
 pub struct Tspmo(pub Shared);
@@ -385,8 +368,9 @@ impl Tspmo {
         lock(&self.0).gpu_message.clone()
     }
 
-    /// Choose a mode for the current power source: `eco-plus`, `power-saver`, `balanced` or
-    /// `performance`. (`ActiveProfile` of the power-profiles API can't name `eco-plus`.)
+    /// Choose a mode for the current power source: `eco-plus`, `silent`, `balanced` or
+    /// `performance` (`power-saver`, `saver` and `eco` are Eco+, `quiet` is Silent).
+    /// Shows the on-screen note when the mode changes.
     async fn set_profile(
         &self,
         profile: String,
@@ -401,13 +385,15 @@ impl Tspmo {
             let mut d = lock(&self.0);
             let before = d.effective();
             d.choose(p);
-            announce(before, d.effective());
+            if d.effective() != before {
+                osd_mode(d.effective());
+            }
         }
         emit_changed(conn, &self.0).await;
         Ok(())
     }
 
-    /// eco-plus → power-saver → balanced → performance → eco-plus.
+    /// eco-plus → silent → balanced → performance → eco-plus.
     async fn cycle_profile(
         &self,
         #[zbus(header)] hdr: Header<'_>,
@@ -417,14 +403,25 @@ impl Tspmo {
         polkit::check(conn, sender.as_deref(), polkit::SWITCH_PROFILE).await?;
         let next = {
             let mut d = lock(&self.0);
-            let before = d.effective();
-            let next = d.chosen().next();
-            d.choose(next);
-            announce(before, d.effective());
+            let next = d.cycle();
+            osd_mode(d.effective());
             next
         };
         emit_changed(conn, &self.0).await;
         Ok(next.as_str().to_owned())
+    }
+
+    /// What Fn+F5 does, without the key: the same handler (one cycle step, one OSD, the
+    /// hardware ends in the chosen state). For tests; `tspmo debug fan-key`.
+    async fn debug_fan_key(
+        &self,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        let sender = hdr.sender().map(|s| s.to_string());
+        polkit::check(conn, sender.as_deref(), polkit::SWITCH_PROFILE).await?;
+        crate::fankey::press(conn.clone(), self.0.clone(), "debug");
+        Ok(())
     }
 
     /// What `tspmo doctor` prints: `(severity, topic, text)` for every finding, severity

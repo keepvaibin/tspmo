@@ -76,7 +76,7 @@ impl Daemon {
                 .or_else(|| root.read_parse(format!("{}/gpu_mux_mode", gpu::ASUS_LEGACY))),
             root,
             profile_ac: Profile::Balanced,
-            profile_battery: Profile::PowerSaver,
+            profile_battery: Profile::Balanced,
             holds: Vec::new(),
             next_cookie: 1,
             tunables: Tunables::default(),
@@ -125,16 +125,12 @@ impl Daemon {
     }
 
     /// The mode in force: holds win (performance over power-saver), as in power-profiles-daemon.
-    /// A power-saver hold never lowers Eco+, which already saves more.
+    /// A `power-saver` hold is an Eco+ hold.
     pub fn effective(&self) -> Profile {
         if self.holds.iter().any(|h| h.profile == Profile::Performance) {
             Profile::Performance
-        } else if self.holds.iter().any(|h| h.profile == Profile::PowerSaver) {
-            if self.chosen() == Profile::EcoPlus {
-                Profile::EcoPlus
-            } else {
-                Profile::PowerSaver
-            }
+        } else if self.holds.iter().any(|h| h.profile == Profile::EcoPlus) {
+            Profile::EcoPlus
         } else {
             self.chosen()
         }
@@ -203,10 +199,8 @@ impl Daemon {
             let _ = std::fs::remove_file(self.root.path(ECO_SAVED));
         }
         self.applied = Some(key);
-        // Eco+ is a power-saver with extras: listeners keyed on the three profiles see
-        // `power-saver` and can look at `eco_plus` for the rest.
         crate::events::publish(&crate::events::Event::ProfileApplied {
-            profile: key.0.ppd(),
+            profile: key.0,
             eco_plus: key.0.is_eco_plus(),
             on_battery: key.1,
         });
@@ -219,21 +213,34 @@ impl Daemon {
         if !std::mem::take(&mut self.thermal_held) || !self.effective().is_eco_plus() {
             return;
         }
+        self.write_thermal();
+    }
+
+    /// Put the firmware thermal mode of the mode in force back if something else changed it
+    /// (the kernel's own step on the fan key). Never while Eco+'s write is held back for the
+    /// GPU switch. Returns whether it wrote.
+    pub fn reassert_thermal(&mut self) -> bool {
+        !self.thermal_held && self.write_thermal()
+    }
+
+    fn write_thermal(&mut self) -> bool {
         let plan = power::plan(&self.root, self.effective(), self.on_battery, &self.tunables, &[]);
         let Some(w) = plan.into_iter().find(|w| w.path == power::PLATFORM_PROFILE) else {
-            return;
+            return false;
         };
         let r = power::apply(&self.root, std::slice::from_ref(&w));
-        if !r.changed.is_empty() {
+        let wrote = !r.changed.is_empty();
+        if wrote {
             crate::quiet::note_profile_write();
             crate::events::publish(&crate::events::Event::ThermalModeWritten {
-                profile: self.effective().ppd(),
+                profile: self.effective(),
                 on_battery: self.on_battery,
             });
         }
         for (w, e) in &r.failed {
             eprintln!("tspmod: {} ({} = {}) failed: {e}", w.what, w.path, w.value);
         }
+        wrote
     }
 
     /// Whether Eco+'s thermal-mode write is still held back.
@@ -255,18 +262,43 @@ impl Daemon {
         self.apply(false);
     }
 
-    /// KDE/GNOME chose a power-profiles profile. Choosing `power-saver` while Eco+ is active
-    /// keeps Eco+ (it already is a power-saver); anything else leaves it.
+    /// KDE/GNOME chose a power-profiles profile: `power-saver` is Eco+. KDE reads Silent as
+    /// `balanced` and has no way to ask for it, so choosing `balanced` while Silent is active
+    /// keeps Silent; any other choice leaves it.
     pub fn choose_ppd(&mut self, p: Profile) {
-        if p == Profile::PowerSaver && self.chosen() == Profile::EcoPlus {
+        if p == Profile::Balanced && self.chosen() == Profile::Silent {
             return;
         }
         self.choose(p);
     }
 
-    /// The firmware changed `platform_profile` itself (Fn+F5 on ASUS, Fn+Q on Lenovo). Our own
-    /// writes come back here too: they match the mode in force and change nothing.
-    pub fn platform_changed(&mut self, value: &str) -> bool {
+    /// Is this `platform_profile` value one the daemon did not write (it differs from the
+    /// thermal mode in force)? Eco+'s write held back for the GPU switch is not a difference.
+    pub fn platform_foreign(&self, value: &str) -> bool {
+        !self.thermal_held
+            && Profile::from_platform(value).is_some_and(|p| p.thermal() != self.effective().thermal())
+    }
+
+    /// Fn+F5: the next mode after the latest choice (eco-plus, silent, balanced, performance),
+    /// applied once. Returns it.
+    pub fn cycle(&mut self) -> Profile {
+        let next = self.chosen().next();
+        self.choose(next);
+        next
+    }
+
+    /// The firmware changed `platform_profile` (another tool, or the kernel's own step on the
+    /// fan key). Our own writes come back here too: they match the mode in force and change
+    /// nothing.
+    ///
+    /// `fan_key`: the change falls in the window around a fan-key press. tspmod owns that key
+    /// and the final state, so the kernel's step is not a choice (see [`crate::fankey`]).
+    ///
+    /// A genuine external change is followed to the nearest mode: `balanced` and `performance`
+    /// as they are, `quiet` as Silent. Eco+ is never entered from outside: its dGPU, caps and
+    /// fans side effects are applied only when the user chooses it. Quiet while in Eco+ is
+    /// Eco+'s own thermal mode and changes nothing.
+    pub fn platform_changed(&mut self, value: &str, fan_key: bool) -> bool {
         // Any change, ours or the firmware's, makes the EC notify the NVIDIA driver.
         if self.last_platform.as_deref().is_some_and(|p| p != value) {
             crate::quiet::note_profile_write();
@@ -276,8 +308,11 @@ impl Daemon {
         if self.thermal_held {
             return false;
         }
+        if fan_key {
+            return false;
+        }
         match Profile::from_platform(value) {
-            Some(p) if p != self.effective().ppd() => {
+            Some(p) if p.thermal() != self.effective().thermal() => {
                 self.choose(p);
                 true
             }
@@ -405,7 +440,11 @@ impl Daemon {
             .filter_map(|l| l.split_once('='))
             .map(|(k, v)| (k.trim(), v.trim()))
             .collect();
-        let get_p = |k: &str| kv.get(k).and_then(|v| Profile::parse(v));
+        // `power-saver` was the quiet thermal mode of earlier versions: Silent now.
+        let get_p = |k: &str| kv.get(k).and_then(|v| Profile::parse_stored(v));
+        let migrated = ["profile_ac", "profile_battery"]
+            .iter()
+            .any(|k| kv.get(k) == Some(&"power-saver"));
         let get_b = |k: &str| kv.get(k).map(|v| *v == "true");
         if let Some(p) = get_p("profile_ac") {
             self.profile_ac = p;
@@ -442,9 +481,6 @@ impl Daemon {
                 t.eco.epp = v;
             }
         }
-        if let Some(b) = get_b("saver_no_turbo_on_battery") {
-            t.saver_no_turbo_on_battery = b;
-        }
         if let Some(b) = get_b("aspm_on_battery") {
             t.aspm_on_battery = b;
         }
@@ -454,6 +490,9 @@ impl Daemon {
         if let Some(b) = get_b("lazy_writeback_on_battery") {
             t.lazy_writeback_on_battery = b;
         }
+        if migrated {
+            self.save();
+        }
     }
 
     pub fn save(&self) {
@@ -461,14 +500,13 @@ impl Daemon {
         let text = format!(
             "# tspmod state (managed by tspmod; safe to edit while it is stopped)\n\
              profile_ac={}\nprofile_battery={}\ngpu_policy={}\n\
-             saver_no_turbo_on_battery={}\naspm_on_battery={}\n\
+             aspm_on_battery={}\n\
              audio_power_save_on_battery={}\nlazy_writeback_on_battery={}\n\
              eco_version=2\neco_pkg_w={}\neco_pkg_window_ms={}\neco_psys_w={}\neco_uncore_mhz={}\n\
              eco_ecap_mhz={}\neco_epp={}\n",
             self.profile_ac.as_str(),
             self.profile_battery.as_str(),
             self.gpu_policy.as_str(),
-            t.saver_no_turbo_on_battery,
             t.aspm_on_battery,
             t.audio_power_save_on_battery,
             t.lazy_writeback_on_battery,
@@ -598,7 +636,7 @@ mod tests {
             env.read(ECO_SAVED)
                 .contains("constraint_0_power_limit_uw=90000000")
         );
-        assert!(seen.lock().unwrap().contains(&(Profile::PowerSaver, true)));
+        assert!(seen.lock().unwrap().contains(&(Profile::EcoPlus, true)));
 
         // Leaving Eco+ restores what was there before, and forgets the saved copy.
         d.choose(Profile::Balanced);
@@ -609,25 +647,50 @@ mod tests {
     }
 
     #[test]
-    fn kde_power_saver_keeps_eco_plus_and_anything_else_leaves_it() {
+    fn kde_power_saver_is_eco_plus_and_reads_back_as_power_saver() {
         let env = Env::new("kde");
         let mut d = env.daemon();
-        d.choose(Profile::EcoPlus);
-        d.choose_ppd(Profile::PowerSaver);
+        d.choose_ppd(Profile::from_ppd("power-saver").unwrap());
         assert_eq!(d.effective(), Profile::EcoPlus);
+        assert_eq!(d.effective().ppd_name(), "power-saver");
+        assert_eq!(env.read(PKG), "12000000");
         d.choose_ppd(Profile::Performance);
         assert_eq!(d.effective(), Profile::Performance);
+        assert_eq!(env.read(PKG), "90000000");
+        d.choose_ppd(Profile::Balanced);
+        assert_eq!(d.effective(), Profile::Balanced);
+    }
+
+    #[test]
+    fn silent_reads_balanced_to_kde_and_kde_balanced_keeps_it() {
+        let env = Env::new("kde-silent");
+        let mut d = env.daemon();
+        d.choose(Profile::Silent);
+        assert_eq!(d.effective().ppd_name(), "balanced");
+        assert_eq!(env.read(power::PLATFORM_PROFILE), "quiet");
+        d.choose_ppd(Profile::Balanced);
+        assert_eq!(d.effective(), Profile::Silent);
+        // Anything else leaves it.
+        d.choose_ppd(Profile::Performance);
+        assert_eq!(d.effective(), Profile::Performance);
+        d.choose(Profile::Silent);
+        d.choose_ppd(Profile::EcoPlus);
+        assert_eq!(d.effective(), Profile::EcoPlus);
+        // Silent has none of Eco+'s extras.
+        d.choose(Profile::Silent);
         assert_eq!(env.read(PKG), "90000000");
     }
 
     #[test]
-    fn holds_never_lower_eco_plus_but_performance_holds_win() {
+    fn power_saver_holds_are_eco_plus_and_performance_holds_win() {
         let env = Env::new("holds");
         let mut d = env.daemon();
-        d.choose(Profile::EcoPlus);
-        let c = hold(&mut d, Profile::PowerSaver);
+        d.choose(Profile::Balanced);
+        let c = hold(&mut d, Profile::EcoPlus);
         assert_eq!(d.effective(), Profile::EcoPlus);
+        assert_eq!(env.read(PKG), "12000000");
         d.release(c);
+        assert_eq!(d.effective(), Profile::Balanced);
         hold(&mut d, Profile::Performance);
         assert_eq!(d.effective(), Profile::Performance);
         assert_eq!(env.read(PKG), "90000000");
@@ -639,11 +702,109 @@ mod tests {
         let mut d = env.daemon();
         d.choose(Profile::EcoPlus);
         // The kernel reports the `quiet` we just wrote.
-        assert!(!d.platform_changed("low-power"));
+        assert!(!d.platform_changed("low-power", false));
         assert_eq!(d.effective(), Profile::EcoPlus);
-        // Fn+F5 to balanced is a real change.
-        assert!(d.platform_changed("balanced"));
+        // An external write of balanced is a real change.
+        assert!(d.platform_changed("balanced", false));
         assert_eq!(d.effective(), Profile::Balanced);
+    }
+
+    #[test]
+    fn an_external_quiet_write_is_silent_and_never_eco_plus() {
+        let env = Env::new("external-quiet");
+        let mut d = env.daemon();
+        d.choose(Profile::Balanced);
+        assert!(d.platform_foreign("quiet"));
+        assert!(d.platform_changed("quiet", false));
+        // The nearest mode with no dGPU, cap or guard side effects.
+        assert_eq!(d.effective(), Profile::Silent);
+        assert_eq!(env.read(PKG), "90000000");
+        // Silent and Eco+ are both quiet in the firmware: no change either way.
+        assert!(!d.platform_foreign("quiet"));
+        d.choose(Profile::EcoPlus);
+        assert!(!d.platform_foreign("quiet"));
+        assert!(!d.platform_changed("quiet", false));
+        assert_eq!(d.effective(), Profile::EcoPlus);
+    }
+
+    #[test]
+    fn fn_f5_cycles_the_four_modes_from_the_latest_choice() {
+        let env = Env::new("cycle");
+        let mut d = env.daemon();
+        d.choose(Profile::Balanced);
+        let seen: Vec<Profile> = (0..5).map(|_| d.cycle()).collect();
+        assert_eq!(
+            seen,
+            [
+                Profile::Performance,
+                Profile::EcoPlus,
+                Profile::Silent,
+                Profile::Balanced,
+                Profile::Performance
+            ]
+        );
+        assert_eq!(env.read(power::PLATFORM_PROFILE), "performance");
+        // The state file has the latest.
+        drop(d);
+        assert_eq!(env.daemon().chosen(), Profile::Performance);
+    }
+
+    #[test]
+    fn the_kernels_step_on_the_fan_key_is_not_a_choice_and_is_corrected() {
+        let env = Env::new("fan-key");
+        let mut d = env.daemon();
+        d.choose(Profile::Balanced);
+        // Press: tspmod picks performance and writes it.
+        assert_eq!(d.cycle(), Profile::Performance);
+        // The kernel steps from performance to quiet (asus-wmi): inside the key's window.
+        std::fs::write(
+            env.0.join(power::PLATFORM_PROFILE.trim_start_matches('/')),
+            "quiet\n",
+        )
+        .unwrap();
+        assert!(d.platform_foreign("quiet"));
+        assert!(!d.platform_changed("quiet", true));
+        assert_eq!(d.effective(), Profile::Performance, "not followed");
+        // The handler then makes the hardware match what tspmod chose, once.
+        assert!(d.reassert_thermal());
+        assert_eq!(env.read(power::PLATFORM_PROFILE), "performance");
+        assert!(!d.reassert_thermal(), "nothing left to fix");
+        // Outside the window the same write is a genuine external change.
+        assert!(d.platform_changed("quiet", false));
+        assert_eq!(d.effective(), Profile::Silent);
+    }
+
+    #[test]
+    fn reasserting_never_writes_while_eco_plus_waits_for_the_gpu() {
+        let env = Env::new("fan-key-held");
+        let mut d = hybrid_with_dgpu(&env);
+        d.choose(Profile::Balanced);
+        d.choose(Profile::EcoPlus);
+        assert!(d.thermal_held());
+        assert!(!d.reassert_thermal());
+        assert_eq!(env.read(power::PLATFORM_PROFILE), "balanced");
+    }
+
+    #[test]
+    fn old_power_saver_state_becomes_silent_and_is_rewritten() {
+        let env = Env::new("migrate");
+        let state = env.0.join("var/state");
+        std::fs::create_dir_all(state.parent().unwrap()).unwrap();
+        std::fs::write(
+            &state,
+            "profile_ac=power-saver\nprofile_battery=eco-plus\nsaver_no_turbo_on_battery=true\ngpu_policy=optimized\n",
+        )
+        .unwrap();
+        let d = env.daemon();
+        assert_eq!((d.profile_ac, d.profile_battery), (Profile::Silent, Profile::EcoPlus));
+        let text = std::fs::read_to_string(&state).unwrap();
+        assert!(text.contains("profile_ac=silent"), "{text}");
+        assert!(!text.contains("power-saver"), "{text}");
+        assert!(!text.contains("saver_no_turbo"), "{text}");
+        // Nothing stored: both sources start balanced.
+        let env = Env::new("migrate-default");
+        let d = env.daemon();
+        assert_eq!((d.profile_ac, d.profile_battery), (Profile::Balanced, Profile::Balanced));
     }
 
     /// A settled system with the dGPU on in Hybrid and the ASUS switch present.
@@ -681,13 +842,13 @@ mod tests {
         assert_eq!(env.read(power::PLATFORM_PROFILE), "balanced");
         assert!(d.thermal_held());
         // The firmware's own echo of the old mode is not a choice that cancels Eco+.
-        assert!(!d.platform_changed("balanced"));
+        assert!(!d.platform_changed("balanced", false));
         assert_eq!(d.effective(), Profile::EcoPlus);
         // The GPU switch is over (done, failed or never started): the mode goes in.
         d.release_thermal();
         assert_eq!(env.read(power::PLATFORM_PROFILE), "quiet");
         assert!(!d.thermal_held());
-        assert!(!d.platform_changed("quiet"));
+        assert!(!d.platform_changed("quiet", false));
         assert_eq!(d.effective(), Profile::EcoPlus);
     }
 
@@ -852,21 +1013,21 @@ mod tests {
         let mut d = env.daemon();
         let long = "x".repeat(10_000);
         let c = d
-            .hold(Profile::PowerSaver, long.clone(), long, ":1.9".into())
+            .hold(Profile::EcoPlus, long.clone(), long, ":1.9".into())
             .unwrap();
         assert_eq!(d.holds[0].reason.len(), Daemon::MAX_HOLD_TEXT);
         assert_eq!(d.holds[0].cookie, c);
         for _ in 1..Daemon::MAX_HOLDS_PER_CLIENT {
-            d.hold(Profile::PowerSaver, "r".into(), "a".into(), ":1.9".into())
+            d.hold(Profile::EcoPlus, "r".into(), "a".into(), ":1.9".into())
                 .unwrap();
         }
         assert!(
-            d.hold(Profile::PowerSaver, "r".into(), "a".into(), ":1.9".into())
+            d.hold(Profile::EcoPlus, "r".into(), "a".into(), ":1.9".into())
                 .is_err()
         );
         // Another client is unaffected.
         assert!(
-            d.hold(Profile::PowerSaver, "r".into(), "a".into(), ":1.10".into())
+            d.hold(Profile::EcoPlus, "r".into(), "a".into(), ":1.10".into())
                 .is_ok()
         );
     }
@@ -901,12 +1062,12 @@ mod tests {
         let mut d = env.daemon();
         d.choose(Profile::EcoPlus); // on AC
         d.on_battery = true;
-        d.choose(Profile::PowerSaver);
+        d.choose(Profile::Silent);
         drop(d);
         let d = env.daemon();
         assert_eq!(
             (d.profile_ac, d.profile_battery),
-            (Profile::EcoPlus, Profile::PowerSaver)
+            (Profile::EcoPlus, Profile::Silent)
         );
     }
 }

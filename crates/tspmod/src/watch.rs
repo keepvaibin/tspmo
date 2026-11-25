@@ -53,7 +53,16 @@ pub fn power_source(conn: Connection, shared: Shared) {
     }
 }
 
-/// The firmware changed the thermal mode itself (Fn+F5 on ASUS, Fn+Q on Lenovo).
+fn read_value(file: &mut std::fs::File) -> Option<String> {
+    let mut buf = String::with_capacity(32);
+    file.seek(SeekFrom::Start(0)).ok()?;
+    file.read_to_string(&mut buf).ok()?;
+    Some(buf.trim().to_owned())
+}
+
+/// `platform_profile` changed. The kernel steps it on the fan key (asus-wmi), other tools may
+/// write it. The fan key belongs to tspmod (`fankey.rs`): a change near a press is the kernel's
+/// step and is not followed; any other is followed to the nearest mode (`Daemon::platform_changed`).
 /// sysfs attributes signal changes with POLLPRI; we sleep in poll(2) until then.
 pub fn platform_profile(conn: Connection, shared: Shared) {
     let path = lock(&shared).root.path(PLATFORM_PROFILE);
@@ -61,22 +70,47 @@ pub fn platform_profile(conn: Connection, shared: Shared) {
         return;
     };
     spawn("platform-profile", move || {
+        use crate::quiet::{Clock, Real};
         use rustix::event::{PollFd, PollFlags, poll};
-        let mut buf = String::with_capacity(32);
         loop {
-            // Read under the daemon lock: a value read before it could be older than a mode a
-            // concurrent `SetProfile` is writing, and would cancel that choice.
+            let at = Real.now();
+            let (mut value, foreign) = {
+                let d = lock(&shared);
+                let Some(v) = read_value(&mut file) else { return };
+                let foreign = d.platform_foreign(&v);
+                (v, foreign)
+            };
+            // Timing on this machine, for the journal: when the notification came, and when
+            // the key (if any) did.
+            if foreign {
+                eprintln!("tspmod: platform_profile -> {value} at {} ms", at.as_millis());
+                crate::fankey::kernel_stepped(at);
+            }
+            let mut fan_key = crate::fankey::covers(at);
+            if foreign && !fan_key {
+                // The key event can arrive after the sysfs notification.
+                Real.sleep(crate::fankey::LOOKAHEAD);
+                fan_key = crate::fankey::covers(at);
+            }
             let (changed, now) = {
                 let mut d = lock(&shared);
-                buf.clear();
-                if file.seek(SeekFrom::Start(0)).is_err() || file.read_to_string(&mut buf).is_err() {
-                    return;
+                if let Some(v) = read_value(&mut file) {
+                    value = v;
                 }
-                (d.platform_changed(buf.trim()), d.effective())
+                (d.platform_changed(&value, fan_key), d.effective())
             };
+            if foreign {
+                eprintln!(
+                    "tspmod: platform_profile {value}: {}",
+                    match (fan_key, changed) {
+                        (true, _) => "the fan key's own step, not followed",
+                        (false, true) => "external change, followed",
+                        (false, false) => "no change",
+                    }
+                );
+            }
             if changed {
-                // The thermal key (Fn+F5) is the one change from the user's hands with no app
-                // involved: say what it chose.
+                // Not the fan key and not us: say what we now are.
                 crate::dbus::osd_mode(now);
                 emit_changed_blocking(&conn, &shared);
             }

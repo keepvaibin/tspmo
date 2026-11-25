@@ -545,8 +545,8 @@ fn eco_plus_limits(root: &SysRoot, _m: &Machine, out: &mut Vec<Finding>) {
         id: "eco-plus-rapl",
         severity: Severity::Info,
         title: "Eco+ can't cap CPU power: no RAPL zones".into(),
-        detail: "/sys/class/powercap has no package or platform power zone. Eco+ still turns \
-                 turbo off, lowers the refresh rate and uses the power-saver settings."
+        detail: "/sys/class/powercap has no package or platform power zone. Eco+ still lowers the refresh rate \
+                 and uses the firmware quiet mode."
             .into(),
         fix: Some(Fix {
             summary: "Load the RAPL driver".into(),

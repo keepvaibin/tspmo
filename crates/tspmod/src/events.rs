@@ -24,8 +24,8 @@ pub enum Event {
     Resumed,
     /// A vendor hotkey (Linux input key code) was pressed.
     Key(u16),
-    /// The thermal-mode key (Fn+F5) was pressed on the keyboard.
-    FanKey,
+    /// The thermal-mode key (Fn+F5) was pressed (on the named input device).
+    FanKey(&'static str),
 }
 
 type Handler = Box<dyn Fn(&Event) + Send + Sync>;
