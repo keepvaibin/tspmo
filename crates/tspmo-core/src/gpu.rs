@@ -16,6 +16,14 @@ use tspmo_sys::{SysRoot, fwattr, pci};
 pub const ASUS_FW: &str = "asus-armoury";
 pub const ASUS_LEGACY: &str = "/sys/devices/platform/asus-nb-wmi";
 
+/// Written by `tspmod` when `rmmod nvidia` hung in the kernel (an unkillable task: the driver
+/// is half unloaded). It lives in `/run`, so only a restart clears it. While it exists GPU
+/// switches are refused and `tspmo doctor` says so.
+pub const RESTART_MARKER: &str = "/run/tspmo/gpu-restart";
+
+/// GpuMessage (and the refusal) while [`RESTART_MARKER`] exists.
+pub const RESTART_REQUIRED: &str = "Restart to recover the NVIDIA GPU";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Eco,

@@ -11,6 +11,7 @@ mod events;
 mod gpu;
 mod guard;
 mod polkit;
+mod quiet;
 mod session;
 mod state;
 mod watch;
@@ -103,6 +104,9 @@ fn run() -> zbus::Result<()> {
             d.gpu_status().mode
         );
     }
+
+    // Clients that outlived the previous daemon drop its stale `GpuSwitching`/`GpuMessage`.
+    zbus::block_on(dbus::emit_changed(conn.inner(), &shared));
 
     // Every listener is in place before a watcher or the display can publish anything.
     // Entering or leaving Eco+ changes what the GPU policy wants (Eco+ is dGPU off). The event

@@ -93,7 +93,17 @@ pub fn ready(units: &Units, nv: Nvidia, timed_out: bool) -> bool {
 /// May the GPU's power state change now? Only once the boot has settled ([`ready`] holds that
 /// back while the NVIDIA driver is still loading).
 pub fn allowed() -> bool {
+    #[cfg(test)]
+    if TEST_ALLOWED.with(std::cell::Cell::get) {
+        return true;
+    }
     settled()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test that exercises a settled system sets this on its own thread.
+    pub static TEST_ALLOWED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 const SYSTEMD: &str = "org.freedesktop.systemd1";

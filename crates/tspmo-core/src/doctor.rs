@@ -40,6 +40,7 @@ pub fn run(root: &SysRoot, m: &Machine) -> Vec<Finding> {
         usb_hid_autosuspend,
         numlock_led,
         nvidia_runtime_pm,
+        nvidia_unload_hung,
         nvidia_wakes,
         gtk_renderer,
         conflicting_daemons,
@@ -276,6 +277,28 @@ fn nvidia_runtime_pm(root: &SysRoot, m: &Machine, out: &mut Vec<Finding>) {
             }),
         });
     }
+}
+
+/// `rmmod nvidia` hung inside the kernel (NVIDIA's ACPI notify handler against the unload: an
+/// ABBA on the RM lock). The task cannot be killed and the driver is half gone: only a restart
+/// brings the GPU back, and tspmod refuses GPU switches until then.
+fn nvidia_unload_hung(root: &SysRoot, _m: &Machine, out: &mut Vec<Finding>) {
+    if !root.exists(crate::gpu::RESTART_MARKER) {
+        return;
+    }
+    out.push(Finding {
+        id: "nvidia-unload-hung",
+        severity: Severity::Error,
+        title: crate::gpu::RESTART_REQUIRED.into(),
+        detail: "Unloading the NVIDIA driver for Eco hung in the kernel (an `rmmod` task in D \
+                 state that cannot be killed). GPU switches are refused until the next boot."
+            .into(),
+        fix: Some(Fix {
+            summary: "Restart the computer".into(),
+            commands: vec!["systemctl reboot".into()],
+            needs_reboot: true,
+        }),
+    });
 }
 
 /// Why an NVIDIA GPU that should be asleep is awake: the apps holding it, a desktop that
@@ -601,6 +624,27 @@ mod tests {
 
     fn ids(root: &SysRoot) -> Vec<&'static str> {
         run(root, &Machine::probe(root)).iter().map(|f| f.id).collect()
+    }
+
+    #[test]
+    fn a_hung_driver_unload_is_an_error_with_a_restart_fix() {
+        let d = std::env::temp_dir().join(format!("tspmo-doctor-hung-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let root = SysRoot::new(&d);
+        let m = Machine::probe(&root);
+        let mut out = Vec::new();
+        nvidia_unload_hung(&root, &m, &mut out);
+        assert!(out.is_empty());
+        let marker = d.join(crate::gpu::RESTART_MARKER.trim_start_matches('/'));
+        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        std::fs::write(&marker, "rmmod hung\n").unwrap();
+        nvidia_unload_hung(&root, &m, &mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].id, "nvidia-unload-hung");
+        assert_eq!(out[0].severity, Severity::Error);
+        assert_eq!(out[0].title, "Restart to recover the NVIDIA GPU");
+        assert!(out[0].fix.as_ref().unwrap().needs_reboot);
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

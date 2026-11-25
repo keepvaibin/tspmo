@@ -46,6 +46,11 @@ pub struct Daemon {
     refused: std::collections::HashSet<String>,
     /// The RAPL/uncore values from before Eco+ was applied (empty when Eco+ is not active).
     eco_saved: Vec<power::Write>,
+    /// Eco+'s `platform_profile` write, held back until the GPU switch to Eco is over (see
+    /// [`crate::gpu::eco_switch_ahead`]).
+    thermal_deferred: Option<power::Write>,
+    /// The last `platform_profile` value seen by the watcher (a change is a thermal write).
+    last_platform: Option<String>,
     /// What was last applied, to avoid redundant firmware writes.
     applied: Option<(Profile, bool)>,
     state_file: PathBuf,
@@ -85,6 +90,8 @@ impl Daemon {
             gpu_message: String::new(),
             refused: std::collections::HashSet::new(),
             eco_saved: Vec::new(),
+            thermal_deferred: None,
+            last_platform: None,
             applied: None,
             state_file: state_dir.join("state"),
         };
@@ -94,6 +101,12 @@ impl Daemon {
             d.eco_saved = power::parse_snapshot(&text);
         }
         d.gpu_cache = gpu::status(&d.root, d.boot_mux);
+        // A switch is never in progress at start: whatever a previous daemon's clients last saw
+        // (`GpuSwitching`) is stale. A hung driver unload outlives the daemon, though.
+        d.gpu_switching = None;
+        if d.root.exists(gpu::RESTART_MARKER) {
+            d.gpu_message = gpu::RESTART_REQUIRED.to_owned();
+        }
         d
     }
 
@@ -143,7 +156,22 @@ impl Daemon {
         };
         let mut plan = power::plan(&self.root, key.0, key.1, &self.tunables, &restore);
         plan.retain(|w| !self.refused.contains(&w.path));
+        // Entering Eco+ with the dGPU on: the switch to Eco comes before the thermal-mode
+        // write, whose EC notification would otherwise meet the driver unload.
+        let entering = self.applied.is_some_and(|(p, _)| !p.is_eco_plus());
+        let defer = key.0.is_eco_plus()
+            && (entering || self.thermal_deferred.is_some())
+            && crate::gpu::eco_switch_ahead(self);
+        self.thermal_deferred = None;
+        if defer {
+            if let Some(i) = plan.iter().position(|w| w.path == power::PLATFORM_PROFILE) {
+                self.thermal_deferred = Some(plan.remove(i));
+            }
+        }
         let r = power::apply(&self.root, &plan);
+        if r.changed.iter().any(|w| w.path == power::PLATFORM_PROFILE) {
+            crate::quiet::note_profile_write();
+        }
         for (w, e) in &r.failed {
             // The firmware owns some settings (e.g. PCIe ASPM when the ACPI FADT forbids OS
             // control): note it once and stop asking.
@@ -178,6 +206,26 @@ impl Daemon {
         });
     }
 
+    /// Write the thermal mode Eco+ held back while the GPU switched (no-op when none is held).
+    pub fn release_thermal(&mut self) {
+        let Some(w) = self.thermal_deferred.take() else {
+            return;
+        };
+        let r = power::apply(&self.root, std::slice::from_ref(&w));
+        if !r.changed.is_empty() {
+            crate::quiet::note_profile_write();
+        }
+        for (w, e) in &r.failed {
+            eprintln!("tspmod: {} ({} = {}) failed: {e}", w.what, w.path, w.value);
+        }
+    }
+
+    /// Whether Eco+'s thermal-mode write is still held back.
+    #[cfg(test)]
+    pub fn thermal_held(&self) -> bool {
+        self.thermal_deferred.is_some()
+    }
+
     /// The user picked a profile (from KDE/GNOME, the GUI, the CLI or a hotkey).
     pub fn choose(&mut self, p: Profile) {
         if self.on_battery {
@@ -203,6 +251,15 @@ impl Daemon {
     /// The firmware changed `platform_profile` itself (Fn+F5 on ASUS, Fn+Q on Lenovo). Our own
     /// writes come back here too: they match the mode in force and change nothing.
     pub fn platform_changed(&mut self, value: &str) -> bool {
+        // Any change, ours or the firmware's, makes the EC notify the NVIDIA driver.
+        if self.last_platform.as_deref().is_some_and(|p| p != value) {
+            crate::quiet::note_profile_write();
+        }
+        self.last_platform = Some(value.to_owned());
+        // Eco+'s own write is still held back: what the firmware shows is not a choice.
+        if self.thermal_deferred.is_some() {
+            return false;
+        }
         match Profile::from_platform(value) {
             Some(p) if p != self.effective().ppd() => {
                 self.choose(p);
@@ -571,6 +628,119 @@ mod tests {
         // Fn+F5 to balanced is a real change.
         assert!(d.platform_changed("balanced"));
         assert_eq!(d.effective(), Profile::Balanced);
+    }
+
+    /// A settled system with the dGPU on in Hybrid and the ASUS switch present.
+    fn hybrid_with_dgpu(env: &Env) -> Daemon {
+        let f = |p: &str, c: &str| {
+            let p = env.0.join(p.trim_start_matches('/'));
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, c).unwrap();
+        };
+        let dev = "/sys/bus/pci/devices/0000:01:00.0";
+        f(&format!("{dev}/class"), "0x030200\n");
+        f(&format!("{dev}/vendor"), "0x10de\n");
+        f(&format!("{dev}/power/runtime_status"), "suspended\n");
+        crate::boot::TEST_ALLOWED.with(|c| c.set(true));
+        let mut d = env.daemon();
+        d.gpu_cache = gpu::status(&d.root, None);
+        d.gpu_cache.switcher = gpu::Switcher::Asus {
+            fw_attrs: true,
+            has_mux: false,
+        };
+        d.gpu_cache.mode = gpu::Mode::Hybrid;
+        d.gpu_cache.pending = None;
+        d.gpu_policy = Policy::Fixed(gpu::Mode::Hybrid);
+        d
+    }
+
+    #[test]
+    fn eco_plus_switches_the_gpu_before_it_writes_the_thermal_mode() {
+        let env = Env::new("order");
+        let mut d = hybrid_with_dgpu(&env);
+        d.choose(Profile::Balanced);
+        d.choose(Profile::EcoPlus);
+        // Everything else is applied; the firmware thermal mode waits for the GPU switch.
+        assert_eq!(env.read(PKG), "12000000");
+        assert_eq!(env.read(power::PLATFORM_PROFILE), "balanced");
+        assert!(d.thermal_held());
+        // The firmware's own echo of the old mode is not a choice that cancels Eco+.
+        assert!(!d.platform_changed("balanced"));
+        assert_eq!(d.effective(), Profile::EcoPlus);
+        // The GPU switch is over (done, failed or never started): the mode goes in.
+        d.release_thermal();
+        assert_eq!(env.read(power::PLATFORM_PROFILE), "quiet");
+        assert!(!d.thermal_held());
+        assert!(!d.platform_changed("quiet"));
+        assert_eq!(d.effective(), Profile::EcoPlus);
+    }
+
+    #[test]
+    fn eco_plus_writes_the_thermal_mode_at_once_when_no_gpu_switch_is_ahead() {
+        // Already in Eco: no driver to unload.
+        let env = Env::new("order-eco");
+        let mut d = hybrid_with_dgpu(&env);
+        d.gpu_cache.mode = gpu::Mode::Eco;
+        d.choose(Profile::Balanced);
+        d.choose(Profile::EcoPlus);
+        assert_eq!(env.read(power::PLATFORM_PROFILE), "quiet");
+        assert!(!d.thermal_held());
+        // Ultimate is a reboot-only choice that Eco+ leaves alone.
+        let env = Env::new("order-ult");
+        let mut d = hybrid_with_dgpu(&env);
+        d.gpu_policy = Policy::Fixed(gpu::Mode::Ultimate);
+        d.choose(Profile::Balanced);
+        d.choose(Profile::EcoPlus);
+        assert_eq!(env.read(power::PLATFORM_PROFILE), "quiet");
+        // Before the boot has settled nothing about the GPU is touched.
+        let env = Env::new("order-boot");
+        let mut d = hybrid_with_dgpu(&env);
+        crate::boot::TEST_ALLOWED.with(|c| c.set(false));
+        d.choose(Profile::Balanced);
+        d.choose(Profile::EcoPlus);
+        assert_eq!(env.read(power::PLATFORM_PROFILE), "quiet");
+    }
+
+    #[test]
+    fn leaving_eco_plus_before_the_gpu_switch_drops_the_held_write() {
+        let env = Env::new("order-leave");
+        let mut d = hybrid_with_dgpu(&env);
+        d.choose(Profile::Balanced);
+        d.choose(Profile::EcoPlus);
+        assert!(d.thermal_held());
+        d.choose(Profile::Performance);
+        assert!(!d.thermal_held());
+        assert_eq!(env.read(power::PLATFORM_PROFILE), "performance");
+        d.release_thermal(); // nothing left to write
+        assert_eq!(env.read(power::PLATFORM_PROFILE), "performance");
+    }
+
+    #[test]
+    fn a_thermal_write_is_recorded_for_the_unload_wait() {
+        let env = Env::new("stamp");
+        let mut d = env.daemon();
+        d.choose(Profile::Balanced);
+        let before = crate::quiet::last_profile_write();
+        d.choose(Profile::Performance); // balanced -> performance: a write
+        let after = crate::quiet::last_profile_write();
+        assert!(after.is_some() && after >= before);
+        assert!(
+            crate::quiet::thermal_remaining(crate::quiet::Clock::now(&crate::quiet::Real), after).is_some()
+        );
+    }
+
+    #[test]
+    fn start_clears_a_stale_switch_and_remembers_a_hung_unload() {
+        let env = Env::new("start");
+        let d = env.daemon();
+        assert_eq!(d.gpu_switching, None);
+        assert!(d.gpu_message.is_empty());
+        let marker = env.0.join(gpu::RESTART_MARKER.trim_start_matches('/'));
+        std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
+        std::fs::write(marker, "rmmod hung\n").unwrap();
+        let d = env.daemon();
+        assert_eq!(d.gpu_switching, None);
+        assert_eq!(d.gpu_message, "Restart to recover the NVIDIA GPU");
     }
 
     #[test]
