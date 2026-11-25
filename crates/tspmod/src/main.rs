@@ -38,6 +38,14 @@ fn main() {
     }
 }
 
+fn lock_eco(shared: &dbus::Shared) -> bool {
+    shared
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .effective()
+        .is_eco_plus()
+}
+
 fn run() -> zbus::Result<()> {
     let root = SysRoot::from_env();
     let asus = asus::init(&root);
@@ -101,7 +109,8 @@ fn run() -> zbus::Result<()> {
     // fires under the power daemon's lock: hand off to a thread.
     {
         let (c, s) = (conn.inner().clone(), Arc::clone(&shared));
-        let last = std::sync::Mutex::new(false);
+        // Starts as the mode the daemon is in: a restart during Eco+ must still see Eco+ end.
+        let last = std::sync::Mutex::new(lock_eco(&shared));
         events::subscribe(move |e| {
             if let events::Event::ProfileApplied { eco_plus, .. } = e {
                 let mut l = last.lock().unwrap_or_else(|p| p.into_inner());

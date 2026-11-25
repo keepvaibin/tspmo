@@ -25,6 +25,7 @@ Severity: H = wrong state or exploitable, M = wrong in a rare path, L = hygiene.
 | 10 | M | `session::run` joined the output threads: a grandchild keeping a pipe open hung the caller, which holds the compositor lock | output arrives on a channel with a 0.5 s grace; output capped at 1 MiB | code |
 | 11 | M | ICC profile written in place: a crash left an empty file that `path.exists()` then accepted for ever | write to `.tmp`, rename | code |
 | 12 | L | Events subscribed by `main` (Eco+ GPU, Fn+F5) came after the watcher threads started: an early event was missed | all subscribers registered before the display and the watchers start | code |
+| 12b | H | After a daemon restart during Eco+ the Eco+ listener believed Eco+ was off: leaving Eco+ never stopped the guard (processes stayed on the efficiency cores) nor returned the dGPU to the policy; a stale "Waiting to switch" message stayed | listener starts from the daemon's real mode | live: stop and start in Eco+, then balanced |
 | 13 | L | `Fans1`/`Power1` accepted `eco-plus` as a mode (stored under power-saver but compared as a different mode) | normalised to power-saver | code |
 | 14 | L | `display-op` thread spawn failure panicked the daemon (`panic = "abort"`) | returns "busy; try again" | code |
 | 15 | L | The touchpad was read (13 wake-ups/s while in use) even with no idle timeout | not polled unless the idle timer runs or the keyboard is dark; brightness changes re-arm the timer | idle measurement |
