@@ -666,7 +666,10 @@ mod tests {
         }
         assert_eq!(seen, ["eco-plus", "silent", "balanced", "performance"]);
         assert_eq!(p, Profile::EcoPlus);
-        assert_eq!(Profile::MODES.map(Profile::display_name), ["Eco+", "Silent", "Balanced", "Turbo"]);
+        assert_eq!(
+            Profile::MODES.map(Profile::display_name),
+            ["Eco+", "Silent", "Balanced", "Turbo"]
+        );
     }
 
     #[test]
@@ -697,7 +700,9 @@ mod tests {
         assert_eq!(Profile::parse_stored("power-saver"), Some(Profile::Silent));
         assert_eq!(Profile::parse_stored("eco-plus"), Some(Profile::EcoPlus));
         assert_eq!(Profile::EcoPlus.thermal(), Profile::Silent);
-        assert!(Profile::Silent.stops_fans() && Profile::EcoPlus.stops_fans() && !Profile::Balanced.stops_fans());
+        assert!(
+            Profile::Silent.stops_fans() && Profile::EcoPlus.stops_fans() && !Profile::Balanced.stops_fans()
+        );
     }
 
     fn with_rapl(tag: &str) -> Fake {

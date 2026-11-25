@@ -5,8 +5,8 @@ use crate::value::V;
 use std::collections::HashMap;
 use zbus::zvariant::Value;
 
-/// Thermal modes (Eco+ is a power-saver variant for fans and power limits).
-pub const THERMAL: [&str; 3] = ["power-saver", "balanced", "performance"];
+/// Firmware thermal modes, which fan curves and power limits are kept per (Eco+ shares Silent's).
+pub const THERMAL: [&str; 3] = ["silent", "balanced", "performance"];
 pub const SOURCES: [&str; 2] = ["ac", "battery"];
 
 #[derive(Default)]
@@ -546,7 +546,7 @@ pub fn nice(id: &str) -> String {
 pub fn mode_label(mode: &str) -> &'static str {
     match mode {
         "eco-plus" => "Eco+",
-        "power-saver" => "Silent",
+        "silent" => "Silent",
         "performance" => "Turbo",
         _ => "Balanced",
     }

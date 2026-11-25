@@ -1276,11 +1276,11 @@ impl App {
 pub fn mode_color(mode: &str, dark: bool) -> slint::Color {
     let (r, g, b) = match (mode, dark) {
         ("eco-plus", true) => (0x8c, 0xd4, 0x4a),
-        ("power-saver", true) => (0x35, 0xc9, 0xa6),
+        ("silent", true) => (0x35, 0xc9, 0xa6),
         ("performance", true) => (0xf2, 0x67, 0x3b),
         (_, true) => (0x4d, 0x9c, 0xf7),
         ("eco-plus", false) => (0x4f, 0x9a, 0x14),
-        ("power-saver", false) => (0x0e, 0x9d, 0x7e),
+        ("silent", false) => (0x0e, 0x9d, 0x7e),
         ("performance", false) => (0xd6, 0x48, 0x1c),
         (_, false) => (0x1f, 0x74, 0xdc),
     };

@@ -37,19 +37,19 @@ export component PopupBody inherits VerticalLayout {
             wrap: Bk.win-fans;
             opts: Bk.win-fans ? [
                 { id: "eco-plus", label: "Eco+", tint: Th.mode-color("eco-plus"), keyed: true, icon: "eco-plus", dim: false, on: false },
-                { id: "power-saver", label: "Silent", tint: Th.mode-color("power-saver"), keyed: true, icon: "power-saver", dim: false, on: false },
+                { id: "silent", label: "Silent", tint: Th.mode-color("silent"), keyed: true, icon: "silent", dim: false, on: false },
                 { id: "balanced", label: "Balanced", tint: Th.mode-color("balanced"), keyed: true, icon: "balanced", dim: false, on: false },
                 { id: "performance", label: "Turbo", tint: Th.mode-color("performance"), keyed: true, icon: "performance", dim: false, on: false },
                 { id: "fans", label: "Fans + Power", tint: Th.dim, keyed: true, icon: "tune", dim: false, on: false },
             ] : [
                 { id: "eco-plus", label: "Eco+", tint: Th.mode-color("eco-plus"), keyed: true, icon: "eco-plus", dim: false, on: false },
-                { id: "power-saver", label: "Silent", tint: Th.mode-color("power-saver"), keyed: true, icon: "power-saver", dim: false, on: false },
+                { id: "silent", label: "Silent", tint: Th.mode-color("silent"), keyed: true, icon: "silent", dim: false, on: false },
                 { id: "balanced", label: "Balanced", tint: Th.mode-color("balanced"), keyed: true, icon: "balanced", dim: false, on: false },
                 { id: "performance", label: "Turbo", tint: Th.mode-color("performance"), keyed: true, icon: "performance", dim: false, on: false },
             ];
-            index: Bk.mode == "eco-plus" ? 0 : Bk.mode == "power-saver" ? 1 : Bk.mode == "balanced" ? 2 : Bk.mode == "performance" ? 3 : -1;
+            index: Bk.mode == "eco-plus" ? 0 : Bk.mode == "silent" ? 1 : Bk.mode == "balanced" ? 2 : Bk.mode == "performance" ? 3 : -1;
             picked(i) => {
-                if (i == 4) { Bk.open("fans"); } else { Bk.act("mode", ["eco-plus", "power-saver", "balanced", "performance"][i]); }
+                if (i == 4) { Bk.open("fans"); } else { Bk.act("mode", ["eco-plus", "silent", "balanced", "performance"][i]); }
             }
         }
     }
@@ -271,7 +271,7 @@ export component Popup inherits Window {
             if (e.text == Key.Escape) { Bk.close(); return accept; }
             if (e.modifiers.control || e.modifiers.alt || e.modifiers.meta) { return reject; }
             if (e.text == "1") { Bk.act("mode", "eco-plus"); return accept; }
-            if (e.text == "2") { Bk.act("mode", "power-saver"); return accept; }
+            if (e.text == "2") { Bk.act("mode", "silent"); return accept; }
             if (e.text == "3") { Bk.act("mode", "balanced"); return accept; }
             if (e.text == "4") { Bk.act("mode", "performance"); return accept; }
             if (e.text == "f" && Bk.win-fans) { Bk.open("fans"); return accept; }

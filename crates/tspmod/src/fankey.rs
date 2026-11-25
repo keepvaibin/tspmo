@@ -96,7 +96,9 @@ pub fn press(conn: zbus::Connection, shared: Shared, source: &str) {
             eprintln!("tspmod: fan key from {source}: duplicate, ignored");
             return;
         }
-        let stepped = h.last_step.is_some_and(|t| now.saturating_sub(t) < BEFORE && t <= now);
+        let stepped = h
+            .last_step
+            .is_some_and(|t| now.saturating_sub(t) < BEFORE && t <= now);
         (now, h.steps, stepped)
     };
     eprintln!("tspmod: fan key from {source} at {} ms", now.as_millis());

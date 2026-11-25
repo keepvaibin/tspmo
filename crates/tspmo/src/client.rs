@@ -53,7 +53,9 @@ pub fn get_bool(state: &HashMap<String, OwnedValue>, key: &str) -> bool {
 
 pub fn debug_fan_key() -> Result<(), String> {
     let conn = connect()?;
-    proxy(&conn)?.call::<_, _, ()>("DebugFanKey", &()).map_err(explain)
+    proxy(&conn)?
+        .call::<_, _, ()>("DebugFanKey", &())
+        .map_err(explain)
 }
 
 pub fn set_profile(p: &str) -> Result<(), String> {

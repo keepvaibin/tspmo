@@ -796,7 +796,10 @@ mod tests {
         )
         .unwrap();
         let d = env.daemon();
-        assert_eq!((d.profile_ac, d.profile_battery), (Profile::Silent, Profile::EcoPlus));
+        assert_eq!(
+            (d.profile_ac, d.profile_battery),
+            (Profile::Silent, Profile::EcoPlus)
+        );
         let text = std::fs::read_to_string(&state).unwrap();
         assert!(text.contains("profile_ac=silent"), "{text}");
         assert!(!text.contains("power-saver"), "{text}");
@@ -804,7 +807,10 @@ mod tests {
         // Nothing stored: both sources start balanced.
         let env = Env::new("migrate-default");
         let d = env.daemon();
-        assert_eq!((d.profile_ac, d.profile_battery), (Profile::Balanced, Profile::Balanced));
+        assert_eq!(
+            (d.profile_ac, d.profile_battery),
+            (Profile::Balanced, Profile::Balanced)
+        );
     }
 
     /// A settled system with the dGPU on in Hybrid and the ASUS switch present.

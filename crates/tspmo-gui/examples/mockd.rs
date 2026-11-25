@@ -58,7 +58,7 @@ fn curve(base: u8) -> Vec<(u8, u8)> {
 fn tables() -> Vec<(&'static str, Props)> {
     let mut settings = Vec::new();
     let mut factory = Vec::new();
-    for (m, base) in [("power-saver", 0u8), ("balanced", 10), ("performance", 25)] {
+    for (m, base) in [("silent", 0u8), ("balanced", 10), ("performance", 25)] {
         for fan in 1u32..=3 {
             settings.push(tup(vec![s(m), Value::U32(fan), s("auto"), pts(&curve(base))]));
             factory.push(tup(vec![s(m), Value::U32(fan), pts(&curve(base))]));
@@ -93,7 +93,7 @@ fn tables() -> Vec<(&'static str, Props)> {
             vec![
                 ("Profile", s("balanced")),
                 ("ProfileAc", s("balanced")),
-                ("ProfileBattery", s("power-saver")),
+                ("ProfileBattery", s("silent")),
                 ("OnBattery", Value::Bool(false)),
                 ("GpuMode", s("hybrid")),
                 ("GpuPolicy", s("optimized")),
