@@ -15,15 +15,20 @@ options=('!lto' '!debug')
 
 _root() { realpath "$startdir/../.."; }
 
+# No build directory in the binaries (makepkg warns about $srcdir references).
+_flags() { export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$srcdir=/build --remap-path-prefix=$(_root)=/src"; }
+
 build() {
   cd "$(_root)"
   export CARGO_TARGET_DIR="$srcdir/target"
+  _flags
   cargo build --release --locked
 }
 
 check() {
   cd "$(_root)"
   export CARGO_TARGET_DIR="$srcdir/target"
+  _flags
   cargo test --release --locked --workspace
 }
 
