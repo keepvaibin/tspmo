@@ -226,6 +226,10 @@ impl Daemon {
         let r = power::apply(&self.root, std::slice::from_ref(&w));
         if !r.changed.is_empty() {
             crate::quiet::note_profile_write();
+            crate::events::publish(&crate::events::Event::ThermalModeWritten {
+                profile: self.effective().ppd(),
+                on_battery: self.on_battery,
+            });
         }
         for (w, e) in &r.failed {
             eprintln!("tspmod: {} ({} = {}) failed: {e}", w.what, w.path, w.value);
@@ -752,11 +756,20 @@ mod tests {
     fn a_release_writes_the_mode_in_force_now() {
         let env = Env::new("current");
         let mut d = hybrid_with_dgpu(&env);
+        // The late write tells whoever owns fan curves and limits (the EC drops them).
+        let seen = Arc::new(Mutex::new(0u32));
+        let n = seen.clone();
+        crate::events::subscribe(move |e| {
+            if matches!(e, crate::events::Event::ThermalModeWritten { .. }) {
+                *n.lock().unwrap() += 1;
+            }
+        });
         d.choose(Profile::Balanced);
         d.choose(Profile::EcoPlus);
         assert_eq!(env.read(power::PLATFORM_PROFILE), "balanced");
         d.release_thermal();
         assert_eq!(env.read(power::PLATFORM_PROFILE), "quiet");
+        assert!(*seen.lock().unwrap() >= 1);
         // Released once: a second call writes nothing.
         std::fs::write(
             env.0.join(power::PLATFORM_PROFILE.trim_start_matches('/')),

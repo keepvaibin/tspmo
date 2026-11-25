@@ -179,7 +179,13 @@ if has org.tspmo.Daemon1 && [ "$MODES" = 1 ]; then
       check "eco-plus -> tspmobg.slice active" eq "$(systemctl is-active tspmobg.slice)" active
     else
       check "$m -> PL1 back" eq "$(cat $pl1)" "$base_pl1"
-      check "$m -> efficiency cores uncapped" eq "$(cat $e14)" "$base_e14"
+      if [ $m = power-saver ]; then
+        # No turbo on battery lowers the cores' ceiling to their base clock (1.8 GHz here):
+        # what matters is that Eco+'s 1.2 GHz cap is gone.
+        check "$m -> efficiency cores not capped by Eco+" test "$(cat $e14)" -gt 1200000
+      else
+        check "$m -> efficiency cores uncapped" eq "$(cat $e14)" "$base_e14"
+      fi
     fi
   done
   # KDE choosing power-saver while Eco+ is active keeps Eco+.

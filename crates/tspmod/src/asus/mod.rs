@@ -107,6 +107,15 @@ impl Asus {
                     });
                 }
             }
+            ThermalModeWritten { profile, on_battery } => {
+                if let Some(t) = &self.thermal {
+                    t.on_thermal_written(*profile, *on_battery);
+                    self.emit(async |c| {
+                        fans::changed(c).await;
+                        power::changed(c).await;
+                    });
+                }
+            }
             PowerSource { on_battery } => {
                 if let Some(l) = &self.lid {
                     l.on_power_source(*on_battery);
