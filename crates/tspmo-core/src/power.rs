@@ -163,7 +163,7 @@ pub struct EcoLimits {
     pub uncore_max_mhz: Option<u32>,
     /// Maximum clock of the efficiency and low-power efficiency cores.
     pub ecap_mhz: Option<u32>,
-    /// Energy/performance hint of the CPUs: one of the kernel's names (`performance`,
+    /// Energy/performance hint of the CPUs on battery: one of the kernel's names (`performance`,
     /// `balance_performance`, `balance_power`, `power`). A raw number is not the same thing:
     /// `128` measured 1.65x slower than `balance_performance` on this machine.
     pub epp: &'static str,
@@ -177,7 +177,7 @@ impl Default for EcoLimits {
             psys_w: None,
             uncore_max_mhz: None,
             ecap_mhz: Some(1200),
-            epp: "balance_performance",
+            epp: "balance_power",
         }
     }
 }
@@ -246,7 +246,11 @@ pub fn plan(
 
     // 2. CPU energy/performance preference (intel_pstate and amd-pstate active mode).
     let epp = match (profile, on_battery) {
-        (Profile::EcoPlus, _) => t.eco.epp,
+        // On battery Eco+ asks for what Balanced does there (`balance_power`): a more eager
+        // hint finishes light bursts faster and costs more than the burst saves (docs/power.md).
+        // On AC it follows Balanced, so Eco+ is never slower than Balanced there.
+        (Profile::EcoPlus, true) => t.eco.epp,
+        (Profile::EcoPlus, false) => "balance_performance",
         (Profile::Balanced | Profile::Silent, true) => "balance_power",
         (Profile::Balanced | Profile::Silent, false) => "balance_performance",
         (Profile::Performance, _) => "performance",
@@ -764,6 +768,23 @@ mod tests {
             ]
         );
         assert!(z.iter().all(|z| z.long.is_some() && z.short.is_some()));
+    }
+
+    #[test]
+    fn eco_plus_energy_hint_is_never_more_eager_than_balanced() {
+        let f = gu605("eco-epp");
+        let root = f.root();
+        let t = Tunables::default();
+        for battery in [true, false] {
+            let eco = plan(&root, Profile::EcoPlus, battery, &t, &[]);
+            let bal = plan(&root, Profile::Balanced, battery, &t, &[]);
+            assert_eq!(
+                get(&eco, "CPU energy preference"),
+                get(&bal, "CPU energy preference")
+            );
+        }
+        let p = plan(&root, Profile::EcoPlus, true, &t, &[]);
+        assert_eq!(get(&p, "CPU energy preference"), ["balance_power"]);
     }
 
     #[test]

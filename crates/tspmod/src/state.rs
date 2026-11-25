@@ -481,9 +481,9 @@ impl Daemon {
             self.close_gpu_apps = b;
         }
         let t = &mut self.tunables;
-        // Eco+ was redesigned (version 2): the values an older daemon saved (a flat 5/7 W cap)
-        // are not read back.
-        if kv.get("eco_version") == Some(&"2") {
+        // Eco+ was redesigned (version 2: a flat 5/7 W cap; version 3: the energy hint costs
+        // power, now `balance_power` on battery): what an older daemon saved is not read back.
+        if kv.get("eco_version") == Some(&"3") {
             if let Some(pair) = kv.get("eco_pkg_w").and_then(|v| parse_pair(v)) {
                 t.eco.pkg_w = pair;
             }
@@ -527,7 +527,7 @@ impl Daemon {
              profile_ac={}\nprofile_battery={}\ngpu_policy={}\nclose_gpu_apps={}\n\
              aspm_on_battery={}\n\
              audio_power_save_on_battery={}\nlazy_writeback_on_battery={}\n\
-             eco_version=2\neco_pkg_w={}\neco_pkg_window_ms={}\neco_psys_w={}\neco_uncore_mhz={}\n\
+             eco_version=3\neco_pkg_w={}\neco_pkg_window_ms={}\neco_psys_w={}\neco_uncore_mhz={}\n\
              eco_ecap_mhz={}\neco_epp={}\n",
             self.profile_ac.as_str(),
             self.profile_battery.as_str(),
