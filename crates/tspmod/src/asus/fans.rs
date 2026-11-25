@@ -52,7 +52,7 @@ impl Fans1 {
     /// The thermal mode in force.
     #[zbus(property)]
     fn mode(&self) -> String {
-        lock(&self.0.state).mode.as_str().to_owned()
+        lock(&self.0.state).mode.thermal().as_str().to_owned()
     }
 
     /// `(mode, fan, kind, points)`; kind is `auto`, `custom` or `full`. An `auto` fan lists the

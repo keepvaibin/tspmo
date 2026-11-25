@@ -10,7 +10,7 @@ const PATH: &str = "/org/tspmo";
 pub const USAGE: &str = "\
 ASUS COMMANDS:
     fans                         Fan speeds and curves per mode
-    fans <mode> <fan> <what>     mode: power-saver|balanced|performance|now; fan: cpu|gpu|mid|all|<n>
+    fans <mode> <fan> <what>     mode: silent|balanced|performance|now; fan: cpu|gpu|mid|all|<n>
                                  what: auto | full | reset | <temp:percent,...> (8 points)
     limits                       Power limits per mode and power source
     limits <mode> <ac|battery> <name> <value|default>
@@ -182,7 +182,7 @@ fn fans(a: &[&str]) -> Result<(), String> {
                 println!("{label:<4} {r:>5} rpm");
             }
             let settings: Settings = f.get("Settings")?;
-            for m in ["power-saver", "balanced", "performance"] {
+            for m in ["silent", "balanced", "performance"] {
                 println!("\n{m}{}", if m == mode { " (active)" } else { "" });
                 for (sm, i, kind, pts) in &settings {
                     if sm == m {

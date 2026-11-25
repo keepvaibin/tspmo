@@ -29,7 +29,7 @@ A condition is `base` or settings joined with `+`:
     epp=<preference>        energy preference of every CPU (power, balance_power, ...)
     pcap=<mhz>              maximum clock of the performance cores
     cpus=e | lpe | p | <list>   run everything on these CPUs only
-    profile=<mode>          tspmo power mode (eco-plus, power-saver, ...)
+    profile=<mode>          tspmo power mode (eco-plus, silent, balanced, performance)
     pkgwin=<ms>             package power limit (PL1) time window
     ecap=<mhz>              maximum clock of the efficiency cores
     bgcpus=e|lpe|p|<list>   CPUs the --bg load may use

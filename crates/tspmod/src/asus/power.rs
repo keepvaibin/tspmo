@@ -67,7 +67,7 @@ impl Power1 {
 
     #[zbus(property)]
     fn mode(&self) -> String {
-        lock(&self.0.state).mode.as_str().to_owned()
+        lock(&self.0.state).mode.thermal().as_str().to_owned()
     }
 
     #[zbus(property)]

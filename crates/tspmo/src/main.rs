@@ -20,8 +20,10 @@ USAGE:
 COMMANDS:
     info              What this laptop is and which controls it exposes
     status            Current profile, power source and GPU mode (from tspmod)
-    profile [<name>]  Show or set the power mode: eco-plus | power-saver | balanced | performance
-    profile cycle     Next mode
+    profile [<name>]  Show or set the power mode: eco-plus | silent | balanced | performance
+                      (aliases: power-saver, saver, eco = eco-plus; quiet = silent; turbo = performance)
+    profile cycle     Next mode (what Fn+F5 does)
+    debug fan-key     Run the Fn+F5 handler without the key (for tests)
     display ...       Screen: refresh rate, brightness, dimming, colour (tspmo display help)
     bench ...         Measure what a setting costs or saves (tspmo bench help)
     ping [N]          Time N (default 50) round trips to tspmod
@@ -92,6 +94,13 @@ fn main() -> ExitCode {
         }
         Some("profile") => profile(args.get(1).map(String::as_str)),
         Some("gpu") => gpu(args.get(1).map(String::as_str)),
+        Some("debug") => match args.get(1).map(String::as_str) {
+            Some("fan-key") => match client::debug_fan_key() {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => fail(e),
+            },
+            _ => fail("usage: tspmo debug fan-key".into()),
+        },
         Some(c) if asus_cli::handles(c) => asus_cli::run(c, &args[1..]),
         Some("display") => display::run(&args[1..]),
         Some("bench") => bench::run(&args[1..]),
@@ -250,7 +259,7 @@ fn profile(arg: Option<&str>) -> ExitCode {
                 Err(e) => fail(e),
             },
             None => fail(format!(
-                "unknown profile '{p}' (eco-plus, power-saver, balanced, performance)"
+                "unknown profile '{p}' (eco-plus, silent, balanced, performance)"
             )),
         },
     }
