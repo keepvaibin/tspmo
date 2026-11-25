@@ -475,6 +475,22 @@ impl Tspmo {
             emit_changed(conn, &self.0).await;
             return Ok(msg);
         }
+        // A policy-driven switch is under way (or waiting for the GPU to settle): it follows
+        // the policy, so saving the new one withdraws it if it no longer fits.
+        let msg = {
+            let mut d = lock(&self.0);
+            if d.gpu_switching.is_some() && d.gpu_switch_auto {
+                d.gpu_policy = policy;
+                d.save();
+                Some("Saved. The switch in progress follows it.".to_owned())
+            } else {
+                None
+            }
+        };
+        if let Some(msg) = msg {
+            emit_changed(conn, &self.0).await;
+            return Ok(msg);
+        }
         let (target, current) = {
             let d = lock(&self.0);
             let st = d.gpu_status();

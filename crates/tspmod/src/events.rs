@@ -14,6 +14,10 @@ pub enum Event {
         eco_plus: bool,
         on_battery: bool,
     },
+    /// The firmware thermal mode was written later than the profile was applied (Eco+ holds it
+    /// back until the GPU switch is over). The EC reloads its mode on a write and drops the fan
+    /// curve and power limits written before it: whoever owns such settings writes them again.
+    ThermalModeWritten { profile: Profile, on_battery: bool },
     /// AC plugged / unplugged.
     PowerSource { on_battery: bool },
     /// The system resumed from sleep.

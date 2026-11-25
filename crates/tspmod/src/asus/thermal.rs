@@ -336,6 +336,18 @@ impl Thermal {
         self.apply(false);
     }
 
+    /// The thermal mode was written after the profile was applied: the EC reloaded it and
+    /// dropped our fan curve and limits; write them again.
+    pub fn on_thermal_written(&self, mode: Profile, on_battery: bool) {
+        {
+            let mut st = lock(&self.state);
+            st.mode = mode;
+            st.on_battery = on_battery;
+            st.dirty_power = false;
+        }
+        self.apply(true);
+    }
+
     /// Resume: the EC may have dropped our settings behind the driver's back.
     pub fn on_resume(&self) {
         self.apply(true);

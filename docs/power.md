@@ -281,6 +281,15 @@ same path, so skipping `rmmod` and just writing `dgpu_disable` does not avoid it
   switch (including policy retries), and `tspmo doctor` reports `nvidia-unload-hung` with the
   fix `systemctl reboot`. The kernel task stays; a thread reaps it if it ever returns. Note that
   `systemctl restart tspmod` can then wait out the stop timeout, as systemd cannot kill the task.
+- **Cancellation.** A policy-driven switch (Eco+ entry, power source, policy) is withdrawn the
+  moment the policy no longer wants its target: leaving Eco+, plugging in, choosing another
+  policy. The switch thread asks at every wait step (the 30 s window, the suspend wait) and
+  immediately before the first `rmmod`; after that it finishes. A cancelled switch ends quietly
+  (no message, `GpuSwitching` cleared, `PropertiesChanged` emitted). The held-back Eco+ write is a
+  flag, not a stored write: `release_thermal` writes the thermal mode of the mode in force
+  at that moment, and only if that is still Eco+; leaving Eco+ writes its own mode at once. Eco+'s
+  other settings (limits, E-core cap, guard, fans, lighting, 60 Hz) are applied on entry and
+  restored on leaving whatever the switch is doing.
 - `GpuSwitching` is cleared at daemon start and if the switch thread ends abnormally.
 - Tests: fake sysroot and clock for the quiet window, the 30 s rule and the bound
   (`quiet.rs`), the ordering and held-back write (`state.rs`), the watchdog with a real child,
