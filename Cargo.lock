@@ -4284,7 +4284,7 @@ dependencies = [
 
 [[package]]
 name = "tspmo"
-version = "0.1.0"
+version = "0.9.0"
 dependencies = [
  "tspmo-core",
  "tspmo-sys",
@@ -4293,7 +4293,7 @@ dependencies = [
 
 [[package]]
 name = "tspmo-core"
-version = "0.1.0"
+version = "0.9.0"
 dependencies = [
  "rustix 1.1.6",
  "tspmo-sys",
@@ -4301,7 +4301,7 @@ dependencies = [
 
 [[package]]
 name = "tspmo-gui"
-version = "0.1.0"
+version = "0.9.0"
 dependencies = [
  "futures-lite",
  "rustix 1.1.6",
@@ -4313,11 +4313,11 @@ dependencies = [
 
 [[package]]
 name = "tspmo-sys"
-version = "0.1.0"
+version = "0.9.0"
 
 [[package]]
 name = "tspmod"
-version = "0.1.0"
+version = "0.9.0"
 dependencies = [
  "rustix 1.1.6",
  "tspmo-core",
