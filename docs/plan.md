@@ -86,7 +86,7 @@ Files: `crates/tspmo-core/src/asus/*`, `crates/tspmod/src/asus/*`, the `register
 
 1. **Fans (`org.tspmo.Fans1`).**
    - Every fan in hwmon `asus_custom_fan_curve` (GU605 has `pwm1..3` = CPU, GPU, mid), with labels from hwmon `asus` `fanN_label`, and live RPM from `fanN_input`.
-   - Per *mode* (power-saver / balanced / performance), per fan: an 8-point temperature→PWM curve, or *Auto* (firmware curve). Also *Full speed* and *Reset* (firmware defaults: `pwmN_enable=3` restores, then read back the factory points).
+   - Per *mode* (silent / balanced / performance), per fan: an 8-point temperature→PWM curve, or *Auto* (firmware curve). Also *Full speed* and *Reset* (firmware defaults: `pwmN_enable=3` restores, then read back the factory points).
    - The EC resets custom curves when the thermal mode changes, so re-apply after every `ProfileApplied` and `Resumed`.
    - Validate: temperatures ascending, PWM non-decreasing, within the kernel's limits.
    - Persist to `/var/lib/tspmo/fans`.
@@ -112,7 +112,7 @@ Files: `crates/tspmo-core/src/asus/*`, `crates/tspmod/src/asus/*`, the `register
    - A thread blocking on the ASUS keyboard / "Asus WMI hotkeys" evdev devices (read only; never grab them).
    - Map ROG/Armoury key, Aura (Fn+F4), fan (Fn+F5) and M-keys from the hid-asus/asus-wmi keymaps, read from the kernel source for this kernel.
    - Publish `events::Key`. Aura cycles the lighting mode, with an OSD.
-   - The fan key is cycled by the kernel itself (it changes `platform_profile`, which the daemon already follows), so it only needs the OSD.
+   - The fan key belongs to tspmod (`fankey.rs`): it cycles eco-plus, silent, balanced, performance once and shows one OSD. The kernel's own step of `platform_profile` on that key is not followed (see `docs/power.md`, "Fn+F5 and `platform_profile`").
    - The ROG key itself is bound by the GUI package (compositor shortcut); just publish it.
 8. **Fn-lock:** G-Helper-style software Fn-lock (media keys by default) via a udev hwdb remap the daemon writes and reloads (`systemd-hwdb --usr update` is wrong for a generated file: use `/etc/udev/hwdb.d` + `systemd-hwdb update` + `udevadm trigger` for the keyboard only).
 
@@ -126,11 +126,11 @@ Hardware safety:
 Files: `crates/tspmo-core/src/power.rs`, `crates/tspmod/src/{state.rs,dbus.rs,session.rs}`, new `crates/tspmod/src/display/*`, `crates/tspmo-core/src/display/*`, the CLI (`crates/tspmo/src/main.rs`), `data/`, `docs/dbus.md` (your sections).
 
 1. **Eco+, the fourth mode.**
-   - Modes: `eco-plus`, `power-saver`, `balanced`, `performance`, stored per power source.
-   - The PPD API (`ActiveProfile`) maps eco-plus to `power-saver`. If KDE sets `power-saver` while eco-plus is active, keep eco-plus. Any other KDE choice leaves eco-plus.
+   - Modes: `eco-plus`, `silent`, `balanced`, `performance`, stored per power source.
+   - The PPD API (`ActiveProfile`) maps `power-saver` to eco-plus both ways; silent reads `balanced`. KDE `balanced` keeps silent; any other KDE choice leaves it.
    - `org.tspmo.Daemon1.Profile` / `SetProfile` / `CycleProfile` use all four.
    - Publish `ProfileApplied { eco_plus: true }`.
-   - Eco+ = power-saver plus:
+   - Eco+ = the firmware quiet mode plus:
      - an Intel RAPL **platform (psys) limit** (`/sys/class/powercap/intel-rapl:1`, name `psys`: `constraint_0` long-term, `constraint_1` short-term) and package limits on both `intel-rapl` and `intel-rapl-mmio`
      - **60 Hz**
    - Save the original limits at start-up and restore them when leaving Eco+.

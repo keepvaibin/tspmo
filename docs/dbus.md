@@ -9,26 +9,27 @@ Changes go through polkit; the active local user is allowed. `tspmo ping` times 
 
 The standard API (KDE, GNOME, `powerprofilesctl`, games), served by `tspmod`.
 
-- `ActiveProfile`: `power-saver`, `balanced` or `performance`. While Eco+ is active it reads
-  `power-saver`. Setting `power-saver` while Eco+ is active keeps Eco+; setting anything else
-  leaves it. Setting `eco-plus` here is refused.
-- `HoldProfile` / `ReleaseProfile` / `ActiveProfileHolds`: as upstream. A `power-saver` hold
-  never lowers Eco+; a `performance` hold wins over it.
+- `ActiveProfile`: `power-saver`, `balanced` or `performance`. `power-saver` is Eco+: setting it
+  selects Eco+, and it is what Eco+ reads. Silent has no name here and reads `balanced`; setting
+  `balanced` while Silent is active keeps Silent, setting `performance` leaves it. Setting
+  `eco-plus` or `silent` here is refused (use `org.tspmo.Daemon1`).
+- `HoldProfile` / `ReleaseProfile` / `ActiveProfileHolds`: as upstream. A `power-saver` hold is
+  an Eco+ hold; a `performance` hold wins over it.
 
 ## `org.tspmo.Daemon1` (power mode, GPU)
 
 | Member | Type | |
 |---|---|---|
-| `Profile` | `s` property | Mode in force: `eco-plus`, `power-saver`, `balanced`, `performance` |
+| `Profile` | `s` property | Mode in force: `eco-plus`, `silent`, `balanced`, `performance` |
 | `ProfileAc`, `ProfileBattery` | `s` property | Chosen mode per power source |
 | `OnBattery` | `b` property | |
-| `SetProfile(s)` | method | Choose a mode for the current power source |
-| `CycleProfile() -> s` | method | eco-plus, power-saver, balanced, performance, eco-plus |
+| `SetProfile(s)` | method | Choose a mode for the current power source (`power-saver`, `saver`, `eco` mean eco-plus, `quiet` silent, `turbo` performance). Shows the OSD when the mode changes |
+| `CycleProfile() -> s` | method | eco-plus, silent, balanced, performance, eco-plus. Shows the OSD |
+| `DebugFanKey()` | method | What Fn+F5 does (one cycle step, one OSD, hardware ends in the chosen state), without the key: `tspmo debug fan-key`. See [power.md](power.md) |
 
 The GPU members (`GpuMode`, `SetGpuMode`, ...) are as before, plus `GpuWanted` (`s` property): the mode the hardware is being brought to, `eco` while Eco+ is active (`GpuMode` follows once the switch can happen: an app or a desktop that loaded the NVIDIA driver holds the GPU until it lets go, and `GpuMessage` says which). `SetGpuMode` while Eco+ is active only saves the policy ("Saved. Eco+ keeps the GPU off.") and it is restored when Eco+ ends.
 
-Eco+ is the maximum-battery mode, on AC and on battery. It is `power-saver` (firmware quiet
-mode) plus:
+Eco+ is the power-saving mode, on AC and on battery. It is the firmware quiet mode plus:
 
 - the NVIDIA GPU forced off (Eco), the GPU policy restored when Eco+ ends (an app holding the
   GPU gets an OSD naming it; retried every 15 s);
@@ -42,15 +43,16 @@ mode) plus:
 
 Everything it replaces is restored when it ends, when the daemon stops, and after a daemon crash
 (`/run/tspmo/rapl-orig`, `/run/tspmo/guard`). See [power.md](power.md). `SetProfile` and
-`CycleProfile` show an on-screen note when the change is invisible to KDE (to or from Eco+ and
-power-saver). Automatic changes (AC plugged, unplugged) show nothing.
+`CycleProfile` show an on-screen note when the mode changes. Automatic changes (AC plugged,
+unplugged) show nothing. Silent is the quiet mode: the firmware quiet mode and Eco+'s fan curve,
+nothing else of Eco+.
 
 | Member | Type | |
 |---|---|---|
 | `Doctor() -> a(sss)` | method | `tspmo doctor`'s findings: `(severity, topic, text)`. Severity `error`, `warn` or `info`; text is the title and detail, with `Fix: <command>` lines |
 
-In-process event: `ProfileApplied { profile, eco_plus, on_battery }`. For Eco+, `profile` is
-`power-saver` and `eco_plus` is true. `session::osd(icon, text, value)` shows a note in the
+In-process events: `ProfileApplied { profile, eco_plus, on_battery }` (`profile` is the mode,
+`eco_plus` is true for Eco+) and `FanKey(device)`. `session::osd(icon, text, value)` shows a note in the
 user's session.
 
 ## `org.tspmo.Display1` (the laptop's panel)
@@ -94,7 +96,9 @@ Property reads never touch firmware, except `Fans1.Rpm` and `Fans1.Temps`.
 
 ## ASUS hardware
 
-Modes are `power-saver`, `balanced`, `performance`. Power sources are `ac`, `battery`.
+Fan curves and limits are kept per firmware thermal mode: `silent`, `balanced`, `performance`
+(`power-saver` and `eco-plus` are accepted and mean `silent`: Eco+ shares Silent's). Power sources
+are `ac`, `battery`.
 Types use D-Bus signatures: `(yyy)` is a colour (r, g, b).
 
 ### `org.tspmo.Fans1` (polkit `org.tspmo.set-fans`)

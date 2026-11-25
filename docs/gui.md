@@ -76,7 +76,7 @@ fan speed and battery power are two `Properties.Get` calls once a second while a
 
 ### Keys
 
-Popup: `1`-`4` modes, drop-downs: arrows step while closed, Enter or Space opens the list, Esc
+Popup: `1`-`4` modes (Eco+, Silent, Balanced, Turbo; ids `eco-plus`, `silent`, `balanced`, `performance`), drop-downs: arrows step while closed, Enter or Space opens the list, Esc
 closes the list only, `F` `S` `K` `Y` open Fans & Power, Screen, Keyboard & Lid, System, Tab and
 Shift+Tab move focus, Left/Right move inside a tile row or slider (tile rows: Enter or Space
 applies), Shift makes slider steps five times larger, Home/End jump, the wheel steps sliders and

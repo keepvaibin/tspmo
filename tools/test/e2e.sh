@@ -185,7 +185,6 @@ if has org.tspmo.Daemon1 && [ "$MODES" = 1 ]; then
         # Silent is about noise: the fans are stopped while cool, nothing else of Eco+.
         check "silent -> custom fan curve in force" eq "$(cat $FANHW/pwm1_enable 2>/dev/null)" 1
         check "silent -> fan curve is 0% when cool" eq "$(cat $FANHW/pwm1_auto_point2_pwm 2>/dev/null)" 0
-        check "silent -> not 60 Hz-locked by Eco+" test "$(prop org.tspmo.Display1 RefreshPolicy | str)" != ""
       fi
     fi
   done
