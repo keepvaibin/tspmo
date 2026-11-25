@@ -3,6 +3,9 @@
 
 use crate::{Osd, Th, theme};
 use slint::ComponentHandle;
+use std::cell::RefCell;
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::time::Duration;
 
 pub struct Args {
@@ -23,6 +26,46 @@ pub fn parse(args: &[String]) -> Result<Args, String> {
         .and_then(|v| v.trim_end_matches('%').parse::<f32>().ok())
         .map(|v| (v / 100.0).clamp(0.0, 1.0));
     Ok(Args { icon, text, value })
+}
+
+/// Wire format of one update: `icon \t text \t value-or-empty \n`. Tabs and line breaks inside
+/// the fields become spaces.
+pub fn encode(args: &[String]) -> String {
+    let clean = |s: &str| s.replace(['\t', '\n', '\r'], " ");
+    let f = |i: usize| args.get(i).map_or(String::new(), |s| clean(s));
+    format!("{}\t{}\t{}\n", f(0), f(1), f(2))
+}
+
+/// Inverse of [`encode`]; `None` for an empty or icon-less line.
+pub fn decode(line: &str) -> Option<Args> {
+    let mut it = line.trim_end_matches(['\n', '\r']).splitn(3, '\t');
+    let icon = it.next().filter(|s| !s.is_empty())?;
+    let text = it.next().unwrap_or("");
+    let mut v = vec![icon.to_owned(), text.to_owned()];
+    v.extend(it.next().filter(|s| !s.is_empty()).map(str::to_owned));
+    parse(&v).ok()
+}
+
+/// Hand the update to a running OSD. True once it acknowledged (it is alive and will show it).
+fn send(args: &[String]) -> bool {
+    let Ok(a) = crate::instance::addr_named("tspmo-osd") else {
+        return false;
+    };
+    let Ok(mut s) = UnixStream::connect_addr(&a) else {
+        return false;
+    };
+    let _ = s.set_read_timeout(Some(Duration::from_millis(300)));
+    if s.write_all(encode(args).as_bytes()).is_err() {
+        return false;
+    }
+    let mut ack = String::new();
+    BufReader::new(s).read_line(&mut ack).is_ok_and(|n| n > 0)
+}
+
+/// Bind the OSD socket, or `None` when another instance holds it.
+fn bind() -> Option<UnixListener> {
+    let a = crate::instance::addr_named("tspmo-osd").ok()?;
+    UnixListener::bind_addr(&a).ok()
 }
 
 /// The daemon passes theme icon names (or mode ids); the profile ones pick the matching accent.
@@ -73,8 +116,79 @@ pub fn icon_of(icon: &str) -> &'static str {
 const TOTAL: Duration = Duration::from_millis(1200);
 const FADE_OUT_AT: Duration = Duration::from_millis(950);
 
+thread_local! {
+    static STATE: RefCell<Option<(slint::Weak<Osd>, slint::Timer, slint::Timer)>> =
+        const { RefCell::new(None) };
+}
+
+/// Put `a` on the (already visible) window and restart the hide timers; a fade in progress
+/// turns back to full opacity.
+fn apply(win: &Osd, a: &Args) {
+    let dark = theme::is_dark();
+    win.global::<Th>()
+        .set_accent_target(crate::app::mode_color(mode_of(&a.icon), dark));
+    win.set_text(a.text.as_str().into());
+    win.set_glyph(icon_of(&a.icon).into());
+    win.set_value(a.value.unwrap_or(-1.0));
+    win.set_shown(true);
+    STATE.with(|s| {
+        if let Some((weak, fade, quit)) = s.borrow().as_ref() {
+            let w = weak.clone();
+            fade.start(slint::TimerMode::SingleShot, FADE_OUT_AT, move || {
+                if let Some(w) = w.upgrade() {
+                    w.set_shown(false);
+                }
+            });
+            quit.start(slint::TimerMode::SingleShot, TOTAL, || {
+                let _ = slint::quit_event_loop();
+            });
+        }
+    });
+}
+
+/// Block in the kernel for updates; each one is applied on the UI thread and acknowledged only
+/// when the event loop took it (a loop that is already quitting leaves it unacknowledged, and the
+/// sender then shows its own).
+fn serve(l: UnixListener) {
+    std::thread::Builder::new()
+        .name("osd-instance".into())
+        .spawn(move || {
+            for mut s in l.incoming().flatten() {
+                let mut line = String::new();
+                if BufReader::new(&s).read_line(&mut line).is_err() {
+                    continue;
+                }
+                let Some(a) = decode(&line) else { continue };
+                let ok = slint::invoke_from_event_loop(move || {
+                    STATE.with(|st| {
+                        let w = st.borrow().as_ref().and_then(|(w, ..)| w.upgrade());
+                        if let Some(w) = w {
+                            apply(&w, &a);
+                        }
+                    });
+                })
+                .is_ok();
+                if ok {
+                    let _ = s.write_all(b"ok\n");
+                }
+            }
+        })
+        .ok();
+}
+
 pub fn run(args: &[String]) -> Result<(), String> {
     let a = parse(args)?;
+    // A running OSD takes the update; otherwise become it.
+    let mut listener = None;
+    for _ in 0..3 {
+        if send(args) {
+            return Ok(());
+        }
+        listener = bind();
+        if listener.is_some() {
+            break;
+        }
+    }
     let layer = crate::use_layer_shell();
     if !layer && !cfg!(feature = "winit") {
         return Err("no Wayland compositor".into());
@@ -85,28 +199,20 @@ pub fn run(args: &[String]) -> Result<(), String> {
     if !layer {
         slint::set_xdg_app_id("org.tspmo.osd").map_err(|e| e.to_string())?;
     }
-    let dark = theme::is_dark();
-    let f = theme::fonts();
     let th = win.global::<Th>();
-    th.set_dark(dark);
+    let f = theme::fonts();
+    th.set_dark(theme::is_dark());
     th.set_font_size(f.px);
     th.set_font_family(f.family.into());
     th.set_mono(f.mono.into());
-    th.set_accent_target(crate::app::mode_color(mode_of(&a.icon), dark));
-    win.set_text(a.text.into());
-    win.set_glyph(icon_of(&a.icon).into());
-    win.set_value(a.value.unwrap_or(-1.0));
+    STATE.with(|s| {
+        *s.borrow_mut() = Some((win.as_weak(), slint::Timer::default(), slint::Timer::default()));
+    });
     win.show().map_err(|e| e.to_string())?;
-    win.set_shown(true);
-    let weak = win.as_weak();
-    slint::Timer::single_shot(FADE_OUT_AT, move || {
-        if let Some(w) = weak.upgrade() {
-            w.set_shown(false);
-        }
-    });
-    slint::Timer::single_shot(TOTAL, || {
-        let _ = slint::quit_event_loop();
-    });
+    apply(&win, &a);
+    if let Some(l) = listener {
+        serve(l);
+    }
     slint::run_event_loop().map_err(|e| e.to_string())
 }
 
@@ -132,6 +238,21 @@ mod tests {
         assert_eq!(mode_of("battery-profile-performance"), "performance");
         assert_eq!(mode_of("battery-profile-powersave"), "eco-plus");
         assert_eq!(mode_of("input-keyboard"), "input-keyboard");
+    }
+
+    #[test]
+    fn wire_roundtrip() {
+        let line = encode(&v(&["icon", "Eco+", "40"]));
+        assert_eq!(line, "icon\tEco+\t40\n");
+        let a = decode(&line).unwrap();
+        assert_eq!(
+            (a.icon.as_str(), a.text.as_str(), a.value),
+            ("icon", "Eco+", Some(0.4))
+        );
+        let a = decode(&encode(&v(&["x", "a\tb\nc"]))).unwrap();
+        assert_eq!((a.text.as_str(), a.value), ("a b c", None));
+        assert!(decode("\n").is_none());
+        assert!(decode("").is_none());
     }
 
     #[test]
