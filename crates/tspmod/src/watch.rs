@@ -64,14 +64,15 @@ pub fn platform_profile(conn: Connection, shared: Shared) {
         use rustix::event::{PollFd, PollFlags, poll};
         let mut buf = String::with_capacity(32);
         loop {
-            buf.clear();
-            if file.seek(SeekFrom::Start(0)).is_err() || file.read_to_string(&mut buf).is_err() {
-                return;
-            }
-            let value = buf.trim().to_owned();
+            // Read under the daemon lock: a value read before it could be older than a mode a
+            // concurrent `SetProfile` is writing, and would cancel that choice.
             let (changed, now) = {
                 let mut d = lock(&shared);
-                (d.platform_changed(&value), d.effective())
+                buf.clear();
+                if file.seek(SeekFrom::Start(0)).is_err() || file.read_to_string(&mut buf).is_err() {
+                    return;
+                }
+                (d.platform_changed(buf.trim()), d.effective())
             };
             if changed {
                 // The thermal key (Fn+F5) is the one change from the user's hands with no app

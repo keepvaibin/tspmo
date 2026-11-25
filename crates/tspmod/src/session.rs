@@ -9,6 +9,7 @@
 use std::io::Read;
 use std::os::unix::process::CommandExt;
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use tspmo_sys::SysRoot;
 
@@ -117,16 +118,26 @@ pub fn active(root: &SysRoot) -> Option<Session> {
     })
 }
 
-/// Read a pipe to the end on its own thread, so a chatty child can't block on a full pipe.
-fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> std::thread::JoinHandle<String> {
+/// Read a pipe to the end on its own thread, so a chatty child can't block on a full pipe. The
+/// text arrives on a channel: a grandchild that keeps the pipe open after the child is gone
+/// must not hold the caller (which may hold the compositor lock) for ever.
+fn drain<R: Read + Send + 'static>(pipe: Option<R>) -> mpsc::Receiver<String> {
+    let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let mut s = String::new();
         if let Some(mut p) = pipe {
-            let _ = p.read_to_string(&mut s);
+            // Cap what is kept; the rest is read and dropped so the child never blocks.
+            let mut limit = (&mut p).take(1 << 20);
+            let _ = limit.read_to_string(&mut s);
+            let _ = std::io::copy(&mut p, &mut std::io::sink());
         }
-        s
-    })
+        let _ = tx.send(s);
+    });
+    rx
 }
+
+/// How long to wait for the rest of a finished child's output.
+const DRAIN_GRACE: Duration = Duration::from_millis(500);
 
 #[derive(Debug)]
 pub struct Output {
@@ -178,8 +189,8 @@ pub fn run(s: &Session, program: &str, args: &[&str], timeout: Duration) -> std:
     };
     Ok(Output {
         ok: status.is_some_and(|s| s.success()),
-        stdout: t_out.join().unwrap_or_default(),
-        stderr: t_err.join().unwrap_or_default(),
+        stdout: t_out.recv_timeout(DRAIN_GRACE).unwrap_or_default(),
+        stderr: t_err.recv_timeout(DRAIN_GRACE).unwrap_or_default(),
     })
 }
 

@@ -23,14 +23,27 @@ fn main() {
     // not outlive the daemon that set them.
     if std::env::args().nth(1).as_deref() == Some("--restore-limits") {
         let root = SysRoot::from_env();
+        let eco = root.exists(state::ECO_SAVED);
         state::restore_saved(&root);
         guard::shutdown(&root);
+        asus::restore_on_stop(&root, eco);
+        if eco {
+            display::restore_on_stop(&root);
+        }
         return;
     }
     if let Err(e) = run() {
         eprintln!("tspmod: {e}");
         std::process::exit(1);
     }
+}
+
+fn lock_eco(shared: &dbus::Shared) -> bool {
+    shared
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .effective()
+        .is_eco_plus()
 }
 
 fn run() -> zbus::Result<()> {
@@ -91,16 +104,13 @@ fn run() -> zbus::Result<()> {
         );
     }
 
-    // The display listens before the watchers can publish anything.
-    display::start(conn.inner(), &screen);
-    watch::all(&conn, &shared);
-    // The GPU policy waits for the boot to settle (see boot.rs).
-    boot::start(conn.inner(), &shared);
+    // Every listener is in place before a watcher or the display can publish anything.
     // Entering or leaving Eco+ changes what the GPU policy wants (Eco+ is dGPU off). The event
     // fires under the power daemon's lock: hand off to a thread.
     {
         let (c, s) = (conn.inner().clone(), Arc::clone(&shared));
-        let last = std::sync::Mutex::new(false);
+        // Starts as the mode the daemon is in: a restart during Eco+ must still see Eco+ end.
+        let last = std::sync::Mutex::new(lock_eco(&shared));
         events::subscribe(move |e| {
             if let events::Event::ProfileApplied { eco_plus, .. } = e {
                 let mut l = last.lock().unwrap_or_else(|p| p.into_inner());
@@ -143,6 +153,11 @@ fn run() -> zbus::Result<()> {
         });
     }
 
+    // The display listens before the watchers can publish anything.
+    display::start(conn.inner(), &screen);
+    watch::all(&conn, &shared);
+    // The GPU policy waits for the boot to settle (see boot.rs).
+    boot::start(conn.inner(), &shared);
     // All work happens on the D-Bus executor and the watcher threads.
     loop {
         std::thread::park();

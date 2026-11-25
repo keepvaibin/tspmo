@@ -183,6 +183,24 @@ pub fn init(root: &SysRoot) -> Arc<Asus> {
     asus
 }
 
+/// The daemon is stopping (`tspmod --restore-limits`, run by systemd after it): put back what
+/// the daemon changed and nobody else would. A keyboard it left dark lights up; after Eco+ (`eco`)
+/// the fans return to what the mode's own settings say (the firmware's, unless the user chose)
+/// and the Slash to what its settings say. Quick, and needs no bus.
+pub fn restore_on_stop(root: &SysRoot, eco: bool) {
+    lighting::restore_dimmed(root);
+    if !eco {
+        return;
+    }
+    let dir = state_dir();
+    if let Some(t) = thermal::Thermal::new(root.clone(), dir.clone()) {
+        t.apply(false);
+    }
+    if let Some(l) = lid::Lid::new(root.clone(), dir) {
+        l.apply();
+    }
+}
+
 /// Add the interfaces this machine supports to the bus connection.
 pub fn register<'a>(mut b: Builder<'a>, asus: &Asus) -> zbus::Result<Builder<'a>> {
     if let Some(t) = &asus.thermal {

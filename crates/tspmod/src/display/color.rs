@@ -7,7 +7,7 @@ use super::{Shared, State, kscreen_doctor, lock};
 use crate::session;
 use std::path::PathBuf;
 use std::time::Duration;
-use tspmo_core::display::{icc, ini, kscreen};
+use tspmo_core::display::{icc, kscreen};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
@@ -195,8 +195,11 @@ fn write_profile_file(path: &std::path::Path, bytes: &[u8]) -> Result<(), String
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     // The user's compositor reads it.
     let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o755));
-    std::fs::write(path, bytes).map_err(|e| e.to_string())?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644)).map_err(|e| e.to_string())
+    // A file that exists is taken as complete (`apply_profile`): write it whole or not at all.
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, bytes).map_err(|e| e.to_string())?;
+    std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o644)).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, path).map_err(|e| e.to_string())
 }
 
 /// Keep the profile directory small: the newest few files stay (the compositor may still
@@ -275,18 +278,29 @@ fn write_args(key: &str, value: Option<&str>) -> Vec<String> {
     a
 }
 
+/// One Night Light key as the user's KDE has it (empty when unset).
+fn read_key(sess: &session::Session, key: &str) -> String {
+    let args = ["--file", "kwinrc", "--group", GROUP, "--key", key];
+    session::run(sess, "kreadconfig6", &args, Duration::from_secs(5))
+        .ok()
+        .filter(|o| o.ok)
+        .map(|o| o.stdout.trim().to_owned())
+        .unwrap_or_default()
+}
+
 pub fn set_eyecare(shared: &Shared, kelvin: u32) -> Result<String, String> {
     let root = lock(shared).root.clone();
     let Some(sess) = session::active(&root) else {
         return Err("no desktop session".into());
     };
-    let config =
-        std::fs::read_to_string(PathBuf::from(&sess.home).join(".config/kwinrc")).unwrap_or_default();
-    // Remember what Night Light was before eye care first took it over.
+    // Remember what Night Light was before eye care first took it over. Read as the user, by
+    // KDE's own tool: the daemon (root) must not open files in a home directory.
+    let first = kelvin != 0 && lock(shared).color.saved_nightlight.is_none();
+    let current = first.then(|| KEYS.map(|k| read_key(&sess, k)));
     let saved = {
         let mut s = lock(shared);
-        if kelvin != 0 && s.color.saved_nightlight.is_none() {
-            s.color.saved_nightlight = Some(KEYS.map(|k| ini::get(&config, GROUP, k).unwrap_or_default()));
+        if let (true, Some(cur)) = (first, current) {
+            s.color.saved_nightlight.get_or_insert(cur);
         }
         s.color
             .saved_nightlight
@@ -321,6 +335,7 @@ pub fn set_eyecare(shared: &Shared, kelvin: u32) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tspmo_core::display::ini;
 
     #[test]
     fn mode_names() {

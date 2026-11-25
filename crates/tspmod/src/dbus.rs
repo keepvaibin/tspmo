@@ -217,7 +217,24 @@ macro_rules! ppd_interface {
                 };
                 let sender = hdr.sender().map(|s| s.to_string()).unwrap_or_default();
                 polkit::check(conn, Some(&sender), polkit::HOLD_PROFILE).await?;
-                let cookie = lock(&self.0).hold(p, reason, application_id, sender);
+                let owner = sender.clone();
+                let cookie = lock(&self.0)
+                    .hold(p, reason, application_id, sender)
+                    .map_err(zbus::fdo::Error::LimitsExceeded)?;
+                // A client that left while the call was being authorised would never be seen
+                // leaving again: drop its hold now rather than hold the mode for ever.
+                let owner_alive = match (
+                    zbus::fdo::DBusProxy::new(conn).await,
+                    zbus::names::BusName::try_from(owner.as_str()),
+                ) {
+                    (Ok(bus), Ok(name)) => bus.name_has_owner(name).await.unwrap_or(true),
+                    _ => true,
+                };
+                if !owner_alive {
+                    lock(&self.0).release(cookie);
+                    emit_changed(conn, &self.0).await;
+                    return Err(zbus::fdo::Error::Failed("client gone".into()));
+                }
                 emit_changed(conn, &self.0).await;
                 Ok(cookie)
             }

@@ -130,6 +130,21 @@ impl SysRoot {
     }
 }
 
+/// Write a file whole or not at all (a temporary file beside it, then a rename), creating its
+/// directory. A crash or power cut leaves the old file or the new one, never half of one.
+pub fn write_atomic(path: &Path, text: &str) -> io::Result<()> {
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    fs::write(&tmp, text)?;
+    fs::rename(&tmp, path).inspect_err(|_| {
+        let _ = fs::remove_file(&tmp);
+    })
+}
+
 /// `*` matches any run of characters (including none). No other metacharacters.
 pub fn wildcard_match(pattern: &str, text: &str) -> bool {
     let mut parts = pattern.split('*');
@@ -210,6 +225,16 @@ mod tests {
         assert!(!wildcard_match("a*a", "a"));
         assert!(wildcard_match("exact", "exact"));
         assert!(!wildcard_match("exact", "exactly"));
+    }
+
+    #[test]
+    fn atomic_write_creates_the_directory_and_leaves_no_temporary() {
+        let fake = FakeRoot::new("atomic");
+        let path = fake.root().path("/run/x/state");
+        write_atomic(&path, "one\n").unwrap();
+        write_atomic(&path, "two\n").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "two\n");
+        assert_eq!(fake.root().list("/run/x"), vec!["state"]);
     }
 
     #[test]

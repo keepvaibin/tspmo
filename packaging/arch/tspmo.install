@@ -1,0 +1,31 @@
+post_install() {
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  echo "tspmo: sudo systemctl enable --now tspmod   (replaces power-profiles-daemon)"
+}
+
+post_upgrade() {
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  if systemctl is-active --quiet tspmod.service; then
+    echo "tspmo: sudo systemctl restart tspmod   (runs the new version)"
+  fi
+}
+
+pre_remove() {
+  # Stopping runs ExecStopPost, which puts back what Eco+ changed.
+  systemctl disable --now tspmod.service >/dev/null 2>&1 || true
+  # The Fn-lock keymap is the daemon's file: leave the keyboard as it was.
+  if [ -e /etc/udev/hwdb.d/90-tspmo-fnlock.hwdb ]; then
+    rm -f /etc/udev/hwdb.d/90-tspmo-fnlock.hwdb
+    if ls /etc/udev/hwdb.d/*.hwdb >/dev/null 2>&1; then
+      systemd-hwdb update >/dev/null 2>&1 || true
+    else
+      rm -f /etc/udev/hwdb.bin
+    fi
+    udevadm trigger --action=change --subsystem-match=input >/dev/null 2>&1 || true
+  fi
+}
+
+post_remove() {
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  echo "tspmo: settings stay in /var/lib/tspmo (rm -r to forget them)"
+}
