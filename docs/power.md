@@ -428,3 +428,22 @@ higher at the platform than the one that did not (`hz=60` after balanced: 11.5 W
 The cause is the dGPU: each `platform_profile` write makes the EC notify the NVIDIA driver, which
 wakes the GPU for about 25 s, longer than the 8-12 s settle. Compare conditions only with a
 settle of 35 s or more, or with the GPU off (Eco): with the GPU off there is no driver to wake.
+
+## Eco+ regression hunt (battery, 2026-11-24, WIP)
+
+User report: Eco+ 5.7 W package / 18.5 W platform against balanced 3.1-3.4 W / 8-10 W.
+Method: turbostat `PkgWatt`/`SysWatt` over 30 s, battery current x voltage, retried until the
+machine is idle (Busy% < 3.2: other builds on the laptop otherwise swamp everything), 45 s settle
+after each switch, interleaved.
+
+| Condition | Pkg W | Sys W | battery W | 00:01.0 |
+|---|---|---|---|---|
+| balanced (hybrid, dGPU suspended) | 2.66 / 2.37 | 6.09 / 5.22 | 7.42 / 11.23 | D3cold |
+| balanced + GPU eco only | 2.77 | 6.54 | 10.98 | D3cold |
+| eco-plus | 3.25 / 3.49 | 6.37 / 6.87 | 8.75 / 8.60 | D3cold |
+
+- Hypothesis 1 (dGPU stays powered after `dgpu_disable`) is refuted: with the GPU off the PCIe
+  root port 0000:00:01.0 is in D3cold, as it is with a suspended dGPU in Hybrid.
+- Eco+ is about 0.8 W above Balanced at both package and platform on a clean idle desktop: the
+  size of the user's 8-10 W gap was not reproduced idle. Eco+ writes `balance_performance` as the
+  energy preference while Balanced on battery writes `balance_power` (see `power::plan`).
