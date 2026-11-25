@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+FANHW=$(dirname "$(grep -lx asus_custom_fan_curve /sys/class/hwmon/*/name 2>/dev/null | head -1)")  # hwmon numbers change per boot
 # End-to-end test of the installed tspmod on the real machine.
 # Reads every property of every org.tspmo.* interface, sets and restores settings (checking
 # sysfs readback), then measures daemon CPU and dGPU runtime_active_time over an idle window.
@@ -159,8 +160,8 @@ if has org.tspmo.Daemon1 && [ "$MODES" = 1 ]; then
     if [ $m = eco-plus ]; then
       check "eco-plus -> PL1 12 W" eq "$(cat $pl1)" 12000000
       check "eco-plus -> efficiency cores 1.2 GHz" eq "$(cat $e14)" 1200000
-      check "eco-plus -> custom fan curve in force" eq "$(cat /sys/class/hwmon/hwmon9/pwm1_enable 2>/dev/null)" 1
-      check "eco-plus -> fan curve is 0% when cool" eq "$(cat /sys/class/hwmon/hwmon9/pwm1_auto_point2_pwm 2>/dev/null)" 0
+      check "eco-plus -> custom fan curve in force" eq "$(cat $FANHW/pwm1_enable 2>/dev/null)" 1
+      check "eco-plus -> fan curve is 0% when cool" eq "$(cat $FANHW/pwm1_auto_point2_pwm 2>/dev/null)" 0
       check "eco-plus -> 60 Hz" eq "$(prop org.tspmo.Display1 Refresh | awk '{printf "%d", $2}')" 60
       check "eco-plus -> tspmobg.slice active" eq "$(systemctl is-active tspmobg.slice)" active
     else
@@ -286,6 +287,8 @@ sw() { for t in /proc/$pid/task/*; do awk '/voluntary_ctxt_switches/{s+=$2} END{
 # nothing of the dGPU is read).
 TR=/sys/kernel/tracing
 sudo sh -c "echo 0 > $TR/tracing_on; echo > $TR/trace; echo 'name == \"0000:01:00.0\"' > $TR/events/rpm/rpm_resume/filter; echo 1 > $TR/events/rpm/rpm_resume/enable; echo 1 > $TR/tracing_on" 2>/dev/null
+# Let the daemon finish handling this script's own D-Bus clients (connect/disconnect signals).
+sleep 15
 a0=$(rt); c0=$(cpu); w0=$(sw)
 sleep "$IDLE"
 a1=$(rt); c1=$(cpu); w1=$(sw)
