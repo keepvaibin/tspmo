@@ -3,7 +3,7 @@
 
 A hold lasts as long as the connection that made it, so this keeps one open: a performance hold
 wins over balanced, is listed in ActiveProfileHolds, and is dropped when released and when the
-connection closes. A power-saver hold never lowers Eco+. Prints `name PASS|FAIL`; exits 1 on any
+connection closes. A power-saver hold is Eco+. Prints `name PASS|FAIL`; exits 1 on any
 FAIL. Leaves the mode as it found it.
 """
 import subprocess
@@ -66,19 +66,19 @@ try:
     time.sleep(2)
     check("hold dropped when its client leaves", tspmo("profile") == "balanced")
 
-    # Eco+: a power-saver hold never lowers it; a performance hold wins; release returns to Eco+.
-    tspmo("profile", "eco-plus")
+    # A power-saver hold is Eco+; a performance hold wins; release returns to balanced.
+    tspmo("profile", "balanced")
     time.sleep(2)
     c1 = p.call_sync("HoldProfile", GLib.Variant("(sss)", ("power-saver", "e2e", "tspmo-test")), 0, -1, None).unpack()[0]
     time.sleep(1.5)
-    check("power-saver hold keeps eco-plus", tspmo("profile") == "eco-plus")
+    check("power-saver hold is eco-plus", tspmo("profile") == "eco-plus")
     c2 = p.call_sync("HoldProfile", GLib.Variant("(sss)", ("performance", "e2e", "tspmo-test")), 0, -1, None).unpack()[0]
     time.sleep(2)
     check("performance hold wins over eco-plus", tspmo("profile") == "performance")
     p.call_sync("ReleaseProfile", GLib.Variant("(u)", (c2,)), 0, -1, None)
     p.call_sync("ReleaseProfile", GLib.Variant("(u)", (c1,)), 0, -1, None)
     time.sleep(2)
-    check("release returns to eco-plus", tspmo("profile") == "eco-plus")
+    check("release returns to balanced", tspmo("profile") == "balanced")
 finally:
     tspmo("profile", start)
 sys.exit(1 if fails else 0)
