@@ -36,9 +36,23 @@ check() { # name cmd...
   if out=$("$@" 2>&1); then record "$n" PASS ""; else record "$n" FAIL "${out:0:60}"; fi
 }
 bus() { busctl --system "$@"; }
+str() { sed 's/^[a-z]* "\(.*\)"$/\1/'; }
 prop() { bus get-property $SVC $OBJ "$1" "$2" 2>/dev/null; }
 call() { bus call $SVC $OBJ "$@" 2>&1; }
 eq() { [ "$1" = "$2" ]; }
+# A GPU switch may be running or waiting after a profile change (Eco+ switches the GPU first and
+# holds its thermal-mode write back until it is over): wait until Daemon1.GpuSwitching is empty,
+# at most 120 s.
+gpu_idle() {
+  local i
+  for ((i = 0; i < 240; i++)); do
+    [ "$(prop org.tspmo.Daemon1 GpuSwitching | str)" = "" ] && return 0
+    sleep 0.5
+  done
+  return 1
+}
+# After SetProfile: let the daemon start whatever it starts, then wait for the GPU switch.
+settle() { sleep "${1:-2.5}"; gpu_idle; }
 
 restore_all() {
   for ((i = ${#RESTORE[@]} - 1; i >= 0; i--)); do eval "${RESTORE[$i]}" >/dev/null 2>&1; done
@@ -138,7 +152,6 @@ has org.tspmo.Power1 && check "Power1 Limits readable" prop org.tspmo.Power1 Lim
 has org.tspmo.Lid1 && check "Lid1 Devices readable" prop org.tspmo.Lid1 Devices
 
 # --- Daemon1: every mode in turn, sysfs checked, then the user's mode back
-str() { sed 's/^[a-z]* "\(.*\)"$/\1/'; }
 if has org.tspmo.Daemon1 && [ "$MODES" = 1 ]; then
   op=$(prop org.tspmo.Daemon1 ProfileAc | str)
   ob=$(prop org.tspmo.Daemon1 ProfileBattery | str)
@@ -149,7 +162,7 @@ if has org.tspmo.Daemon1 && [ "$MODES" = 1 ]; then
   ppd() { bus get-property org.freedesktop.UPower.PowerProfiles /org/freedesktop/UPower/PowerProfiles org.freedesktop.UPower.PowerProfiles ActiveProfile | str; }
   base_pl1=$(cat $pl1); base_e14=$(cat $e14)
   for m in eco-plus power-saver balanced performance; do
-    call org.tspmo.Daemon1 SetProfile s $m >/dev/null; sleep 2.5
+    call org.tspmo.Daemon1 SetProfile s $m >/dev/null; settle 2.5
     check "SetProfile $m -> Profile" eq "$(prop org.tspmo.Daemon1 Profile | str)" "$m"
     want=$m; [ $m = eco-plus ] && want=power-saver
     check "SetProfile $m -> power-profiles ActiveProfile" eq "$(ppd)" "$want"
@@ -170,7 +183,7 @@ if has org.tspmo.Daemon1 && [ "$MODES" = 1 ]; then
     fi
   done
   # KDE choosing power-saver while Eco+ is active keeps Eco+.
-  call org.tspmo.Daemon1 SetProfile s eco-plus >/dev/null; sleep 1.5
+  call org.tspmo.Daemon1 SetProfile s eco-plus >/dev/null; settle 1.5
   bus set-property org.freedesktop.UPower.PowerProfiles /org/freedesktop/UPower/PowerProfiles org.freedesktop.UPower.PowerProfiles ActiveProfile s power-saver 2>/dev/null
   sleep 1
   check "KDE power-saver keeps eco-plus" eq "$(prop org.tspmo.Daemon1 Profile | str)" eco-plus
@@ -180,15 +193,15 @@ if has org.tspmo.Daemon1 && [ "$MODES" = 1 ]; then
   call org.tspmo.Daemon1 SetProfile s warp >/dev/null 2>&1 && record "SetProfile rejects 'warp'" FAIL "" || record "SetProfile rejects 'warp'" PASS ""
   # Cycle: four steps return to the start.
   s0=$(prop org.tspmo.Daemon1 Profile | str)
-  for _ in 1 2 3 4; do call org.tspmo.Daemon1 CycleProfile >/dev/null; sleep 1.5; done
+  for _ in 1 2 3 4; do call org.tspmo.Daemon1 CycleProfile >/dev/null; settle 1.5; done
   check "CycleProfile x4 returns" eq "$(prop org.tspmo.Daemon1 Profile | str)" "$s0"
   # The guard: a busy job outside the desktop moves to the efficiency cores in Eco+ and back.
-  call org.tspmo.Daemon1 SetProfile s eco-plus >/dev/null; sleep 2
+  call org.tspmo.Daemon1 SetProfile s eco-plus >/dev/null; settle 2
   sudo systemd-run --quiet --collect --unit=tspmo-e2e-burn --slice=tspmo-e2e.slice /usr/bin/tspmo bench --burn 4 2>/dev/null
   moved=0
   for _ in $(seq 1 14); do sleep 1.5; [ "$(wc -l < /sys/fs/cgroup/tspmobg.slice/cgroup.procs 2>/dev/null)" -gt 0 ] && { moved=1; break; }; done
   check "guard moves a busy job to tspmobg.slice" eq "$moved" 1
-  call org.tspmo.Daemon1 SetProfile s balanced >/dev/null; sleep 3
+  call org.tspmo.Daemon1 SetProfile s balanced >/dev/null; settle 3
   sudo systemctl stop tspmo-e2e-burn 2>/dev/null
   check "guard: slice stopped after eco-plus" eq "$(systemctl is-active tspmobg.slice)" inactive
   check "guard: nothing left running" eq "$(pgrep -fc 'bench --burn 4' | awk '{print ($1 > 2) ? 1 : 0}')" 0
@@ -282,13 +295,20 @@ pid=$(systemctl show -p MainPID --value tspmod)
 rt() { sudo cat $DGPU/power/runtime_active_time 2>/dev/null; }
 cpu() { awk '{print $14+$15}' /proc/$pid/stat; }
 rs0=$(sudo cat $DGPU/power/runtime_status 2>/dev/null)
-sw() { for t in /proc/$pid/task/*; do awk '/voluntary_ctxt_switches/{s+=$2} END{print s+0}' $t/status 2>/dev/null; done | awk '{s+=$1} END{print s+0}'; }
+# "tid count" per thread (voluntary switches only: the ones that are wake-ups).
+sw() { for t in /proc/$pid/task/*; do awk -v t="${t##*/}" '/^voluntary_ctxt_switches/{print t, $2}' $t/status 2>/dev/null; done; }
+# Wake-ups between two samples, summed over the threads present in both (a thread that exits
+# takes its counter with it and must not make the difference negative).
+swdiff() { awk 'NR==FNR{a[$1]=$2; next} ($1 in a){d+=$2-a[$1]} END{print d+0}' <(echo "$1") <(echo "$2"); }
 # Every runtime resume of the dGPU in the window, by the task that asked (kernel rpm events;
 # nothing of the dGPU is read).
 TR=/sys/kernel/tracing
 sudo sh -c "echo 0 > $TR/tracing_on; echo > $TR/trace; echo 'name == \"0000:01:00.0\"' > $TR/events/rpm/rpm_resume/filter; echo 1 > $TR/events/rpm/rpm_resume/enable; echo 1 > $TR/tracing_on" 2>/dev/null
+# No GPU switch may be running in the window (its thread would count as the daemon's cost).
+gpu_idle || record "GPU switch finished before the idle window" FAIL "still switching after 120 s"
 # Let the daemon finish handling this script's own D-Bus clients (connect/disconnect signals).
 sleep 15
+gpu_idle
 a0=$(rt); c0=$(cpu); w0=$(sw)
 sleep "$IDLE"
 a1=$(rt); c1=$(cpu); w1=$(sw)
@@ -296,7 +316,7 @@ resumes=$(sudo cat $TR/trace 2>/dev/null | grep "rpm_resume:")
 sudo sh -c "echo 0 > $TR/tracing_on; echo 0 > $TR/events/rpm/rpm_resume/enable; echo 0 > $TR/events/rpm/rpm_resume/filter; echo > $TR/trace" 2>/dev/null
 tck=$(getconf CLK_TCK)
 cpu_ms=$(( (c1 - c0) * 1000 / tck ))
-wk=$(awk -v d=$((w1 - w0)) -v s=$IDLE 'BEGIN{printf "%.2f", d / s}')
+wk=$(awk -v d="$(swdiff "$w0" "$w1")" -v s=$IDLE 'BEGIN{printf "%.2f", d / s}')
 if pgrep -x tspmo-gui >/dev/null; then
   # A running window polls the daemon (fan speed, temperature): that is its cost, not idle.
   record "tspmod CPU and wake-ups over ${IDLE}s" SKIP "tspmo-gui running: ${cpu_ms} ms, ${wk}/s"
@@ -315,6 +335,7 @@ record "tspmod RSS" "$([ "${rss:-0}" -le 20000 ] && echo PASS || echo FAIL)" "${
 
 trap - EXIT
 restore_all
+gpu_idle  # leave no GPU switch running behind the script
 echo
 echo "tspmo e2e ($ver)"
 printf '%s\n' "${RESULTS[@]}"
