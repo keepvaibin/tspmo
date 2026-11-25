@@ -2,9 +2,10 @@
 #
 # Local development package: builds the working tree this PKGBUILD lives in.
 #   cd packaging/arch && makepkg -si
+# Releases use PKGBUILD.release (see docs/install.md).
 pkgbase=tspmo-git
 pkgname=('tspmo-git' 'tspmo-hid-asus-dkms')
-pkgver=0.1.0
+pkgver=0.9.0
 pkgrel=1
 pkgdesc="Thermal & System Power Management Optimizer for ASUS and Lenovo laptops"
 arch=('x86_64')
@@ -45,40 +46,9 @@ package_tspmo-git() {
   provides=('tspmo' 'power-profiles-daemon')
   conflicts=('tspmo' 'power-profiles-daemon' 'tuned-ppd')
   local r; r="$(_root)"
-  install -Dm755 "$srcdir/target/release/tspmo"  "$pkgdir/usr/bin/tspmo"
-  install -Dm755 "$srcdir/target/release/tspmod" "$pkgdir/usr/bin/tspmod"
-  install -Dm755 "$srcdir/target/release/tspmo-gui" "$pkgdir/usr/bin/tspmo-gui"
-  # Run a program on the NVIDIA GPU (prime-run plus NVIDIA's EGL, see docs/power.md).
-  install -Dm755 "$r/data/bin/tspmo-run" "$pkgdir/usr/bin/tspmo-run"
-
-  # The launcher, and the hidden helper that carries the ROG-key shortcut (silent: no launch
-  # feedback); KDE reads X-KDE-Shortcuts from both directories.
-  install -Dm644 "$r/data/applications/org.tspmo.gui.desktop" "$pkgdir/usr/share/applications/org.tspmo.gui.desktop"
-  install -Dm644 "$r/data/applications/org.tspmo.gui-toggle.desktop" "$pkgdir/usr/share/applications/org.tspmo.gui-toggle.desktop"
-  install -Dm644 "$r/data/applications/org.tspmo.gui-toggle.desktop" "$pkgdir/usr/share/kglobalaccel/org.tspmo.gui-toggle.desktop"
-  # Plasma 6 widget.
-  install -d "$pkgdir/usr/share/plasma/plasmoids"
-  cp -r "$r/data/plasma/org.tspmo.power" "$pkgdir/usr/share/plasma/plasmoids/"
-
-  install -Dm644 "$r/data/systemd/tspmod.service" "$pkgdir/usr/lib/systemd/system/tspmod.service"
-  install -Dm644 "$r/data/systemd/tspmobg.slice" "$pkgdir/usr/lib/systemd/system/tspmobg.slice"
-  install -Dm644 "$r/data/systemd/plymouth-quit-timeout.conf" \
-    "$pkgdir/usr/lib/systemd/system/plymouth-quit.service.d/50-tspmo.conf"
-
-  install -Dm644 "$r/data/systemd/user/plasma-kwin-tspmo.conf" \
-    "$pkgdir/usr/lib/systemd/user/plasma-kwin_wayland.service.d/50-tspmo.conf"
-
-  install -Dm644 "$r/data/dbus/org.tspmo.Daemon1.conf" "$pkgdir/usr/share/dbus-1/system.d/org.tspmo.Daemon1.conf"
-  for s in org.tspmo.Daemon1 org.freedesktop.UPower.PowerProfiles net.hadess.PowerProfiles; do
-    install -Dm644 "$r/data/dbus/$s.service" "$pkgdir/usr/share/dbus-1/system-services/$s.service"
-  done
-  install -Dm644 "$r/data/polkit/org.tspmo.policy" "$pkgdir/usr/share/polkit-1/actions/org.tspmo.policy"
-  install -Dm755 "$r/data/systemd/user-environment-generator" \
-    "$pkgdir/usr/lib/systemd/user-environment-generators/60-tspmo"
-
-  install -Dm755 "$r/data/systemd/system-sleep" "$pkgdir/usr/lib/systemd/system-sleep/tspmo"
-
-  install -Dm644 "$r/LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+  # The file list lives in packaging/install-files.sh (shared with install.sh).
+  BIN_SRC="$srcdir/target/release" LICENSE_NAME="$pkgname" \
+    sh "$r/packaging/install-files.sh" core "$r" "$pkgdir" /usr >/dev/null
 }
 
 package_tspmo-hid-asus-dkms() {
@@ -86,7 +56,6 @@ package_tspmo-hid-asus-dkms() {
   arch=('any')
   license=('GPL-2.0-only')
   depends=('dkms' 'curl' 'patch')
-  local r; r="$(_root)" d="$pkgdir/usr/src/tspmo-hid-asus-1"
-  install -Dm644 "$r"/packaging/dkms/hid-asus/{dkms.conf,Makefile,Kbuild,0001-HID-asus-wake-the-keyboard-for-feature-reports.patch} -t "$d"
-  install -Dm755 "$r/packaging/dkms/hid-asus/fetch-source.sh" -t "$d"
+  local r; r="$(_root)"
+  sh "$r/packaging/install-files.sh" dkms "$r" "$pkgdir" /usr >/dev/null
 }

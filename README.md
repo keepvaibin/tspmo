@@ -1,47 +1,75 @@
-# tspmo — Thermal & System Power Management Optimizer
+# tspmo
 
-One fast, tiny control centre for **ASUS** (ROG, TUF, Zenbook, Vivobook, ProArt, Ally) and
-**Lenovo** (Legion, LOQ, IdeaPad, Yoga, ThinkPad, ThinkBook) laptops on Linux — the G-Helper /
-Legion Toolkit experience, built for the longest possible battery life.
+Thermal & System Power Management Optimizer: a G-Helper-style control app for **ASUS** laptops
+on Linux (ROG, TUF, Zenbook, Vivobook, ProArt), built for long battery life. A small root
+daemon (`tspmod`) applies power modes, GPU modes, fan curves, power limits, charge limits and
+lighting; a CLI (`tspmo`), a popup GUI (`tspmo-gui`, opened from the ROG key) and a Plasma
+widget control it. Lenovo support is early.
 
-> **Status: early development.** Today `tspmo info`, `tspmo doctor` and `tspmo dump` work.
-> See the [roadmap](docs/roadmap.md).
+<p align="center">
+  <img src="docs/img/gui/popup_dark_10pt_x1.png" alt="tspmo popup" width="360">
+  <img src="docs/img/gui/popup_light_10pt_x1.png" alt="tspmo popup, light" width="360">
+</p>
 
-## Goals
-- **Every control:** performance modes, power limits, per-fan curves, GPU modes (Eco /
-  Standard / Ultimate / Optimized), screen (refresh rate, overdrive, Mini-LED, flicker-free
-  OLED dimming), keyboard lighting profiles, lid displays (AniMe Matrix, Slash), charge
-  limits, and vendor keys.
-- **Costs nothing while you aren't using it:**
-  - The daemon is event-driven: no polling and 0 wakeups/s at idle.
-  - The popup opens from the ROG / Lenovo key and exits when closed.
-- **Battery first:**
-  - Never wakes a sleeping dGPU.
-  - Fixes the known idle-power traps.
-  - `tspmo doctor` explains each fix.
-- **Detects, doesn't guess:** it reads what the kernel exposes (`platform_profile`,
-  `firmware-attributes`, `hwmon`, `power_supply`), and quirks live in data files.
+**Tested on:** ASUS ROG Zephyrus G16 GU605MI. Other models work through capability detection
+(it reads what the kernel exposes), but only that machine is tested. Anything else may lack
+features: run `tspmo info`.
 
-## Try it
+## Features
+- Four power modes (Eco+, Silent, Balanced, Turbo); Fn+F5 cycles them. Replaces
+  power-profiles-daemon and speaks its D-Bus API.
+- GPU modes (Eco, Standard, Ultimate, Optimized) that never wake a sleeping dGPU.
+- Fan curves, power limits, battery charge limit, firmware toggles.
+- Keyboard lighting, Slash and AniMe Matrix lid displays, software Fn-lock.
+- Screen: refresh rate, flicker-free dimming, colour, eye care.
+- No polling: 0 wakeups/s at idle; the GUI exits when closed.
+- `tspmo doctor` finds what wastes battery and prints the fix; `tspmo bench` measures it.
+
+## Install
+```sh
+curl -fsSL https://raw.githubusercontent.com/keepvaibin/tspmo/master/install.sh | sh
+```
+Arch-based systems get the `.pkg.tar.zst` packages; others get a tarball installed into `/usr`.
+Needs systemd, D-Bus and polkit. Checks SHA256SUMS. Refuses on non-ASUS hardware unless
+`--force`; `--dry-run` shows what it would do. Log out and back in once afterwards.
+Details: [docs/install.md](docs/install.md).
+
+## Uninstall
+```sh
+curl -fsSL https://raw.githubusercontent.com/keepvaibin/tspmo/master/install.sh | sh -s -- --uninstall
+```
+Stops the daemon, removes everything tspmo wrote, and re-enables power-profiles-daemon.
+
+## Build from source
 ```sh
 cargo build --release
-./target/release/tspmo info      # what this laptop exposes
-./target/release/tspmo doctor    # what's broken or wasting battery, with fixes
+cd packaging/arch && makepkg -si      # Arch package of the working tree
+```
+Needs Rust 1.85+, fontconfig, libxkbcommon and wayland development files.
+
+## CLI
+```sh
+tspmo info                  # what this laptop exposes
+tspmo status                # profile, power source, GPU mode
+tspmo profile [mode|cycle]  # eco-plus | silent | balanced | performance
+tspmo gpu [eco|hybrid|ultimate|optimized]
+tspmo gpu users             # apps keeping the NVIDIA GPU awake
+tspmo fans | limits | battery | light | lid | display
+tspmo doctor [--apply]      # problems and fixes
+tspmo bench help
+tspmo-gui --install-shortcut   # bind the ROG key
+tspmo-run <program>            # run on the NVIDIA GPU
 ```
 
-## Add support for your laptop
-Run `tspmo dump ./my-laptop`, then `tar -C my-laptop -czf dump.tar.gz .`, and attach the
-archive to an issue. Dumps contain no serial numbers, UUIDs or MAC addresses. They become test
-fixtures, so your model stays working.
-
-## Layout
-| Path | What |
-|---|---|
-| `crates/tspmo-sys` | sysfs / hwmon / firmware-attributes helpers. Every path is relocatable through `TSPMO_SYSROOT` for testing |
-| `crates/tspmo-core` | capability model and `doctor` checks |
-| `crates/tspmo` | command-line tool |
-| `fixtures/` | anonymised dumps of real machines |
+## Report your hardware
+```sh
+tspmo dump ./my-laptop && tar -C my-laptop -czf dump.tar.gz .
+```
+Attach `dump.tar.gz` to an issue. It holds no serial numbers, UUIDs or MAC addresses, and
+becomes a test fixture.
 
 ## License
-GPL-3.0-or-later. See [docs/credits.md](docs/credits.md) for the projects whose research this
-builds on.
+GPL-3.0-or-later. The DKMS driver patch is GPL-2.0-only.
+
+## Credits
+See [docs/credits.md](docs/credits.md): asusctl, G-Helper, KWin, the Linux kernel and others.
