@@ -45,6 +45,14 @@ pub struct Daemon {
     pub gpu_waiting: bool,
     /// Last message from a GPU switch attempt, shown in the UI.
     pub gpu_message: String,
+    /// Apps already named on screen for the mode change that is waiting on them: each is
+    /// announced once, not on every retry.
+    pub gpu_blockers: Vec<String>,
+    /// An explicit switch the user asked for that apps held up: what `CloseGpuApps()` finishes
+    /// (the mode, and the policy to save once it is done).
+    pub gpu_blocked: Option<(gpu::Mode, Option<gpu::Policy>)>,
+    /// Setting: close the apps that hold the NVIDIA GPU by themselves when Eco needs it off.
+    pub close_gpu_apps: bool,
     /// Settings the kernel refused with EPERM/EACCES (firmware-owned); never retried.
     refused: std::collections::HashSet<String>,
     /// The RAPL/uncore values from before Eco+ was applied (empty when Eco+ is not active).
@@ -93,6 +101,9 @@ impl Daemon {
             gpu_switch_auto: false,
             gpu_waiting: false,
             gpu_message: String::new(),
+            gpu_blockers: Vec::new(),
+            gpu_blocked: None,
+            close_gpu_apps: false,
             refused: std::collections::HashSet::new(),
             eco_saved: Vec::new(),
             thermal_held: false,
@@ -388,6 +399,17 @@ impl Daemon {
         gone
     }
 
+    /// Remember apps that block a GPU switch; returns the ones not announced yet.
+    pub fn note_blockers(&mut self, apps: &[String]) -> Vec<String> {
+        let fresh: Vec<String> = apps
+            .iter()
+            .filter(|a| !self.gpu_blockers.contains(a))
+            .cloned()
+            .collect();
+        self.gpu_blockers.extend(fresh.iter().cloned());
+        fresh
+    }
+
     /// Environment for the compositor (read by tspmo's systemd drop-in for KWin at session
     /// start). Outside Ultimate mode KWin loads only Mesa's EGL: it then holds nothing on the
     /// NVIDIA GPU but its display device, which it releases when told the GPU is leaving, so
@@ -455,6 +477,9 @@ impl Daemon {
         if let Some(p) = kv.get("gpu_policy").and_then(|v| Policy::parse(v)) {
             self.gpu_policy = p;
         }
+        if let Some(b) = get_b("close_gpu_apps") {
+            self.close_gpu_apps = b;
+        }
         let t = &mut self.tunables;
         // Eco+ was redesigned (version 2): the values an older daemon saved (a flat 5/7 W cap)
         // are not read back.
@@ -499,7 +524,7 @@ impl Daemon {
         let t = &self.tunables;
         let text = format!(
             "# tspmod state (managed by tspmod; safe to edit while it is stopped)\n\
-             profile_ac={}\nprofile_battery={}\ngpu_policy={}\n\
+             profile_ac={}\nprofile_battery={}\ngpu_policy={}\nclose_gpu_apps={}\n\
              aspm_on_battery={}\n\
              audio_power_save_on_battery={}\nlazy_writeback_on_battery={}\n\
              eco_version=2\neco_pkg_w={}\neco_pkg_window_ms={}\neco_psys_w={}\neco_uncore_mhz={}\n\
@@ -507,6 +532,7 @@ impl Daemon {
             self.profile_ac.as_str(),
             self.profile_battery.as_str(),
             self.gpu_policy.as_str(),
+            self.close_gpu_apps,
             t.aspm_on_battery,
             t.audio_power_save_on_battery,
             t.lazy_writeback_on_battery,

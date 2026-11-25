@@ -219,38 +219,61 @@ impl Drop for MuteDisplaySwitchKey {
     }
 }
 
+/// Why a switch can't start: the message, and the apps behind it when apps are the reason.
+pub struct Refusal {
+    pub text: String,
+    /// Apps using the dGPU (`Firefox`, ...), empty for any other reason.
+    pub apps: Vec<String>,
+    /// The processes behind `apps`.
+    pub users: Vec<gpu::User>,
+}
+
+impl From<String> for Refusal {
+    fn from(text: String) -> Self {
+        Self {
+            text,
+            apps: Vec::new(),
+            users: Vec::new(),
+        }
+    }
+}
+
 /// Fast checks for problems the user can act on, before any slow work starts.
 pub fn precheck(root: &SysRoot, st: &Status, target: Mode) -> Result<(), String> {
+    check(root, st, target).map_err(|r| r.text)
+}
+
+pub fn check(root: &SysRoot, st: &Status, target: Mode) -> Result<(), Refusal> {
     if restart_required(root) {
-        return Err(gpu::RESTART_REQUIRED.into());
+        return Err(String::from(gpu::RESTART_REQUIRED).into());
     }
     if !crate::boot::allowed() {
-        return Err(STILL_STARTING.into());
+        return Err(String::from(STILL_STARTING).into());
     }
     match st.switcher {
         Switcher::None if target != Mode::Hybrid => {
-            return Err("this laptop has no firmware GPU switch".into());
+            return Err(String::from("this laptop has no firmware GPU switch").into());
         }
         Switcher::Asus { has_mux: false, .. } if target == Mode::Ultimate => {
-            return Err("no MUX switch: no Ultimate mode".into());
+            return Err(String::from("no MUX switch: no Ultimate mode").into());
         }
         _ => {}
     }
     if target == Mode::Eco && st.mode == Mode::Hybrid && st.dgpu.is_some() {
         let users = blocking_users(root);
-        let apps: Vec<String> = users
-            .iter()
-            .filter(|u| u.kind == gpu::UseKind::Render)
-            .map(|u| format!("{} ({})", u.name, u.pid))
-            .collect();
+        let apps = gpu::render_apps(&users);
         if !apps.is_empty() {
-            return Err(format!(
-                "the NVIDIA GPU is in use by {}; close them and try again",
-                apps.join(", ")
-            ));
+            return Err(Refusal {
+                text: gpu::using_text(&apps),
+                apps,
+                users: users
+                    .into_iter()
+                    .filter(|u| u.kind == gpu::UseKind::Render)
+                    .collect(),
+            });
         }
         if users.iter().any(|u| u.driver_handles) {
-            return Err(NEEDS_FRESH_SESSION.into());
+            return Err(String::from(NEEDS_FRESH_SESSION).into());
         }
     }
     Ok(())
@@ -480,6 +503,16 @@ pub fn eco_switch_ahead(d: &crate::state::Daemon) -> bool {
         && wanted_mode(d.gpu_policy, d.on_battery, true) == Mode::Eco
 }
 
+/// How a blocked switch to Eco treats the apps in its way.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Close {
+    /// By the rules: browser helpers when the user asked for the switch, every app when the
+    /// `CloseGpuApps` setting is on.
+    Rules,
+    /// The user said "close them" (`CloseGpuApps()`): every app that may be closed.
+    Now,
+}
+
 /// Start a switch on a worker thread. `policy`: saved once the switch succeeds (user requests).
 /// `automatic`: a policy-driven switch, retried while an app holds the GPU.
 /// Returns immediately; progress is published through `GpuSwitching` / `GpuMessage`.
@@ -490,6 +523,17 @@ pub fn begin(
     policy: Option<Policy>,
     automatic: bool,
 ) -> Result<(), String> {
+    begin_with(conn, shared, target, policy, automatic, Close::Rules)
+}
+
+pub fn begin_with(
+    conn: zbus::Connection,
+    shared: Shared,
+    target: Mode,
+    policy: Option<Policy>,
+    automatic: bool,
+    close: Close,
+) -> Result<(), String> {
     // The precheck scans /proc: not under the daemon lock.
     let (root, st) = {
         let d = lock(&shared);
@@ -498,31 +542,66 @@ pub fn begin(
         }
         (d.root.clone(), d.gpu_status())
     };
-    let checked = precheck(&root, &st, target);
+    let checked = check(&root, &st, target);
+    // Apps in the way that may be closed, and the switch goes ahead once they are.
+    let mut victims: Vec<gpu::User> = Vec::new();
     {
         let mut d = lock(&shared);
         if let Some(t) = d.gpu_switching {
             return Err(format!("already switching to {t}; one moment"));
         }
-        if let Err(e) = checked {
-            if e == gpu::RESTART_REQUIRED {
-                // Sticky: nothing to wait for, no retry.
-                d.gpu_waiting = false;
-                d.gpu_message = e.clone();
-            } else if automatic {
-                d.gpu_waiting = e != NEEDS_FRESH_SESSION;
-                let msg = format!("Waiting to switch to {target}: {e}");
-                // Eco+ promises the dGPU off: say what is holding it (once, not on every retry).
-                if d.effective().is_eco_plus() && d.gpu_message != msg {
-                    crate::session::osd("video-card", &e, None);
+        if let Err(r) = checked {
+            // Asked for by the user (Eco, or Eco+ which wants it), or told to close everything.
+            let by_user = !automatic || d.effective().is_eco_plus();
+            let plan = if r.users.is_empty() {
+                None
+            } else if close == Close::Now || d.close_gpu_apps {
+                gpu::plan_close(&r.users, true)
+            } else if by_user {
+                gpu::plan_close(&r.users, false)
+            } else {
+                None
+            };
+            if let Some(plan) = plan {
+                victims = plan;
+                d.gpu_blocked = None;
+            } else {
+                let e = r.text;
+                if e == gpu::RESTART_REQUIRED {
+                    // Sticky: nothing to wait for, no retry.
+                    d.gpu_waiting = false;
+                    d.gpu_message = e.clone();
+                } else if !r.apps.is_empty() {
+                    // Apps hold the dGPU: say which ones. The retry thread keeps trying
+                    // (policy-driven attempts); the user hears of each app once.
+                    d.gpu_waiting = automatic;
+                    d.gpu_message = e.clone();
+                    // `CloseGpuApps()` finishes what an explicit request could not.
+                    d.gpu_blocked = (!automatic).then_some((target, policy));
+                    if by_user {
+                        let fresh = d.note_blockers(&r.apps);
+                        if !fresh.is_empty() {
+                            crate::session::osd("video-card", &gpu::using_text(&fresh), None);
+                        }
+                    }
+                } else if automatic {
+                    d.gpu_waiting = e != NEEDS_FRESH_SESSION;
+                    d.gpu_message = format!("Waiting to switch to {target}: {e}");
+                } else {
+                    d.gpu_message = e.clone();
                 }
-                d.gpu_message = msg;
+                return Err(e);
             }
-            return Err(e);
         }
+        d.gpu_blockers.clear();
+        d.gpu_blocked = None;
         d.gpu_switching = Some(target);
         d.gpu_switch_auto = automatic;
-        d.gpu_message = format!("Switching to {target}…");
+        d.gpu_message = if victims.iter().all(|u| u.respawnable) {
+            format!("Switching to {target}…")
+        } else {
+            format!("Closing {}…", gpu::render_apps(&victims).join(", "))
+        };
     }
     let worker_conn = conn.clone();
     let worker_shared = shared.clone();
@@ -535,6 +614,9 @@ pub fn begin(
             zbus::block_on(emit_changed(&worker_conn, &worker_shared));
             let mute = MuteDisplaySwitchKey::new(&root);
             let cancelled = || !switch_still_wanted(&lock(&worker_shared), target);
+            if !victims.is_empty() {
+                close_apps(&root, &victims);
+            }
             let result = switch(&root, &st, target, &cancelled);
             let was_cancelled = result.as_ref().is_err_and(|e| e == quiet::CANCELLED);
             let boot_mux = lock(&worker_shared).boot_mux;
@@ -599,6 +681,30 @@ pub fn begin(
     Ok(())
 }
 
+/// Close the apps in the way of a switch to Eco (see `closer.rs`). Whatever survives is found
+/// again by the switch's own check and reported there.
+fn close_apps(root: &SysRoot, users: &[gpu::User]) {
+    let victims: Vec<crate::closer::Victim> = users
+        .iter()
+        .filter(|u| u.closable())
+        .filter_map(|u| crate::closer::Victim::of(root, u))
+        .collect();
+    let names: Vec<String> = victims
+        .iter()
+        .map(|v| format!("{} ({})", v.name, v.pid))
+        .collect();
+    eprintln!("tspmod: gpu: closing {}", names.join(", "));
+    let left = crate::closer::terminate(
+        &crate::closer::Real(root.clone()),
+        &victims,
+        crate::closer::grace_for(users),
+    );
+    if !left.is_empty() {
+        let names: Vec<&str> = left.iter().map(|v| v.name.as_str()).collect();
+        eprintln!("tspmod: gpu: still running: {}", names.join(", "));
+    }
+}
+
 /// Bring the hardware in line with the policy (power-source change, logout, retry).
 pub fn enforce(conn: &zbus::Connection, shared: &Shared) {
     let target = policy_target(&lock(shared));
@@ -622,6 +728,7 @@ pub fn enforce(conn: &zbus::Connection, shared: &Shared) {
                 d.gpu_message.clear();
             }
             d.gpu_waiting = false;
+            d.gpu_blockers.clear();
         }
     }
 }

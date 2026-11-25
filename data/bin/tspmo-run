@@ -1,0 +1,32 @@
+#!/bin/sh
+# tspmo-run COMMAND [ARGS...]: run a program on the NVIDIA GPU.
+#
+# Like nvidia-prime's `prime-run` (PRIME render offload: Vulkan and GLX), and it also gives the
+# program NVIDIA's EGL. tspmo's session environment (`tspmo session-env`) restricts EGL to Mesa,
+# so that browsers, Qt and Electron apps looking for a GPU don't open the NVIDIA one and keep it
+# from turning off; programs started here are the ones that ask for it.
+#
+# In Eco the NVIDIA GPU is off: the program runs as it is (on the iGPU), with a note.
+
+if [ $# -eq 0 ]; then
+    echo "usage: tspmo-run COMMAND [ARGS...]" >&2
+    exit 2
+fi
+
+# Eco unloads the driver; a Hybrid GPU asleep keeps it loaded.
+if [ ! -d /sys/module/nvidia ]; then
+    echo "tspmo-run: the NVIDIA GPU is off (Eco); running on the iGPU" >&2
+    exec "$@"
+fi
+
+export __NV_PRIME_RENDER_OFFLOAD=1
+export __VK_LAYER_NV_optimus=NVIDIA_only
+export __GLX_VENDOR_LIBRARY_NAME=nvidia
+export VK_LOADER_DRIVERS_SELECT='*nvidia*'
+nvidia_egl=/usr/share/glvnd/egl_vendor.d/10_nvidia.json
+if [ -e "$nvidia_egl" ]; then
+    export __EGL_VENDOR_LIBRARY_FILENAMES="$nvidia_egl"
+else
+    unset __EGL_VENDOR_LIBRARY_FILENAMES
+fi
+exec "$@"
