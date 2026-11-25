@@ -99,7 +99,7 @@ impl Asus {
                     l.set_eco(*eco_plus);
                 }
                 if let Some(t) = &self.thermal {
-                    t.set_eco(*eco_plus);
+                    t.set_eco(profile.stops_fans());
                     t.on_profile(*profile, *on_battery);
                     self.emit(async |c| {
                         fans::changed(c).await;
@@ -155,7 +155,7 @@ impl Asus {
                 // The USB keyboard may have re-enumerated while asleep.
                 hotkeys::rearm();
             }
-            Key(_) | FanKey => {}
+            Key(_) | FanKey(_) => {}
         }
     }
 }

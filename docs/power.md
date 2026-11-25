@@ -1,25 +1,47 @@
 # Power modes
 
-Four modes, chosen per power source (AC, battery): **eco-plus**, **power-saver**, **balanced**,
-**performance**. KDE, GNOME and `powerprofilesctl` see three: Eco+ reads as `power-saver`.
-Choosing `power-saver` there while Eco+ is active keeps Eco+; any other choice leaves it.
-`tspmo profile` (or `org.tspmo.Daemon1.SetProfile`) uses all four.
+Four modes, chosen per power source (AC, battery), in this order:
+
+- **eco-plus** ("Eco+"): the power-saving mode.
+- **silent** ("Silent"): the quiet mode. Fans stopped while cool and the firmware's quiet
+  thermal mode; the CPU behaves as in Balanced. Its point is noise, not power.
+- **balanced** ("Balanced")
+- **performance** ("Turbo")
+
+KDE, GNOME and `powerprofilesctl` see three names:
+
+| tspmo | `ActiveProfile` reads | KDE sets it by |
+|---|---|---|
+| eco-plus | `power-saver` | `power-saver` (KDE's "Power Save" selects Eco+) |
+| silent | `balanced` | nothing: KDE has no quiet profile |
+| balanced | `balanced` | `balanced` |
+| performance | `performance` | `performance` |
+
+`balanced` set from KDE while Silent is active keeps Silent (KDE reads it as `balanced` already);
+anything else leaves it. A `power-saver` hold is an Eco+ hold. `tspmo profile` (or
+`org.tspmo.Daemon1.SetProfile`) uses all four; `power-saver`, `saver` and `eco` are aliases of
+eco-plus there, `quiet` of silent. Default on both sources: balanced. A stored `power-saver`
+(earlier versions' quiet mode) is read as `silent` and rewritten.
 
 ## What a mode changes
 
-| | Eco+ | power-saver | balanced | performance |
+| | Eco+ | Silent | Balanced | Turbo |
 |---|---|---|---|---|
 | Firmware thermal mode | quiet | quiet | balanced | performance |
-| CPU energy preference / bias | balance_performance / 8 | power / 15 | balance_power or balance_performance | performance / 0 |
-| Turbo | on | off on battery | on | on |
+| CPU energy preference / bias | balance_performance / 8 | as Balanced | balance_power or balance_performance / 8 or 6 | performance / 0 |
+| Turbo | on | on | on | on |
 | Package power limit (RAPL) | PL1 12 W over 10 s, PL2 28 W | firmware | firmware | firmware |
 | Efficiency-core maximum clock | 1.2 GHz | firmware | firmware | firmware |
 | Background jobs | on the efficiency cores, weight 10 | | | |
 | NVIDIA GPU | off (Eco) | policy | policy | policy |
-| Fans | stopped below 58-66 C, steep ramp | firmware | firmware | firmware |
+| Fans | stopped below 58-66 C, steep ramp | same curve | firmware | firmware |
 | Keyboard backlight | dark after 10 s idle | as set | as set | as set |
 | Slash | dark | as set | as set | as set |
 | Screen | 60 Hz | refresh policy | refresh policy | refresh policy |
+
+Silent uses Eco+'s fan curve (`fans::eco_curve`, same thresholds) and nothing else of Eco+. Fan
+curves and power limits set in the GUI are kept per firmware thermal mode (silent, balanced,
+performance); Eco+ shares Silent's.
 
 On battery every mode also gets PCIe link power saving, audio codec power-down and lazier disk
 writeback. All writes skip values that are already set, because on ASUS each `platform_profile`
@@ -31,9 +53,41 @@ Eco+ saves the original RAPL limits and windows and the efficiency cores' clock 
 `/run/tspmo/rapl-orig` when it starts and writes them back when it ends, when `tspmod` stops
 (`ExecStopPost`) and after a daemon crash (the file is read again at start-up).
 
+## Fn+F5 and `platform_profile`
+
+Fn+F5 has exactly one owner: tspmod (`crates/tspmod/src/fankey.rs`). The kernel (asus-wmi) also
+steps `platform_profile` itself on that key (balanced, performance, quiet), and that step is not a
+choice of the user's.
+
+- On the key (the keyboard's key, or its Fn-lock variant on the WMI device) tspmod takes the
+  next mode after the latest one it chose, eco-plus, silent, balanced, performance, eco-plus,
+  applies it once (Eco+ with the GPU first and the thermal write held back, as always) and
+  shows one OSD with it. Two reports of the same press less than 50 ms apart count once;
+  quicker presses are separate and each advances one step.
+- The watcher on `platform_profile` ignores a change that falls 500 ms before to 500 ms after a
+  press (the notification can come first: it holds a change back 200 ms to see whether a press
+  explains it). The handler waits up to 250 ms for the kernel's step so that the write it then
+  makes is usually already in place; 550 ms after the last press it rewrites the thermal mode
+  if the kernel's step left something else. The final hardware state is what tspmod chose.
+- Every `platform_profile` change still counts for the 30 s rule below (no driver unload within
+  30 s of a change).
+- Journal lines (`journalctl -u tspmod`): `fan key from <device> at <ms>`,
+  `platform_profile -> <value> at <ms>` (same clock) and what was done with it, for checking the
+  timing on a given machine.
+
+A genuine external change (another tool writing `platform_profile`) is followed to the nearest
+mode: balanced and performance as they are, `quiet` as Silent, with one OSD. Eco+ is never
+entered from outside: its GPU, power caps, guard and 60 Hz are applied only when the user chooses
+Eco+ (tspmo, KDE's Power Save, Fn+F5). Quiet while Eco+ is active is Eco+'s own thermal mode and
+changes nothing.
+
+OSD: one note for each change the user makes (Fn+F5, `SetProfile`/`CycleProfile` from the GUI or
+CLI). Changes KDE makes show KDE's own note; plugging and unplugging the charger applies the
+per-source mode silently.
+
 ## Eco+ design
 
-Eco+ is the maximum-battery mode, selectable on AC and on battery. It must also stay snappy:
+Eco+ is the power-saving mode, selectable on AC and on battery. It must also stay snappy:
 the first design (package 5/7 W flat, turbo off, uncore 1.6 GHz) made the laptop unusable
 while a build ran. A power limit slows every core alike, so a build on all cores starved the
 foreground of both budget and clock. Eco+ now separates the two:
@@ -169,7 +223,7 @@ What this says:
 
 ## Tunables
 
-`/var/lib/tspmo/state` (edit while `tspmod` is stopped; Eco+ values are read only with
+`/var/lib/tspmo/state` (`profile_ac` and `profile_battery` hold a mode name; edit while `tspmod` is stopped; Eco+ values are read only with
 `eco_version=2`, which `tspmod` writes):
 
 ```

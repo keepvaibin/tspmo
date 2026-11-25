@@ -161,13 +161,14 @@ if has org.tspmo.Daemon1 && [ "$MODES" = 1 ]; then
   e14=/sys/devices/system/cpu/cpu14/cpufreq/scaling_max_freq
   ppd() { bus get-property org.freedesktop.UPower.PowerProfiles /org/freedesktop/UPower/PowerProfiles org.freedesktop.UPower.PowerProfiles ActiveProfile | str; }
   base_pl1=$(cat $pl1); base_e14=$(cat $e14)
-  for m in eco-plus power-saver balanced performance; do
+  for m in eco-plus silent balanced performance; do
     call org.tspmo.Daemon1 SetProfile s $m >/dev/null; settle 2.5
     check "SetProfile $m -> Profile" eq "$(prop org.tspmo.Daemon1 Profile | str)" "$m"
-    want=$m; [ $m = eco-plus ] && want=power-saver
+    # KDE's three names: Eco+ is power-saver; Silent has none and reads balanced.
+    case $m in eco-plus) want=power-saver ;; silent) want=balanced ;; *) want=$m ;; esac
     check "SetProfile $m -> power-profiles ActiveProfile" eq "$(ppd)" "$want"
     pp=$(cat /sys/firmware/acpi/platform_profile)
-    case $m in eco-plus|power-saver) w=low-power ;; balanced) w=balanced ;; performance) w=performance ;; esac
+    case $m in eco-plus|silent) w=low-power ;; balanced) w=balanced ;; performance) w=performance ;; esac
     [ "$pp" = quiet ] && pp=low-power
     check "$m -> platform_profile $w" eq "$pp" "$w"
     if [ $m = eco-plus ]; then
@@ -179,23 +180,49 @@ if has org.tspmo.Daemon1 && [ "$MODES" = 1 ]; then
       check "eco-plus -> tspmobg.slice active" eq "$(systemctl is-active tspmobg.slice)" active
     else
       check "$m -> PL1 back" eq "$(cat $pl1)" "$base_pl1"
-      if [ $m = power-saver ]; then
-        # No turbo on battery lowers the cores' ceiling to their base clock (1.8 GHz here):
-        # what matters is that Eco+'s 1.2 GHz cap is gone.
-        check "$m -> efficiency cores not capped by Eco+" test "$(cat $e14)" -gt 1200000
-      else
-        check "$m -> efficiency cores uncapped" eq "$(cat $e14)" "$base_e14"
+      check "$m -> efficiency cores uncapped" eq "$(cat $e14)" "$base_e14"
+      if [ $m = silent ]; then
+        # Silent is about noise: the fans are stopped while cool, nothing else of Eco+.
+        check "silent -> custom fan curve in force" eq "$(cat $FANHW/pwm1_enable 2>/dev/null)" 1
+        check "silent -> fan curve is 0% when cool" eq "$(cat $FANHW/pwm1_auto_point2_pwm 2>/dev/null)" 0
       fi
     fi
   done
-  # KDE choosing power-saver while Eco+ is active keeps Eco+.
-  call org.tspmo.Daemon1 SetProfile s eco-plus >/dev/null; settle 1.5
-  bus set-property org.freedesktop.UPower.PowerProfiles /org/freedesktop/UPower/PowerProfiles org.freedesktop.UPower.PowerProfiles ActiveProfile s power-saver 2>/dev/null
-  sleep 1
-  check "KDE power-saver keeps eco-plus" eq "$(prop org.tspmo.Daemon1 Profile | str)" eco-plus
-  bus set-property org.freedesktop.UPower.PowerProfiles /org/freedesktop/UPower/PowerProfiles org.freedesktop.UPower.PowerProfiles ActiveProfile s balanced 2>/dev/null
-  sleep 1
+  # KDE: power-saver selects Eco+ (and Eco+ reads power-saver); balanced leaves Eco+ but keeps
+  # Silent (which KDE reads as balanced); performance leaves either.
+  kde() { bus set-property org.freedesktop.UPower.PowerProfiles /org/freedesktop/UPower/PowerProfiles org.freedesktop.UPower.PowerProfiles ActiveProfile s "$1" 2>/dev/null; sleep 1.5; gpu_idle; }
+  call org.tspmo.Daemon1 SetProfile s balanced >/dev/null; settle 1.5
+  kde power-saver
+  check "KDE power-saver selects eco-plus" eq "$(prop org.tspmo.Daemon1 Profile | str)" eco-plus
+  check "KDE reads eco-plus as power-saver" eq "$(ppd)" power-saver
+  kde balanced
   check "KDE balanced leaves eco-plus" eq "$(prop org.tspmo.Daemon1 Profile | str)" balanced
+  call org.tspmo.Daemon1 SetProfile s silent >/dev/null; settle 1.5
+  kde balanced
+  check "KDE balanced keeps silent" eq "$(prop org.tspmo.Daemon1 Profile | str)" silent
+  kde performance
+  check "KDE performance leaves silent" eq "$(prop org.tspmo.Daemon1 Profile | str)" performance
+  call org.tspmo.Daemon1 SetProfile s balanced >/dev/null; settle 1.5
+  # Aliases of the CLI.
+  for a in power-saver saver eco; do
+    tspmo profile $a >/dev/null; settle 1.5
+    check "tspmo profile $a -> eco-plus" eq "$(prop org.tspmo.Daemon1 Profile | str)" eco-plus
+  done
+  tspmo profile quiet >/dev/null; settle 1.5
+  check "tspmo profile quiet -> silent" eq "$(prop org.tspmo.Daemon1 Profile | str)" silent
+  # Fn+F5 handler (tspmo debug fan-key): one step from the latest mode, eco-plus -> silent ->
+  # balanced -> performance -> eco-plus; the hardware ends in the chosen thermal mode.
+  tspmo profile eco-plus >/dev/null; settle 2
+  for want in silent balanced performance eco-plus; do
+    tspmo debug fan-key >/dev/null; sleep 1.5; gpu_idle
+    check "fan key -> $want" eq "$(prop org.tspmo.Daemon1 Profile | str)" "$want"
+  done
+  # Rapid presses each advance one step (presses 50 ms apart or more).
+  tspmo profile eco-plus >/dev/null; settle 2
+  for _ in 1 2 3; do tspmo debug fan-key >/dev/null; sleep 0.12; done
+  sleep 1.5; gpu_idle
+  check "fan key x3 rapid -> performance" eq "$(prop org.tspmo.Daemon1 Profile | str)" performance
+  call org.tspmo.Daemon1 SetProfile s balanced >/dev/null; settle 1.5
   call org.tspmo.Daemon1 SetProfile s warp >/dev/null 2>&1 && record "SetProfile rejects 'warp'" FAIL "" || record "SetProfile rejects 'warp'" PASS ""
   # Cycle: four steps return to the start.
   s0=$(prop org.tspmo.Daemon1 Profile | str)
@@ -229,10 +256,10 @@ if has org.tspmo.Fans1 && [ "$MODES" = 1 ]; then
   check "Fans1.Temps has the CPU" eq "$(bus get-property $SVC $OBJ org.tspmo.Fans1 Temps | awk '{print $2}')" 1
 fi
 if has org.tspmo.Power1 && [ "$MODES" = 1 ]; then
-  RESTORE+=("tspmo limits power-saver reset")
-  tspmo limits power-saver ac ppt_pl1_spl 60 >/dev/null 2>&1
+  RESTORE+=("tspmo limits silent reset")
+  tspmo limits silent ac ppt_pl1_spl 60 >/dev/null 2>&1
   check "Power1 SetLimit stored" eq "$(tspmo limits | grep -c ' 60')" 1
-  tspmo limits power-saver reset >/dev/null 2>&1
+  tspmo limits silent reset >/dev/null 2>&1
   check "Power1 Reset" eq "$(tspmo limits | grep -c ' 60')" 0
 fi
 

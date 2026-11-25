@@ -1,4 +1,4 @@
-//! Power profiles: what `power-saver`, `balanced` and `performance` actually do to the hardware.
+//! Power modes: what `eco-plus`, `silent`, `balanced` and `performance` do to the hardware.
 //!
 //! [`plan`] is a pure function of (machine capabilities, profile, power source) → a list of
 //! sysfs writes, so the tuning is unit-tested against fixtures. [`apply`] performs the writes,
@@ -11,81 +11,139 @@ use tspmo_sys::SysRoot;
 pub const PLATFORM_PROFILE: &str = "/sys/firmware/acpi/platform_profile";
 const CPU: &str = "/sys/devices/system/cpu";
 
-/// The power modes. Three are the freedesktop power-profiles ones (shared with KDE/GNOME);
-/// `EcoPlus` is tspmo's own: power-saver plus package/platform power caps, a lower uncore
-/// clock and 60 Hz. The power-profiles API sees it as `power-saver` ([`Profile::ppd`]).
+/// The four power modes.
+///
+/// * `EcoPlus`: the power-saving mode (firmware quiet mode plus package power caps, the
+///   efficiency-core clock cap, the dGPU off, 60 Hz, ...).
+/// * `Silent`: the quiet mode. Firmware quiet mode and the fans stopped while cool; the CPU
+///   behaves as in `Balanced`. Its point is noise, not power.
+/// * `Balanced`, `Performance` (shown as "Turbo").
+///
+/// The freedesktop power-profiles API (KDE, GNOME) has three names: `power-saver` is Eco+,
+/// `balanced` is Balanced and Silent alike ([`Profile::ppd_name`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Profile {
     EcoPlus,
-    PowerSaver,
+    Silent,
     Balanced,
     Performance,
 }
 
 impl Profile {
-    /// The profiles of the power-profiles API.
-    pub const ALL: [Profile; 3] = [Profile::PowerSaver, Profile::Balanced, Profile::Performance];
-    /// Every mode, lowest power first.
+    /// Every mode, in cycle order.
     pub const MODES: [Profile; 4] = [
         Profile::EcoPlus,
-        Profile::PowerSaver,
+        Profile::Silent,
         Profile::Balanced,
         Profile::Performance,
     ];
-
-    /// What KDE/GNOME see: Eco+ is a power-saver.
-    pub fn ppd(self) -> Self {
-        match self {
-            Self::EcoPlus => Self::PowerSaver,
-            p => p,
-        }
-    }
+    /// The firmware's three thermal modes (what fan curves and power limits are kept per):
+    /// Eco+ shares Silent's.
+    pub const THERMAL: [Profile; 3] = [Profile::Silent, Profile::Balanced, Profile::Performance];
 
     pub fn is_eco_plus(self) -> bool {
         self == Self::EcoPlus
     }
 
+    /// The thermal mode this mode runs the firmware in (Eco+ is firmware-quiet like Silent).
+    pub fn thermal(self) -> Self {
+        match self {
+            Self::EcoPlus => Self::Silent,
+            p => p,
+        }
+    }
+
+    /// Fans stop while cool in Eco+ and Silent.
+    pub fn stops_fans(self) -> bool {
+        matches!(self, Self::EcoPlus | Self::Silent)
+    }
+
     pub fn as_str(self) -> &'static str {
         match self {
             Self::EcoPlus => "eco-plus",
-            Self::PowerSaver => "power-saver",
+            Self::Silent => "silent",
             Self::Balanced => "balanced",
             Self::Performance => "performance",
         }
     }
 
+    /// What the user sees.
+    pub fn display_name(self) -> &'static str {
+        match self {
+            Self::EcoPlus => "Eco+",
+            Self::Silent => "Silent",
+            Self::Balanced => "Balanced",
+            Self::Performance => "Turbo",
+        }
+    }
+
+    /// The name in the freedesktop power-profiles API: Eco+ is `power-saver`; KDE has no quiet
+    /// profile, so Silent reads `balanced`.
+    pub fn ppd_name(self) -> &'static str {
+        match self {
+            Self::EcoPlus => "power-saver",
+            Self::Silent | Self::Balanced => "balanced",
+            Self::Performance => "performance",
+        }
+    }
+
+    /// A power-profiles API name (`power-saver` is Eco+). `eco-plus` and `silent` are not names
+    /// of that API.
+    pub fn from_ppd(s: &str) -> Option<Self> {
+        match s.trim() {
+            "power-saver" => Some(Self::EcoPlus),
+            "balanced" => Some(Self::Balanced),
+            "performance" => Some(Self::Performance),
+            _ => None,
+        }
+    }
+
+    /// A mode as typed by a user: `power-saver`, `powersaver`, `saver` and `eco` are Eco+;
+    /// `silent` and `quiet` are Silent.
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim() {
-            "eco-plus" | "eco+" | "ecoplus" => Some(Self::EcoPlus),
-            "power-saver" | "silent" | "quiet" | "saver" => Some(Self::PowerSaver),
+            "eco-plus" | "eco+" | "ecoplus" | "eco" | "power-saver" | "powersaver" | "saver" => {
+                Some(Self::EcoPlus)
+            }
+            "silent" | "quiet" => Some(Self::Silent),
             "balanced" => Some(Self::Balanced),
             "performance" | "turbo" => Some(Self::Performance),
             _ => None,
         }
     }
 
-    /// Map a kernel `platform_profile` value back to a profile (for hotkey changes like Fn+F5 / Fn+Q).
+    /// A mode as an older version stored it: there `power-saver` was the quiet thermal mode,
+    /// which is Silent now.
+    pub fn parse_stored(s: &str) -> Option<Self> {
+        match s.trim() {
+            "power-saver" => Some(Self::Silent),
+            other => Self::parse(other),
+        }
+    }
+
+    /// The mode a kernel `platform_profile` value stands for (the quiet value stands for
+    /// Silent: Eco+ writes it too, see [`Profile::thermal`]).
     pub fn from_platform(s: &str) -> Option<Self> {
         match s.trim() {
-            "low-power" | "quiet" | "cool" => Some(Self::PowerSaver),
+            "low-power" | "quiet" | "cool" => Some(Self::Silent),
             "balanced" | "balanced-performance" => Some(Self::Balanced),
             "performance" | "max-power" => Some(Self::Performance),
             _ => None, // `custom` and unknown values: keep the current profile
         }
     }
 
-    /// The next mode in the cycle: eco-plus, power-saver, balanced, performance, eco-plus.
+    /// The next mode in the cycle: eco-plus, silent, balanced, performance, eco-plus.
     pub fn next(self) -> Self {
         match self {
-            Self::EcoPlus => Self::PowerSaver,
-            Self::PowerSaver => Self::Balanced,
+            Self::EcoPlus => Self::Silent,
+            Self::Silent => Self::Balanced,
             Self::Balanced => Self::Performance,
             Self::Performance => Self::EcoPlus,
         }
     }
 }
 
-/// What Eco+ puts on top of power-saver (watts, MHz; `None` leaves that limit alone).
+/// What Eco+ puts on top of the firmware quiet mode (watts, MHz; `None` leaves that limit alone).
 ///
 /// Eco+ is a sustained-power budget with room for bursts, not a flat cap: the first design
 /// (package 5/7 W, no turbo, uncore 1.6 GHz) starved the desktop whenever a build ran, because
@@ -127,22 +185,19 @@ impl Default for EcoLimits {
 /// Knobs a user can change; defaults are the battery-first choices.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tunables {
-    /// Disable CPU turbo in power-saver while on battery.
-    pub saver_no_turbo_on_battery: bool,
     /// PCIe ASPM `powersupersave` on battery.
     pub aspm_on_battery: bool,
     /// Audio codec power-down after 1 s idle on battery.
     pub audio_power_save_on_battery: bool,
     /// Flush dirty pages every 15 s instead of 5 s on battery.
     pub lazy_writeback_on_battery: bool,
-    /// What Eco+ adds on top of power-saver.
+    /// What Eco+ adds on top of the firmware quiet mode.
     pub eco: EcoLimits,
 }
 
 impl Default for Tunables {
     fn default() -> Self {
         Self {
-            saver_no_turbo_on_battery: true,
             aspm_on_battery: true,
             audio_power_save_on_battery: true,
             lazy_writeback_on_battery: true,
@@ -180,7 +235,7 @@ pub fn plan(
     if let Some(choices) = root.read_opt(format!("{PLATFORM_PROFILE}_choices")) {
         let choices: Vec<&str> = choices.split_whitespace().collect();
         let wanted: &[&str] = match profile {
-            Profile::PowerSaver | Profile::EcoPlus => &["quiet", "low-power", "cool"],
+            Profile::EcoPlus | Profile::Silent => &["quiet", "low-power", "cool"],
             Profile::Balanced => &["balanced"],
             Profile::Performance => &["performance", "balanced-performance"],
         };
@@ -192,9 +247,8 @@ pub fn plan(
     // 2. CPU energy/performance preference (intel_pstate and amd-pstate active mode).
     let epp = match (profile, on_battery) {
         (Profile::EcoPlus, _) => t.eco.epp,
-        (Profile::PowerSaver, _) => "power",
-        (Profile::Balanced, true) => "balance_power",
-        (Profile::Balanced, false) => "balance_performance",
+        (Profile::Balanced | Profile::Silent, true) => "balance_power",
+        (Profile::Balanced | Profile::Silent, false) => "balance_performance",
         (Profile::Performance, _) => "performance",
     };
     for policy in root.glob(&format!("{CPU}/cpufreq/policy*")) {
@@ -213,9 +267,8 @@ pub fn plan(
     // 3. Intel energy-performance bias (affects uncore/package decisions besides HWP).
     let epb = match (profile, on_battery) {
         (Profile::EcoPlus, _) => "8",
-        (Profile::PowerSaver, _) => "15",
-        (Profile::Balanced, true) => "8",
-        (Profile::Balanced, false) => "6",
+        (Profile::Balanced | Profile::Silent, true) => "8",
+        (Profile::Balanced | Profile::Silent, false) => "6",
         (Profile::Performance, _) => "0",
     };
     for p in root.glob(&format!("{CPU}/cpu*/power/energy_perf_bias")) {
@@ -223,9 +276,9 @@ pub fn plan(
     }
 
     // 4. Turbo.
-    // Eco+ keeps turbo: a burst that finishes fast costs less than a slow one that keeps the
-    // package out of its idle states, and the budget (PL1) bounds the average anyway.
-    let turbo = !(profile == Profile::PowerSaver && on_battery && t.saver_no_turbo_on_battery);
+    // Every mode keeps turbo (Eco+ too): a burst that finishes fast costs less than a slow one
+    // that keeps the package out of its idle states, and the budget (PL1) bounds the average.
+    let turbo = true;
     if root.exists(format!("{CPU}/intel_pstate/no_turbo")) {
         out.push(w(
             format!("{CPU}/intel_pstate/no_turbo"),
@@ -548,13 +601,23 @@ mod tests {
     }
 
     #[test]
-    fn power_saver_on_battery_is_frugal() {
-        let f = gu605("saver");
-        let p = plan(&f.root(), Profile::PowerSaver, true, &Tunables::default(), &[]);
+    fn silent_is_quiet_firmware_with_balanced_cpu_behaviour() {
+        let f = gu605("silent");
+        let p = plan(&f.root(), Profile::Silent, true, &Tunables::default(), &[]);
         assert_eq!(get(&p, "firmware thermal mode"), ["quiet"]);
-        assert_eq!(get(&p, "CPU energy preference"), ["power"]);
-        assert_eq!(get(&p, "CPU energy bias"), ["15"]);
-        assert_eq!(get(&p, "CPU turbo"), ["1"]); // no_turbo=1
+        assert_eq!(get(&p, "CPU energy preference"), ["balance_power"]);
+        assert_eq!(get(&p, "CPU energy bias"), ["8"]);
+        assert_eq!(get(&p, "CPU turbo"), ["0"]); // turbo stays on (no_turbo=0)
+        // No Eco+ extras: no RAPL writes, no E-core cap.
+        assert!(!p.iter().any(|w| w.path.contains("powercap")));
+        let balanced = plan(&f.root(), Profile::Balanced, true, &Tunables::default(), &[]);
+        let strip = |v: &[Write]| {
+            v.iter()
+                .filter(|w| w.what != "firmware thermal mode")
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(strip(&p), strip(&balanced));
         assert_eq!(get(&p, "PCIe link power"), ["powersupersave"]);
         assert_eq!(get(&p, "audio codec power-down (s)"), ["1"]);
     }
@@ -580,32 +643,66 @@ mod tests {
         assert!(r.failed.is_empty());
         let r = apply(
             &root,
-            &plan(&root, Profile::PowerSaver, true, &Tunables::default(), &[]),
+            &plan(&root, Profile::Silent, true, &Tunables::default(), &[]),
         );
-        assert_eq!(r.changed.len(), 7);
+        assert_eq!(r.changed.len(), 6);
         assert_eq!(root.read(PLATFORM_PROFILE).unwrap(), "quiet");
     }
 
     #[test]
     fn hotkey_mapping() {
-        assert_eq!(Profile::from_platform("low-power"), Some(Profile::PowerSaver));
+        assert_eq!(Profile::from_platform("low-power"), Some(Profile::Silent));
         assert_eq!(Profile::from_platform("max-power"), Some(Profile::Performance));
         assert_eq!(Profile::from_platform("custom"), None);
     }
 
     #[test]
-    fn modes_and_ppd_mapping() {
-        assert_eq!(Profile::parse("eco-plus"), Some(Profile::EcoPlus));
-        assert_eq!(Profile::EcoPlus.ppd(), Profile::PowerSaver);
-        assert_eq!(Profile::Balanced.ppd(), Profile::Balanced);
+    fn modes_cycle_in_order() {
         let mut p = Profile::EcoPlus;
         let mut seen = Vec::new();
         for _ in 0..4 {
             seen.push(p.as_str());
             p = p.next();
         }
-        assert_eq!(seen, ["eco-plus", "power-saver", "balanced", "performance"]);
+        assert_eq!(seen, ["eco-plus", "silent", "balanced", "performance"]);
         assert_eq!(p, Profile::EcoPlus);
+        assert_eq!(
+            Profile::MODES.map(Profile::display_name),
+            ["Eco+", "Silent", "Balanced", "Turbo"]
+        );
+    }
+
+    #[test]
+    fn ppd_mapping_both_ways() {
+        // Eco+ reads power-saver; Silent has no KDE profile and reads balanced.
+        assert_eq!(Profile::EcoPlus.ppd_name(), "power-saver");
+        assert_eq!(Profile::Silent.ppd_name(), "balanced");
+        assert_eq!(Profile::Balanced.ppd_name(), "balanced");
+        assert_eq!(Profile::Performance.ppd_name(), "performance");
+        assert_eq!(Profile::from_ppd("power-saver"), Some(Profile::EcoPlus));
+        assert_eq!(Profile::from_ppd("balanced"), Some(Profile::Balanced));
+        assert_eq!(Profile::from_ppd("performance"), Some(Profile::Performance));
+        assert_eq!(Profile::from_ppd("eco-plus"), None);
+        assert_eq!(Profile::from_ppd("silent"), None);
+    }
+
+    #[test]
+    fn names_and_aliases() {
+        for a in ["eco-plus", "eco+", "eco", "power-saver", "saver"] {
+            assert_eq!(Profile::parse(a), Some(Profile::EcoPlus), "{a}");
+        }
+        for a in ["silent", "quiet"] {
+            assert_eq!(Profile::parse(a), Some(Profile::Silent), "{a}");
+        }
+        assert_eq!(Profile::parse("turbo"), Some(Profile::Performance));
+        assert_eq!(Profile::parse("nope"), None);
+        // Older versions stored the quiet thermal mode as power-saver.
+        assert_eq!(Profile::parse_stored("power-saver"), Some(Profile::Silent));
+        assert_eq!(Profile::parse_stored("eco-plus"), Some(Profile::EcoPlus));
+        assert_eq!(Profile::EcoPlus.thermal(), Profile::Silent);
+        assert!(
+            Profile::Silent.stops_fans() && Profile::EcoPlus.stops_fans() && !Profile::Balanced.stops_fans()
+        );
     }
 
     fn with_rapl(tag: &str) -> Fake {

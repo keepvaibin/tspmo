@@ -16,7 +16,7 @@ PlasmoidItem {
     // One accent per mode, tuned for the theme (same tokens as tspmo-gui).
     readonly property var modes: [
         { id: "eco-plus", label: "Eco+", icon: "battery-profile-powersave", glyph: "eco-plus", dim: "#8cd44a", lit: "#4f9a14" },
-        { id: "power-saver", label: "Silent", icon: "weather-clear-night", glyph: "power-saver", dim: "#35c9a6", lit: "#0e9d7e" },
+        { id: "silent", label: "Silent", icon: "weather-clear-night", glyph: "silent", dim: "#35c9a6", lit: "#0e9d7e" },
         { id: "balanced", label: "Balanced", icon: "battery-profile-balanced", glyph: "balanced", dim: "#4d9cf7", lit: "#1f74dc" },
         { id: "performance", label: "Turbo", icon: "battery-profile-performance", glyph: "performance", dim: "#f2673b", lit: "#d6481c" }
     ]

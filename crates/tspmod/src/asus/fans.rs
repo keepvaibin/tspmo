@@ -12,9 +12,9 @@ pub struct Fans1(pub Arc<Thermal>);
 type Points = Vec<(u8, u8)>;
 
 fn mode_arg(s: &str) -> zbus::fdo::Result<Profile> {
-    // Eco+ has no settings of its own: it is the power-saver mode's.
-    Profile::parse(s).map(Profile::ppd).ok_or_else(|| {
-        zbus::fdo::Error::InvalidArgs(format!("unknown mode '{s}' (power-saver, balanced, performance)"))
+    // Fan curves and limits are kept per firmware thermal mode: Eco+ shares Silent's.
+    Profile::parse(s).map(Profile::thermal).ok_or_else(|| {
+        zbus::fdo::Error::InvalidArgs(format!("unknown mode '{s}' (silent, balanced, performance)"))
     })
 }
 
@@ -52,7 +52,7 @@ impl Fans1 {
     /// The thermal mode in force.
     #[zbus(property)]
     fn mode(&self) -> String {
-        lock(&self.0.state).mode.as_str().to_owned()
+        lock(&self.0.state).mode.thermal().as_str().to_owned()
     }
 
     /// `(mode, fan, kind, points)`; kind is `auto`, `custom` or `full`. An `auto` fan lists the

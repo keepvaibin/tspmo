@@ -240,9 +240,13 @@ fn pressed(a: &Asus, source: Source, code: u16) {
     match hotkeys::decode(source, code) {
         Some(Hotkey::AuraNext) => a.aura_key(true),
         Some(Hotkey::AuraPrev) => a.aura_key(false),
-        // The kernel cycles the thermal mode itself and the daemon follows it; the OSD comes with that.
-        Some(Hotkey::Fan) if source == Source::Keyboard => events::publish(&events::Event::FanKey),
-        Some(Hotkey::Fan | Hotkey::Rog) | None => {}
+        // Fn+F5, or its Fn-lock variant: tspmod owns it (the kernel's own step of the thermal
+        // mode is not followed, see `fankey.rs`).
+        Some(Hotkey::Fan) => events::publish(&events::Event::FanKey(match source {
+            Source::Keyboard => "keyboard",
+            Source::Wmi => "wmi",
+        })),
+        Some(Hotkey::Rog) | None => {}
     }
 }
 

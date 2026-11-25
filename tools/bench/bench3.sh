@@ -12,7 +12,7 @@ measure(){ sleep 8; t0=$(date +%s.%N)
   t1=$(date +%s.%N)
   ms=$(cat $S/chunks.* | awk -v a=$t0 -v b=$t1 '$1>=a && $1<=b {print $2}' | sort -n | awk '{v[NR]=$1} END{print v[int(NR/2)+1], v[int(NR*0.95)]}')
   echo "$1 $w $ms" >> $S/results3.txt; }
-tspmo profile power-saver >/dev/null
+tspmo profile silent >/dev/null
 for round in 1 2 3; do for c in A E F; do cond $c; measure $c; done; done
 cond A; kill $LOAD; for p in $(pgrep -x python3); do grep -q load.py /proc/$p/cmdline 2>/dev/null && kill $p; done
 echo 100 | sudo tee $T >/dev/null

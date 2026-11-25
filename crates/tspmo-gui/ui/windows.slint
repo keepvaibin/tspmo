@@ -133,12 +133,12 @@ export component FansWin inherits WinFrame {
             min-width: 300 * Th.dp;
             Seg {
                 opts: [
-                    { id: "power-saver", label: "Silent", tint: Th.mode-color("power-saver"), keyed: true },
+                    { id: "silent", label: "Silent", tint: Th.mode-color("silent"), keyed: true },
                     { id: "balanced", label: "Balanced", tint: Th.mode-color("balanced"), keyed: true },
                     { id: "performance", label: "Turbo", tint: Th.mode-color("performance"), keyed: true },
                 ];
                 index: Bk.fan-mode;
-                tint: Th.mode-color(["power-saver", "balanced", "performance"][clamp(Bk.fan-mode, 0, 2)]);
+                tint: Th.mode-color(["silent", "balanced", "performance"][clamp(Bk.fan-mode, 0, 2)]);
                 picked(i) => { Bk.acti("fan-mode", i); }
             }
             Rectangle { height: 6 * Th.dp; }

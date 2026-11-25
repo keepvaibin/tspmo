@@ -75,7 +75,7 @@ fn mode_of(icon: &str) -> &str {
     } else if icon.contains("powersave") {
         "eco-plus"
     } else if icon.contains("night") {
-        "power-saver"
+        "silent"
     } else {
         icon
     }
@@ -89,8 +89,8 @@ pub fn icon_of(icon: &str) -> &'static str {
         "performance"
     } else if has(&["powersave", "eco-plus", "eco+"]) {
         "eco-plus"
-    } else if has(&["power-saver", "night", "silent"]) {
-        "power-saver"
+    } else if has(&["silent", "night", "quiet"]) {
+        "silent"
     } else if has(&["balanced", "profile"]) {
         "balanced"
     } else if has(&["keyboard", "kbd", "aura", "light"]) {
