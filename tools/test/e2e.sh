@@ -156,7 +156,7 @@ if has org.tspmo.Daemon1 && [ "$MODES" = 1 ]; then
   op=$(prop org.tspmo.Daemon1 ProfileAc | str)
   ob=$(prop org.tspmo.Daemon1 ProfileBattery | str)
   onb=$(prop org.tspmo.Daemon1 OnBattery | awk '{print $2}')
-  RESTORE+=("busctl --system call $SVC $OBJ org.tspmo.Daemon1 SetProfile s '$([ "$onb" = true ] && echo "$ob" || echo "$op")'")
+  RESTORE+=("sed -i 's/^profile_ac=.*/profile_ac=$op/; s/^profile_battery=.*/profile_battery=$ob/' /var/lib/tspmo/state; systemctl restart tspmod")
   pl1=/sys/class/powercap/intel-rapl:0/constraint_0_power_limit_uw
   e14=/sys/devices/system/cpu/cpu14/cpufreq/scaling_max_freq
   ppd() { bus get-property org.freedesktop.UPower.PowerProfiles /org/freedesktop/UPower/PowerProfiles org.freedesktop.UPower.PowerProfiles ActiveProfile | str; }
@@ -200,7 +200,11 @@ if has org.tspmo.Daemon1 && [ "$MODES" = 1 ]; then
   # Cycle: four steps return to the start.
   s0=$(prop org.tspmo.Daemon1 Profile | str)
   for _ in 1 2 3 4; do call org.tspmo.Daemon1 CycleProfile >/dev/null; settle 1.5; done
-  check "CycleProfile x4 returns" eq "$(prop org.tspmo.Daemon1 Profile | str)" "$s0"
+  if [ "$(prop org.tspmo.Daemon1 OnBattery | awk '{print $2}')" = "$onb" ]; then
+    check "CycleProfile x4 returns" eq "$(prop org.tspmo.Daemon1 Profile | str)" "$s0"
+  else
+    record "CycleProfile x4 returns" SKIP "power source changed during the test"
+  fi
   # The guard: a busy job outside the desktop moves to the efficiency cores in Eco+ and back.
   call org.tspmo.Daemon1 SetProfile s eco-plus >/dev/null; settle 2
   sudo systemd-run --quiet --collect --unit=tspmo-e2e-burn --slice=tspmo-e2e.slice /usr/bin/tspmo bench --burn 4 2>/dev/null
