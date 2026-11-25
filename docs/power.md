@@ -447,3 +447,14 @@ after each switch, interleaved.
 - Eco+ is about 0.8 W above Balanced at both package and platform on a clean idle desktop: the
   size of the user's 8-10 W gap was not reproduced idle. Eco+ writes `balance_performance` as the
   energy preference while Balanced on battery writes `balance_power` (see `power::plan`).
+
+Component isolation on top of balanced + GPU eco (idle desktop, 2 interleaved rounds each, 30 s):
+
+| Component | base pkg / sys W | with component pkg / sys W | verdict |
+|---|---|---|---|
+| EPP `balance_performance` (Eco+) vs `balance_power` (Balanced on battery) | 2.64, 2.58 / 7.14, 5.99 | 4.50, 3.29 / 10.03, 6.86 | costs +0.7 to +1.9 W |
+| PL1 12 W / PL2 28 W / 10 s | 2.59, 2.70 / 6.01, 6.48 | 2.57, 2.61 / 5.99, 6.13 | neutral at idle |
+| E-core clock cap 1.2 GHz | 2.55, 2.58 / 5.93, 6.03 | 2.57, 2.62 / 6.04, 6.16 | neutral at idle |
+| 60 Hz | 2.97, 2.57 / 7.36, 6.04 | 2.82, 2.53 / 6.85, 5.82 | saves 0.1-0.5 W |
+
+Backlight stays the same inside each pair (the first EPP base ran at a higher backlight and is not used).
