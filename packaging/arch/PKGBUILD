@@ -48,6 +48,8 @@ package_tspmo-git() {
   install -Dm755 "$srcdir/target/release/tspmo"  "$pkgdir/usr/bin/tspmo"
   install -Dm755 "$srcdir/target/release/tspmod" "$pkgdir/usr/bin/tspmod"
   install -Dm755 "$srcdir/target/release/tspmo-gui" "$pkgdir/usr/bin/tspmo-gui"
+  # Run a program on the NVIDIA GPU (prime-run plus NVIDIA's EGL, see docs/power.md).
+  install -Dm755 "$r/data/bin/tspmo-run" "$pkgdir/usr/bin/tspmo-run"
 
   # The launcher, and the hidden helper that carries the ROG-key shortcut (silent: no launch
   # feedback); KDE reads X-KDE-Shortcuts from both directories.

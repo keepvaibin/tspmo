@@ -289,6 +289,7 @@ fn tspmo_props(d: &Daemon) -> Vec<(&'static str, OwnedValue)> {
         ("DgpuAsleep", ov(g.dgpu_asleep)),
         ("GpuMessage", ov(d.gpu_message.clone())),
         ("GpuSwitching", ov(d.gpu_switching.map_or("", Mode::as_str))),
+        ("CloseGpuAppsAuto", ov(d.close_gpu_apps)),
     ]
 }
 
@@ -506,10 +507,78 @@ impl Tspmo {
             emit_changed(conn, &self.0).await;
             return Ok(msg);
         }
-        lock(&self.0).gpu_blockers.clear();
+        {
+            let mut d = lock(&self.0);
+            d.gpu_blockers.clear();
+            d.gpu_blocked = None;
+        }
         gpu::begin(conn.clone(), self.0.clone(), target, Some(policy), false)
             .map_err(zbus::fdo::Error::Failed)?;
         Ok(format!("Switching to {target}…"))
+    }
+
+    /// Setting: when Eco/Eco+ needs the NVIDIA GPU off, close the apps that hold it by themselves
+    /// (off: only browser helpers are closed, other apps are named and `CloseGpuApps()` closes
+    /// them on request).
+    #[zbus(property)]
+    fn close_gpu_apps_auto(&self) -> bool {
+        lock(&self.0).close_gpu_apps
+    }
+
+    async fn set_close_gpu_apps_auto(
+        &self,
+        enabled: bool,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<()> {
+        let sender = hdr.sender().map(|s| s.to_string());
+        polkit::check(conn, sender.as_deref(), polkit::SET_GPU).await?;
+        {
+            let mut d = lock(&self.0);
+            d.close_gpu_apps = enabled;
+            d.save();
+        }
+        emit_changed(conn, &self.0).await;
+        // A switch waiting on apps goes ahead now.
+        if enabled {
+            let (c, s) = (conn.clone(), self.0.clone());
+            let _ = std::thread::Builder::new()
+                .name("gpu-close-auto".into())
+                .spawn(move || gpu::enforce(&c, &s));
+        }
+        Ok(())
+    }
+
+    /// Close the apps holding the NVIDIA GPU (SIGTERM, 3 s, SIGKILL; never the desktop) and
+    /// complete the switch to Eco that they held up: Eco+, an automatic switch that is waiting,
+    /// or an explicit `SetGpuMode("eco")` that was refused. Returns a message.
+    async fn close_gpu_apps(
+        &self,
+        #[zbus(header)] hdr: Header<'_>,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> zbus::fdo::Result<String> {
+        let sender = hdr.sender().map(|s| s.to_string());
+        polkit::check(conn, sender.as_deref(), polkit::SET_GPU).await?;
+        let (target, policy, automatic) = {
+            let d = lock(&self.0);
+            match d.gpu_blocked {
+                Some((t, p)) => (t, p, false),
+                None => match gpu::policy_target(&d) {
+                    Some(t) => (t, None, true),
+                    None => return Ok("No switch is waiting for apps".to_owned()),
+                },
+            }
+        };
+        gpu::begin_with(
+            conn.clone(),
+            self.0.clone(),
+            target,
+            policy,
+            automatic,
+            gpu::Close::Now,
+        )
+        .map_err(zbus::fdo::Error::Failed)?;
+        Ok(format!("Closing apps and switching to {target}…"))
     }
 
     /// The mode a switch in progress is heading to, or "".

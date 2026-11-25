@@ -5,6 +5,7 @@
 
 mod asus;
 mod boot;
+mod closer;
 mod dbus;
 mod display;
 mod events;

@@ -147,6 +147,9 @@ pub fn resume(conn: Connection, shared: Shared) {
                 drop(d);
                 crate::events::publish(&crate::events::Event::Resumed);
                 emit_changed_blocking(&conn, &shared);
+                // Eco stays off: if the firmware brought the GPU back during sleep, the policy
+                // switches it off again (a no-op when the hardware already matches).
+                gpu::enforce(conn.inner(), &shared);
             }
         }
     });

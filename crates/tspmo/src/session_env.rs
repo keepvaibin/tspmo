@@ -92,7 +92,9 @@ mod tests {
         let (dir, root) = laptop("mesa", true);
         let l = lines(&root);
         assert!(
-            l.contains(&"__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json".to_owned()),
+            l.contains(
+                &"__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json".to_owned()
+            ),
             "{l:?}"
         );
         assert!(l.contains(&"GSK_RENDERER=ngl".to_owned()));

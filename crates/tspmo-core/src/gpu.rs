@@ -198,6 +198,7 @@ pub const DESKTOP_PROCESSES: &[&str] = &[
     "Xwayland",
     "gnome-shell",
     "mutter",
+    "plasmashell",
     "Hyprland",
     "sway",
     "niri",
@@ -215,6 +216,66 @@ pub struct User {
     /// Holds NVIDIA driver handles (`/dev/nvidia*`): the driver can't be unloaded until it exits.
     /// For a compositor this means it loaded NVIDIA's EGL at start-up.
     pub driver_handles: bool,
+    /// Owner of the process: only ordinary users' apps are ever closed for a switch.
+    pub uid: u32,
+    /// A browser's GPU/decoder helper, which the browser starts again when it needs one.
+    pub respawnable: bool,
+    /// Holds the dGPU only because its EGL looked for a GPU (NVIDIA's EGL is mapped and the
+    /// process did not ask for the dGPU): it was started without tspmo's session environment.
+    pub egl_probe: bool,
+}
+
+/// First uid of ordinary users: the lowest a process can have and still be closed for a switch.
+pub const FIRST_USER_UID: u32 = 1000;
+
+impl User {
+    /// May the daemon close this process to free the dGPU: an app of an ordinary user, never
+    /// the desktop (the compositor and session processes release the GPU when told it is going)
+    /// and never NVIDIA's own helpers.
+    pub fn closable(&self) -> bool {
+        self.kind == UseKind::Render
+            && self.uid >= FIRST_USER_UID
+            && !DESKTOP_PROCESSES.contains(&app_name(self))
+            && !NVIDIA_SERVICES.iter().any(|(comm, _)| self.name == *comm)
+    }
+}
+
+/// Does this process have NVIDIA's EGL loaded without having asked for the NVIDIA GPU (no PRIME
+/// offload, no NVIDIA EGL vendor chosen)? `false` when its environment can't be read.
+fn probes_egl(root: &SysRoot, pid: u32) -> bool {
+    let maps = root.read_opt(format!("/proc/{pid}/maps")).unwrap_or_default();
+    if !maps.contains("libEGL_nvidia") {
+        return false;
+    }
+    let Ok(env) = std::fs::read(root.path(format!("/proc/{pid}/environ"))) else {
+        return false;
+    };
+    let env = String::from_utf8_lossy(&env);
+    !env.split('\0').any(|v| {
+        v == "__NV_PRIME_RENDER_OFFLOAD=1"
+            || v.strip_prefix("__EGL_VENDOR_LIBRARY_FILENAMES=")
+                .is_some_and(|f| f.contains("nvidia"))
+    })
+}
+
+/// Is this process a browser helper that is started again when the browser needs it: Firefox's
+/// `RDD Process`, `GPU Process` and `Utility Process`, Chromium's and Electron's
+/// `--type=gpu-process`? `cmdline` is `/proc/<pid>/cmdline` (NUL separated).
+pub fn is_respawnable_helper(comm: &str, cmdline: &str) -> bool {
+    const FIREFOX: &[&str] = &["RDD Process", "GPU Process", "Utility Process"];
+    (FIREFOX.contains(&comm) && cmdline.contains("-contentproc"))
+        || cmdline.split('\0').any(|a| a == "--type=gpu-process")
+}
+
+/// What to close so that a switch to Eco can go ahead, or `None` when something in the way
+/// can't be closed (or, without `all`, isn't a helper that comes back by itself).
+/// `all`: every app holding the GPU; else only the respawnable browser helpers.
+pub fn plan_close(users: &[User], all: bool) -> Option<Vec<User>> {
+    let blockers: Vec<&User> = users.iter().filter(|u| u.kind == UseKind::Render).collect();
+    if blockers.is_empty() || !blockers.iter().all(|u| u.closable() && (all || u.respawnable)) {
+        return None;
+    }
+    Some(blockers.into_iter().cloned().collect())
 }
 
 /// Processes with the dGPU's device nodes open (`/dev/nvidia*`, its `/dev/dri` card/render nodes).
@@ -272,15 +333,27 @@ pub fn users(root: &SysRoot, dgpu_addr: Option<&str>) -> Vec<User> {
             if DESKTOP_PROCESSES.contains(&name.as_str()) {
                 kind = UseKind::Display;
             }
+            let cmdline = root.read_opt(format!("/proc/{pid}/cmdline")).unwrap_or_default();
+            let uid = std::fs::metadata(root.path(format!("/proc/{pid}")))
+                .map_or(0, |m| std::os::unix::fs::MetadataExt::uid(&m));
             out.push(User {
                 pid,
+                respawnable: is_respawnable_helper(comm_of(&name), &cmdline),
+                egl_probe: driver_handles && probes_egl(root, pid),
                 name,
                 kind,
                 driver_handles,
+                uid,
             });
         }
     }
     out
+}
+
+/// The process name inside `firefox (RDD Process)`; a plain name is its own.
+fn comm_of(name: &str) -> &str {
+    name.split_once(" (")
+        .map_or(name, |(_, rest)| rest.trim_end_matches(')'))
 }
 
 /// The name of the app behind a user: helper processes are listed as `firefox (RDD Process)`,
@@ -331,7 +404,129 @@ mod tests {
             name: name.into(),
             kind,
             driver_handles: true,
+            uid: 1000,
+            respawnable: false,
+            egl_probe: false,
         }
+    }
+
+    #[test]
+    fn browser_helpers_are_respawnable() {
+        assert!(is_respawnable_helper(
+            "RDD Process",
+            "/usr/lib/firefox/firefox\0-contentproc\0rdd"
+        ));
+        assert!(is_respawnable_helper("GPU Process", "firefox\0-contentproc"));
+        assert!(is_respawnable_helper(
+            "chrome",
+            "/opt/google/chrome/chrome\0--type=gpu-process\0--x"
+        ));
+        assert!(is_respawnable_helper("electron", "electron\0--type=gpu-process"));
+        // The browser itself, a renderer and a game are not.
+        assert!(!is_respawnable_helper("firefox", "/usr/lib/firefox/firefox"));
+        assert!(!is_respawnable_helper("RDD Process", "something else"));
+        assert!(!is_respawnable_helper("chrome", "chrome\0--type=renderer"));
+        assert!(!is_respawnable_helper("steam", "steam"));
+    }
+
+    #[test]
+    fn only_ordinary_apps_are_closable() {
+        let mut u = user("steam", UseKind::Render);
+        assert!(u.closable());
+        u.uid = 0;
+        assert!(!u.closable());
+        for desktop in [
+            "kwin_wayland",
+            "Xwayland",
+            "plasmashell",
+            "systemd",
+            "systemd-logind",
+        ] {
+            let d = user(desktop, UseKind::Render);
+            assert!(!d.closable(), "{desktop}");
+        }
+        assert!(!user("kwin_wayland", UseKind::Display).closable());
+        assert!(!user("nvidia-powerd", UseKind::Render).closable());
+    }
+
+    /// A process with its fds, comm and command line in a fake /proc.
+    fn fake_proc(dir: &std::path::Path, pid: u32, comm: &str, cmdline: &str, fds: &[&str]) {
+        let p = dir.join(format!("proc/{pid}"));
+        std::fs::create_dir_all(p.join("fd")).unwrap();
+        std::fs::write(p.join("comm"), format!("{comm}\n")).unwrap();
+        std::fs::write(p.join("cmdline"), cmdline).unwrap();
+        for (i, t) in fds.iter().enumerate() {
+            std::os::unix::fs::symlink(t, p.join("fd").join(i.to_string())).unwrap();
+        }
+    }
+
+    #[test]
+    fn users_are_classified_from_proc() {
+        let dir = std::env::temp_dir().join(format!("tspmo-core-users-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        fake_proc(
+            &dir,
+            100,
+            "RDD Process",
+            "/usr/lib/firefox/firefox\0-contentproc\0rdd\0",
+            &["/dev/nvidia0", "/dev/nvidiactl", "/dev/null"],
+        );
+        fake_proc(&dir, 101, "steam", "steam\0", &["/dev/nvidiactl"]);
+        fake_proc(
+            &dir,
+            102,
+            "chrome",
+            "chrome\0--type=gpu-process\0",
+            &["/dev/nvidia0"],
+        );
+        fake_proc(&dir, 103, "bash", "bash\0", &["/dev/null"]);
+        let users = super::users(&SysRoot::new(&dir), None);
+        let by = |pid: u32| users.iter().find(|u| u.pid == pid);
+        assert!(by(100).unwrap().respawnable && by(100).unwrap().driver_handles);
+        assert!(!by(101).unwrap().respawnable);
+        assert!(by(102).unwrap().respawnable);
+        assert!(by(103).is_none());
+        // 100 has NVIDIA's EGL mapped and no offload variable: it only looked for a GPU.
+        std::fs::write(
+            dir.join("proc/100/maps"),
+            "7f00 r-xp /usr/lib/libEGL_nvidia.so.0\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("proc/100/environ"), "HOME=/home/x\0").unwrap();
+        std::fs::write(
+            dir.join("proc/101/maps"),
+            "7f00 r-xp /usr/lib/libEGL_nvidia.so.0\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("proc/101/environ"), "__NV_PRIME_RENDER_OFFLOAD=1\0").unwrap();
+        let users = super::users(&SysRoot::new(&dir), None);
+        let by = |pid: u32| users.iter().find(|u| u.pid == pid);
+        assert!(by(100).unwrap().egl_probe);
+        assert!(!by(101).unwrap().egl_probe, "a deliberate offload is not a probe");
+        assert!(!by(102).unwrap().egl_probe);
+        // The owner is the owner of the /proc entry (this test's user).
+        assert_eq!(
+            by(101).unwrap().uid,
+            std::os::unix::fs::MetadataExt::uid(&std::fs::metadata(&dir).unwrap())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn close_plans() {
+        let mut rdd = user("firefox (RDD Process)", UseKind::Render);
+        rdd.respawnable = true;
+        let steam = user("steam", UseKind::Render);
+        let mut root_app = user("miner", UseKind::Render);
+        root_app.uid = 0;
+        // Helpers alone: closed without asking.
+        assert_eq!(plan_close(&[rdd.clone()], false).unwrap().len(), 1);
+        // An app in the way: nothing is closed unless everything may be.
+        assert!(plan_close(&[rdd.clone(), steam.clone()], false).is_none());
+        assert_eq!(plan_close(&[rdd.clone(), steam.clone()], true).unwrap().len(), 2);
+        // Something that can't be closed stops the plan.
+        assert!(plan_close(&[rdd, steam, root_app], true).is_none());
+        assert!(plan_close(&[], true).is_none());
     }
 
     #[test]

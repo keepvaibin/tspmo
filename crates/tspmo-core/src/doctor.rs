@@ -309,9 +309,29 @@ fn nvidia_wakes(root: &SysRoot, m: &Machine, out: &mut Vec<Finding>) {
             continue;
         }
         let users = crate::gpu::users(root, Some(&gpu.address));
+        let probing =
+            crate::gpu::render_apps(&users.iter().filter(|u| u.egl_probe).cloned().collect::<Vec<_>>());
+        if !probing.is_empty() {
+            out.push(Finding {
+                id: "nvidia-egl-probe",
+                severity: Severity::Warn,
+                title: format!(
+                    "{} hold{} the NVIDIA GPU only by looking for a GPU (EGL)",
+                    probing.join(", "),
+                    if probing.len() == 1 { "s" } else { "" }
+                ),
+                detail: "They started without tspmo's session environment (before it was installed, \
+                         or before this login), so NVIDIA's EGL opened the GPU and Eco can't turn it \
+                         off. Apps started now get Mesa-only EGL (`__EGL_VENDOR_LIBRARY_FILENAMES`) \
+                         and leave the GPU alone: restart them, or log out and in once if the whole \
+                         session started before tspmo."
+                    .into(),
+                fix: None,
+            });
+        }
         let apps: Vec<String> = users
             .iter()
-            .filter(|u| u.kind == crate::gpu::UseKind::Render)
+            .filter(|u| u.kind == crate::gpu::UseKind::Render && !u.egl_probe)
             .filter(|u| {
                 !crate::gpu::NVIDIA_SERVICES
                     .iter()
@@ -747,6 +767,25 @@ mod tests {
             "{out:?}"
         );
         assert!(!out.iter().any(|f| f.id == "nvidia-nvpcf"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn apps_that_only_probed_egl_are_named_with_the_fix() {
+        let d = awake_nvidia("egl", 50, 950, true);
+        std::fs::write(d.join("proc/4242/maps"), "7f r-xp /usr/lib/libEGL_nvidia.so.0\n").unwrap();
+        std::fs::write(d.join("proc/4242/environ"), "HOME=/home/x\0").unwrap();
+        let root = SysRoot::new(&d);
+        let m = Machine::probe(&root);
+        let mut out = Vec::new();
+        nvidia_wakes(&root, &m, &mut out);
+        let f = out
+            .iter()
+            .find(|f| f.id == "nvidia-egl-probe")
+            .expect("egl finding");
+        assert!(f.title.contains("Firefox"), "{f:?}");
+        assert!(f.detail.contains("restart them"), "{f:?}");
+        assert!(!out.iter().any(|f| f.id == "nvidia-held"), "named once: {out:?}");
         let _ = std::fs::remove_dir_all(&d);
     }
 
