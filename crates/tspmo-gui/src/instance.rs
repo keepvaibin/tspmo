@@ -6,10 +6,14 @@ use std::os::linux::net::SocketAddrExt;
 use std::os::unix::net::{SocketAddr, UnixListener, UnixStream};
 
 fn addr() -> std::io::Result<SocketAddr> {
+    addr_named("tspmo-gui")
+}
+
+/// `@<name>-<uid>`; TSPMO_GUI_ID lets tests run a second, independent instance.
+pub fn addr_named(name: &str) -> std::io::Result<SocketAddr> {
     let uid = rustix::process::getuid().as_raw();
-    // TSPMO_GUI_ID lets tests run a second, independent popup.
     let id = std::env::var("TSPMO_GUI_ID").unwrap_or_default();
-    SocketAddr::from_abstract_name(format!("tspmo-gui-{uid}{id}"))
+    SocketAddr::from_abstract_name(format!("{name}-{uid}{id}"))
 }
 
 pub enum Role {
