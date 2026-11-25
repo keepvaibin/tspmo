@@ -8,6 +8,17 @@ backlight change or a D-Bus call. Other desktops are not covered yet (the OSD fa
 
 CLI: `tspmo display [refresh|brightness|dimming|floor|color|eyecare]`.
 
+## Which GPU draws
+
+The panel is wired to the Intel GPU in Hybrid, Eco and Eco+. The compositor draws on it only (KWin
+gets Mesa's EGL from `compositor.env`), and so does every app started in the session
+(`tspmo session-env`: `__EGL_VENDOR_LIBRARY_FILENAMES` for Mesa, `GSK_RENDERER=ngl`, VA-API on
+the Intel media engine), so no window holds the NVIDIA GPU awake and Eco and Eco+ can power it
+off. Apps sent to the NVIDIA GPU (`prime-run`, KDE's "Run using dedicated graphics card",
+Steam, `tspmo-run`) render on it and are shown through the Intel GPU. In Ultimate mode the
+NVIDIA GPU drives the panel and none of this is set. See `docs/power.md`, "Apps that hold the
+NVIDIA GPU".
+
 ## Refresh rate
 
 Modes at the current resolution only; scale and resolution are never touched. Policy:

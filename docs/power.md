@@ -350,6 +350,75 @@ same path, so skipping `rmmod` and just writing `dgpu_disable` does not avoid it
   the doctor finding. `tools/test/gpu-live.sh` enters Eco+ from Hybrid right after a thermal-mode
   change, twice, and checks for a stuck `rmmod`, the restart marker and hung-task reports.
 
+### Apps that hold the NVIDIA GPU (Eco and Eco+)
+
+Eco and Eco+ switch the dGPU off: powered down, off the PCI bus, 0 W. Nothing turns it back on
+until the mode is left: the only code that powers it on is a switch to Hybrid (`gpu::power_on`),
+which is only started by the policy (`wanted_mode`: Eco+ is always Eco) or by `SetGpuMode`
+(which in Eco+ saves the policy only). The retry thread, a power-source change, a resume (which
+now re-checks the policy and switches off a GPU the firmware brought back) and hotplug all go
+through `wanted_mode`. A switch needs the GPU free of apps: any process with `/dev/nvidia*` or
+the dGPU's render node open blocks it.
+
+**Why an everyday app holds it.** GLVND's EGL enumerates every vendor and device. With NVIDIA's
+EGL installed, an app that only looks for a GPU (Firefox's RDD and GPU helpers, Chromium and
+Electron GPU processes, Qt) loads `libEGL_nvidia` and opens `/dev/nvidia0` and `/dev/nvidiactl`,
+even with `LIBVA_DRIVER_NAME` and `MOZ_DRM_DEVICE` on the iGPU. Measured on the GU605MI:
+Firefox's RDD process held `/dev/nvidia0` (x3), `/dev/nvidiactl` (x2) and `renderD129`.
+
+**Session environment.** `tspmo session-env` (the systemd user-environment generator) therefore
+also emits `__EGL_VENDOR_LIBRARY_FILENAMES=/usr/share/glvnd/egl_vendor.d/50_mesa.json` outside
+Ultimate mode, as KWin already gets in `compositor.env`. It applies to apps started after the
+next login. Checked (`eglinfo -B`, `glxinfo -B`, `vulkaninfo --summary` with the generated
+environment):
+
+| Launch | EGL | GLX | Vulkan |
+|---|---|---|---|
+| plain | Mesa (Intel) | Mesa (Intel) | both GPUs listed, Intel first |
+| `prime-run`, KDE "Run using dedicated graphics card", Steam/Proton | Mesa (Intel) | NVIDIA | NVIDIA |
+| `tspmo-run` | NVIDIA | NVIDIA | NVIDIA |
+
+Vulkan and GLX do not use GLVND's EGL, so DXVK/VKD3D (Proton) and native GL games under X11 keep
+the 4070 through PRIME offload. Only a program that renders through **EGL** on the dGPU (a
+Wayland-native GL app or game, SDL3 on Wayland) needs the NVIDIA EGL back. switcheroo-control
+(KDE's launcher entry) builds its dGPU environment in code (`__GLX_VENDOR_LIBRARY_NAME`,
+`__NV_PRIME_RENDER_OFFLOAD`, `__VK_LAYER_NV_optimus`, `VK_LOADER_DRIVERS_SELECT`): there is no
+udev or hwdb property to add `__EGL_VENDOR_LIBRARY_FILENAMES`, and nvidia-prime's `prime-run`
+belongs to its package. So: `tspmo-run COMMAND` (installed in `/usr/bin`) is `prime-run` plus
+NVIDIA's EGL; in Eco it runs the command on the iGPU with a note. Use it as a Steam launch
+option (`tspmo-run %command%`) or in a copy of a launcher whose `Exec=` it prefixes for EGL
+apps. Other side effects: nothing in the tested set (Firefox, Chromium/Electron, Qt, GTK) loses
+hardware rendering or decoding: they run on Mesa/Intel as before, minus the NVIDIA device that
+the enumeration used to open. CUDA/NVENC do not use EGL. nvidia-vaapi-driver would need
+`tspmo-run`, but `LIBVA_DRIVER_NAME=iHD` is set anyway.
+
+**When a user-initiated switch to Eco or Eco+ finds apps on the GPU** (`gpu::begin`):
+
+- Only ordinary users' apps are ever closed (`User::closable`: uid 1000 or above, never the
+  compositor or session processes `kwin_wayland`, `Xwayland`, `plasmashell`, `systemd`,
+  `systemd-logind`, which let go through the announce path, and never NVIDIA's helpers).
+- Browser helpers that restart by themselves (Firefox `RDD Process`, `GPU Process`,
+  `Utility Process`; Chromium and Electron `--type=gpu-process`) are closed silently: SIGTERM,
+  SIGKILL after 2 s, then the switch goes ahead. The browser starts them again, now on the iGPU
+  when it was started with the session environment. This only happens when helpers are the only
+  thing in the way.
+- Anything else: `GpuMessage` is "Firefox is using the NVIDIA GPU" (one app, "A and B are
+  using...", at most three named) and one OSD names it. Each app is announced once per mode
+  change (Eco+ entry, an explicit `SetGpuMode`), not on every retry; the retry thread (every
+  15 s, Eco+ and automatic switches only) keeps trying and a later success shows no OSD. Unplugging
+  with Optimized, outside Eco+, sets the message but shows no OSD.
+- `CloseGpuApps()` (polkit `org.tspmo.set-gpu`) closes every closable app in the way (SIGTERM,
+  3 s, SIGKILL) and completes the waiting switch: Eco+, an automatic switch, or the explicit
+  `SetGpuMode("eco")` that was refused.
+- Setting `CloseGpuAppsAuto` (`SetCloseGpuAppsAuto(b)`, saved as `close_gpu_apps=` in
+  `/var/lib/tspmo/state`): the daemon does that itself for every switch to Eco, as G-Helper's
+  "Stop GPU apps" does. Off by default.
+- `tspmo doctor`: `nvidia-egl-probe` names apps that hold the GPU only because NVIDIA's EGL was
+  loaded without the session environment (no PRIME offload variable in their environment).
+  Fix: restart them; log out and in once if the whole session started before tspmo.
+- Tests: classification from a fake `/proc`, the kill sequence with a fake process table
+  (exits on TERM, ignores TERM, cannot be killed), the closable and plan rules.
+
 ### On the battery (first runs, light load, nothing running)
 
 `tspmo bench --no-load --no-wake`, 30-95 % brightness (the user's), other builds running: the

@@ -74,6 +74,19 @@ control was verified are in [review-gui.md](review-gui.md); the design reasoning
 - Fonts: Slint has no tabular-figure feature; live numbers use the `fixed` face instead.
 - No `femtovg`/GL renderer is built by default (`--features gl` still compiles it).
 
+## API request: "Close & switch"
+
+Daemon1 now has what a "Close & switch" button needs (the GUI is not changed yet):
+
+- When `GpuMessage` ends with "is using the NVIDIA GPU" (or "are using ...") and `GpuWanted` is
+  `eco` while `GpuMode` is `hybrid`, apps are holding the GPU up. Show the message, with a button
+  "Close & switch" that calls `CloseGpuApps()` (no arguments, returns a string to show; polkit
+  `org.tspmo.set-gpu`, same as `SetGpuMode`). The daemon closes the apps (SIGTERM, 3 s, SIGKILL)
+  and switches; `GpuSwitching` then reads `eco` and the message "Closing Firefox...".
+- A settings toggle "Close apps using the NVIDIA GPU automatically" bound to the `CloseGpuAppsAuto`
+  property (bool) and `SetCloseGpuAppsAuto(bool)`. It is on for this user's machine.
+- `GpuUsers()` gives `(pid, name, kind)` for a list ("render" ones are the apps).
+
 ## Resume
 
 ```

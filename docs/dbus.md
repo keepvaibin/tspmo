@@ -29,6 +29,8 @@ The standard API (KDE, GNOME, `powerprofilesctl`, games), served by `tspmod`.
 
 The GPU members (`GpuMode`, `SetGpuMode`, ...) are as before, plus `GpuWanted` (`s` property): the mode the hardware is being brought to, `eco` while Eco+ is active (`GpuMode` follows once the switch can happen: an app or a desktop that loaded the NVIDIA driver holds the GPU until it lets go, and `GpuMessage` says which). `SetGpuMode` while Eco+ is active only saves the policy ("Saved. Eco+ keeps the GPU off.") and it is restored when Eco+ ends.
 
+Apps on the GPU: `GpuMessage` reads "Firefox is using the NVIDIA GPU" while apps hold the GPU up (one OSD names them once per mode change). Browser helpers (Firefox RDD/GPU/Utility, Chromium and Electron GPU processes) are closed silently first. `CloseGpuApps() -> s` (polkit `org.tspmo.set-gpu`): closes the apps in the way (SIGTERM, 3 s, SIGKILL; never the compositor or session processes) and completes the waiting switch (Eco+, an automatic switch or the refused `SetGpuMode("eco")`); it returns "No switch is waiting for apps" when there is nothing to finish. `CloseGpuAppsAuto` (`b` property) with `SetCloseGpuAppsAuto(b)` (same polkit action): the daemon does that by itself. `GpuUsers()` lists the processes holding the GPU as before. (The property is not named `CloseGpuApps` so that it does not collide with the method in generated proxies.)
+
 Eco+ is the power-saving mode, on AC and on battery. It is the firmware quiet mode plus:
 
 - the NVIDIA GPU forced off (Eco), the GPU policy restored when Eco+ ends (an app holding the
