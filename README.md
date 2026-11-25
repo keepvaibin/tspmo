@@ -22,7 +22,7 @@ features: run `tspmo info`.
 - Fan curves, power limits, battery charge limit, firmware toggles.
 - Keyboard lighting, Slash and AniMe Matrix lid displays, software Fn-lock.
 - Screen: refresh rate, flicker-free dimming, colour, eye care.
-- No polling: 0 wakeups/s at idle; the GUI exits when closed.
+- Event-driven, no polling: the daemon idles at about 0.1 wakeups/s; the GUI exits when closed.
 - `tspmo doctor` finds what wastes battery and prints the fix; `tspmo bench` measures it.
 
 ## Install
