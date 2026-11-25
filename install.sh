@@ -8,12 +8,13 @@ REPO=keepvaibin/tspmo
 RAW=https://raw.githubusercontent.com/$REPO/master
 GH=https://github.com/$REPO
 
-DRY=0 FORCE=0 UNINSTALL=0 TAG=${TSPMO_VERSION:-}
+DRY=0 FORCE=0 UNINSTALL=0 PURGE=0 TAG=${TSPMO_VERSION:-}
 while [ $# -gt 0 ]; do
   case $1 in
     --dry-run) DRY=1 ;;
     --force) FORCE=1 ;;
     --uninstall) UNINSTALL=1 ;;
+    --purge) PURGE=1 ;;
     --version) shift; TAG=${1:?--version needs a tag} ;;
     -h | --help) sed -n '2,4p' "$0" 2>/dev/null || true; exit 0 ;;
     *) echo "install.sh: unknown option '$1'" >&2; exit 2 ;;
@@ -46,6 +47,7 @@ as_root() { run $SUDO "$@"; }
 if [ "$UNINSTALL" = 1 ]; then
   args=
   [ "$DRY" = 1 ] && args="--dry-run"
+  [ "$PURGE" = 1 ] && args="$args --purge"
   here=$(dirname -- "$0" 2>/dev/null || echo .)
   if [ -f "$here/uninstall.sh" ]; then
     # shellcheck disable=SC2086
