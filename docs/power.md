@@ -190,8 +190,8 @@ The bench uses it for `cpus=e|lpe|p`.
 
 ## Known hazards
 
-Two incidents on the GU605MI, both caused by tspmo touching the NVIDIA GPU at the wrong time.
-Both are fixed; the rules stay.
+Incidents on the GU605MI caused by tspmo touching the NVIDIA GPU at the wrong time (1, 2, 4), and one finding about it (3).
+All are fixed or worked around; the rules stay.
 
 **1. Reading the dGPU wakes it, and a wake at the wrong moment kills it.** Reading
 `/sys/class/backlight/nvidia_0/brightness` (or `actual_brightness`) goes through
@@ -246,6 +246,46 @@ already does that on battery. `tspmo doctor` names the cause (`nvidia-nvpcf`), o
 that hold the GPU (`nvidia-held`), or a desktop that loaded the driver (`compositor-nvidia`:
 KWin started before tspmo's compositor setting existed holds `/dev/nvidia*`, so Eco cannot
 unload the driver until the next login).
+
+**4. Unloading the NVIDIA driver deadlocks against the firmware's notification.** GU605MI,
+NVIDIA open 620.73: during an Eco+ entry `rmmod nvidia` hung in D state for good (unkillable;
+only a reboot clears it):
+
+```
+rmmod:   __flush_workqueue <- acpi_remove_notify_handler <- nv_acpi_methods_uninit
+         <- RmShutdownAdapter <- nv_shutdown_adapter <- nv_stop_device <- nv_pci_remove_helper
+         <- pci_unregister_driver <- cleanup_module
+kworker: rmapiLockAcquire <- rm_acpi_nvpcf_notify   (blocked on an rw-semaphore owned by rmmod)
+```
+
+An ABBA: `rmmod` holds the RM API lock and flushes the ACPI notify workqueue, while a pending
+NVPCF notification (hazard 3: every ~22 s in Hybrid, and right after every `platform_profile`
+write) waits in that queue for the RM API lock. Eco+ wrote the thermal mode and then switched to
+Eco, so the unload met the notification. Any unbind or PCI removal of the NVIDIA device takes the
+same path, so skipping `rmmod` and just writing `dgpu_disable` does not avoid it. Rules now
+(`crates/tspmod/src/quiet.rs`, `gpu.rs`, `state.rs`):
+
+- **Order.** Entering Eco+ from Hybrid with the dGPU on switches the GPU first: `Daemon::apply`
+  holds back the `platform_profile` write (`eco_switch_ahead`) and the GPU worker writes it when
+  the switch is over, whether it worked or not (`release_thermal`). Every `platform_profile`
+  change (ours, or Fn+F5) is timestamped, and no unload starts within 30 s of one: the switch
+  thread waits it out.
+- **Quiet window.** Before the first `rmmod` and before `rmmod nvidia`, the dGPU's
+  `power/runtime_status` must be `suspended` (a notification resumes the GPU, so a suspended GPU
+  has none pending). If it is awake, only that attribute is read every 150 ms until it
+  suspends, then the unload runs at once. After 45 s awake the switch is undone and
+  GpuMessage is "NVIDIA GPU busy; try again"; the retry thread tries policy-driven switches again.
+- **Never block.** `rmmod` runs as a child under an 8 s watchdog. If it does not return, the
+  daemon gives up on it: it writes `/run/tspmo/gpu-restart` (gone after a reboot), clears
+  `GpuSwitching`, sets GpuMessage "Restart to recover the NVIDIA GPU", refuses every further GPU
+  switch (including policy retries), and `tspmo doctor` reports `nvidia-unload-hung` with the
+  fix `systemctl reboot`. The kernel task stays; a thread reaps it if it ever returns. Note that
+  `systemctl restart tspmod` can then wait out the stop timeout, as systemd cannot kill the task.
+- `GpuSwitching` is cleared at daemon start and if the switch thread ends abnormally.
+- Tests: fake sysroot and clock for the quiet window, the 30 s rule and the bound
+  (`quiet.rs`), the ordering and held-back write (`state.rs`), the watchdog with a real child,
+  the doctor finding. `tools/test/gpu-live.sh` enters Eco+ from Hybrid right after a thermal-mode
+  change, twice, and checks for a stuck `rmmod`, the restart marker and hung-task reports.
 
 ### On the battery (first runs, light load, nothing running)
 

@@ -12,7 +12,9 @@ FAILS=0
 rec() { RES+=("$(printf '%-52s %s %s' "$1" "$2" "${3:-}")"); [ "$2" = FAIL ] && FAILS=$((FAILS + 1)); }
 gmode() { tspmo status | sed -n 's/^gpu: *\([a-z]*\).*/\1/p'; }
 policy() { tspmo status | sed -n 's/^gpu:.*(policy \([a-z]*\)).*/\1/p'; }
-wait_mode() { for _ in $(seq 1 40); do [ "$(gmode)" = "$1" ] && return 0; sleep 1; done; return 1; }
+wait_mode() { for _ in $(seq 1 "${2:-40}"); do [ "$(gmode)" = "$1" ] && return 0; sleep 1; done; return 1; }
+gmsg() { tspmo status | sed -n '/^gpu:/{n;s/^ *//p}'; }
+stuck() { pgrep -x rmmod >/dev/null || [ -e /run/tspmo/gpu-restart ]; }
 
 if sudo sh -c "ls -l /proc/\$(pidof kwin_wayland)/fd 2>/dev/null" | grep -q /dev/nvidia; then
   echo "KWin holds the NVIDIA driver (the session predates tspmo's compositor setting)."
@@ -40,6 +42,23 @@ rec "eco-plus forces eco" "$(wait_mode eco && echo PASS || echo FAIL)"
 tspmo profile balanced >/dev/null
 rec "leaving eco-plus restores hybrid" "$(wait_mode hybrid && echo PASS || echo FAIL)"
 rec "policy unchanged by eco-plus" "$([ "$(policy)" = hybrid ] && echo PASS || echo FAIL)" "$(policy)"
+
+# The deadlock case: Eco+ entered from Hybrid right after a thermal-mode change (the EC notifies
+# the NVIDIA driver after every platform_profile write; an unload that meets that notification
+# hangs `rmmod` in D state for good). tspmod must switch the GPU first, wait out 30 s since the
+# last thermal write, unload only while the dGPU is runtime-suspended, and never hang.
+for i in 1 2; do
+  tspmo profile performance >/dev/null; sleep 2     # thermal write, dGPU about to be notified
+  tspmo profile eco-plus >/dev/null                 # thermal write + switch to Eco
+  rec "eco-plus entry $i right after a thermal change -> eco" "$(wait_mode eco 100 && echo PASS || echo FAIL)" "$(gmsg)"
+  rec "no rmmod stuck, no restart marker ($i)" "$(stuck && echo FAIL || echo PASS)"
+  tspmo profile balanced >/dev/null
+  rec "leaving eco-plus restores hybrid ($i)" "$(wait_mode hybrid 60 && echo PASS || echo FAIL)"
+  stuck && break
+done
+hung=$(sudo journalctl -k --since "$T0" --no-pager | grep -c -E "blocked for more than|rm_acpi_nvpcf_notify.*blocked|nv_acpi_methods_uninit")
+rec "no hung-task report (rmmod / NVPCF notify)" "$([ "$hung" = 0 ] && echo PASS || echo FAIL)" "$hung"
+tspmo status | grep -q "Restart to recover" && rec "no restart-required state" FAIL || rec "no restart-required state" PASS
 
 # Two minutes with the daemon idle: every dGPU resume must come from the firmware or an app.
 sleep 5

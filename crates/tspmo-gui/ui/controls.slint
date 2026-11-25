@@ -190,7 +190,9 @@ export component Seg inherits Rectangle {
     in property <color> tint: Th.accent;
     in property <bool> enabled: true;
     in property <bool> wheel: false;
-    in property <length> h: opts.length > 0 && opts[0].icon != "" ? 58 * Th.dp : Th.control;
+    // Labels may wrap to two lines (a taller tile, the same for every tile in the row).
+    in property <bool> wrap: false;
+    in property <length> h: opts.length > 0 && opts[0].icon != "" ? (wrap ? 74 * Th.dp : 58 * Th.dp) : Th.control;
     callback picked(int);
     property <int> cur: index;
     property <length> gap: Th.gap;
@@ -246,8 +248,11 @@ export component Seg inherits Rectangle {
                 font-weight: sel ? 700 : 400;
                 x: 2 * Th.dp;
                 width: parent.width - 4 * Th.dp;
-                y: o.icon != "" ? parent.height - self.height - 9 * Th.dp : (parent.height - self.height) / 2;
+                y: root.wrap ? 33 * Th.dp : o.icon != "" ? parent.height - self.height - 9 * Th.dp : (parent.height - self.height) / 2;
+                height: root.wrap ? parent.height - 33 * Th.dp - 7 * Th.dp : self.preferred-height;
                 horizontal-alignment: center;
+                vertical-alignment: center;
+                wrap: root.wrap ? word-wrap : no-wrap;
                 overflow: elide;
             }
             Rectangle {

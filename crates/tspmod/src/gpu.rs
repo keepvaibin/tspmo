@@ -18,6 +18,7 @@
 //! `gpu_mux_mode`; the firmware applies it at the next boot.
 
 use crate::dbus::{Shared, emit_changed};
+use crate::quiet;
 use std::process::Command;
 use std::time::{Duration, Instant};
 use tspmo_core::gpu::{self, Mode, Policy, Status, Switcher};
@@ -181,6 +182,9 @@ impl Drop for MuteDisplaySwitchKey {
 
 /// Fast checks for problems the user can act on, before any slow work starts.
 pub fn precheck(root: &SysRoot, st: &Status, target: Mode) -> Result<(), String> {
+    if restart_required(root) {
+        return Err(gpu::RESTART_REQUIRED.into());
+    }
     if !crate::boot::allowed() {
         return Err(STILL_STARTING.into());
     }
@@ -213,11 +217,25 @@ pub fn precheck(root: &SysRoot, st: &Status, target: Mode) -> Result<(), String>
     Ok(())
 }
 
+/// Remember, until the next boot (`/run`), that the driver unload hung.
+fn mark_restart_required(root: &SysRoot) {
+    let _ = tspmo_sys::write_atomic(&root.path(gpu::RESTART_MARKER), "rmmod hung\n");
+}
+
+/// A driver unload hung earlier: nothing about the NVIDIA GPU can be changed any more.
+pub fn restart_required(root: &SysRoot) -> bool {
+    root.exists(gpu::RESTART_MARKER)
+}
+
 /// Power the dGPU off, live. Any failure rolls back to Hybrid exactly as it was.
 fn power_off(root: &SysRoot, fw_attrs: bool) -> Result<(), String> {
     let Some(addr) = gpu::dgpu(root).map(|g| g.address) else {
         return Ok(()); // already off the bus
     };
+
+    // The EC notifies the driver after every thermal-mode write: let that settle before the
+    // switch touches anything (normally no wait: Eco+ switches the GPU first, see `apply`).
+    quiet::wait_thermal(&quiet::Real, &quiet::last_profile_write);
 
     // 1. The desktop lets go of the GPU's display devices.
     announce(root, &addr, "remove");
@@ -245,11 +263,34 @@ fn power_off(root: &SysRoot, fw_attrs: bool) -> Result<(), String> {
         announce(root, &addr, "add");
         Err(msg)
     };
+    // Unloading `nvidia` deadlocks against a pending firmware (NVPCF) notification, see
+    // `quiet.rs`: unload only while the GPU is suspended, at once when it is, and never wait
+    // on `rmmod` for more than a few seconds.
+    let mut first = true;
     for m in NVIDIA_MODULES {
-        if root.exists(format!("/sys/module/{m}")) && !run("rmmod", &[m]) {
-            return rollback(format!(
-                "couldn't unload {m}: something still uses the NVIDIA driver"
-            ));
+        if !root.exists(format!("/sys/module/{m}")) {
+            continue;
+        }
+        if first || *m == "nvidia" {
+            if let Err(e) = quiet::wait_quiet(root, &addr, &quiet::Real, &quiet::last_profile_write) {
+                return rollback(e);
+            }
+        }
+        first = false;
+        match quiet::run_watchdog("rmmod", &[m], quiet::RMMOD_LIMIT) {
+            quiet::Ran::Exited(true) => {}
+            quiet::Ran::Exited(false) => {
+                return rollback(format!(
+                    "couldn't unload {m}: something still uses the NVIDIA driver"
+                ));
+            }
+            quiet::Ran::Hung => {
+                // The kernel task cannot be killed and the driver is half unloaded: no
+                // rollback is possible. Refuse GPU switches until the next boot.
+                eprintln!("tspmod: gpu: `rmmod {m}` is stuck in the kernel; restart required");
+                mark_restart_required(root);
+                return Err(gpu::RESTART_REQUIRED.into());
+            }
         }
     }
 
@@ -343,13 +384,41 @@ pub fn wanted_mode(policy: Policy, on_battery: bool, eco_plus: bool) -> Mode {
 /// What the policy wants right now, if it differs from the hardware and can be done live.
 pub fn policy_target(d: &crate::state::Daemon) -> Option<Mode> {
     // Not while the boot is still bringing the display stack (and the NVIDIA driver) up.
-    if !crate::boot::allowed() {
+    if !crate::boot::allowed() || restart_required(&d.root) {
         return None;
     }
     let target = wanted_mode(d.gpu_policy, d.on_battery, d.effective().is_eco_plus());
     let st = d.gpu_status();
     let live = st.mode != Mode::Ultimate && target != Mode::Ultimate && st.pending.is_none();
     (live && st.mode != target).then_some(target)
+}
+
+/// Clears `GpuSwitching` when the worker thread ends, normally or by a panic.
+/// Disarmed once the thread has cleared it itself: a later switch may own the flag by then.
+struct ClearSwitching(Shared, bool);
+
+impl Drop for ClearSwitching {
+    fn drop(&mut self) {
+        if self.1 {
+            lock(&self.0).gpu_switching = None;
+        }
+    }
+}
+
+/// Is Eco+ being entered with the dGPU still on in Hybrid, so that the switch to Eco is about to
+/// run? Then the thermal-mode (`platform_profile`) write waits until that switch is over: the EC
+/// notifies the NVIDIA driver after the write, and an unload that meets the notification
+/// deadlocks (see `quiet.rs`).
+pub fn eco_switch_ahead(d: &crate::state::Daemon) -> bool {
+    if !crate::boot::allowed() || restart_required(&d.root) {
+        return false;
+    }
+    let st = d.gpu_status();
+    matches!(st.switcher, Switcher::Asus { .. })
+        && st.mode == Mode::Hybrid
+        && st.pending.is_none()
+        && st.dgpu.is_some()
+        && wanted_mode(d.gpu_policy, d.on_battery, true) == Mode::Eco
 }
 
 /// Start a switch on a worker thread. `policy`: saved once the switch succeeds (user requests).
@@ -377,7 +446,11 @@ pub fn begin(
             return Err(format!("already switching to {t}; one moment"));
         }
         if let Err(e) = checked {
-            if automatic {
+            if e == gpu::RESTART_REQUIRED {
+                // Sticky: nothing to wait for, no retry.
+                d.gpu_waiting = false;
+                d.gpu_message = e.clone();
+            } else if automatic {
                 d.gpu_waiting = e != NEEDS_FRESH_SESSION;
                 let msg = format!("Waiting to switch to {target}: {e}");
                 // Eco+ promises the dGPU off: say what is holding it (once, not on every retry).
@@ -397,6 +470,8 @@ pub fn begin(
         .name("gpu-switch".into())
         .stack_size(256 * 1024)
         .spawn(move || {
+            // However this thread ends, GpuSwitching must not stay set.
+            let mut clear = ClearSwitching(worker_shared.clone(), true);
             zbus::block_on(emit_changed(&worker_conn, &worker_shared));
             let mute = MuteDisplaySwitchKey::new(&root);
             let result = switch(&root, &st, target);
@@ -406,6 +481,7 @@ pub fn begin(
                 let mut d = lock(&worker_shared);
                 d.gpu_cache = fresh;
                 d.gpu_switching = None;
+                clear.1 = false;
                 match &result {
                     Ok(o) => {
                         if let Some(p) = policy {
@@ -415,11 +491,23 @@ pub fn begin(
                         d.gpu_waiting = false;
                         d.gpu_message = o.message().to_owned();
                     }
+                    Err(e) if e == gpu::RESTART_REQUIRED => {
+                        d.gpu_waiting = false;
+                        d.gpu_message = e.clone();
+                    }
+                    // The GPU stayed awake: the retry thread tries again (policy switches).
+                    Err(e) if e == quiet::BUSY => {
+                        d.gpu_waiting = automatic;
+                        d.gpu_message = e.clone();
+                    }
                     Err(e) => {
                         d.gpu_waiting = automatic && e != NEEDS_FRESH_SESSION;
                         d.gpu_message = format!("Couldn't switch to {target}: {e}");
                     }
                 }
+                // Eco+ held its thermal-mode write back until the GPU had been switched: now
+                // (switched, or not) it may go.
+                d.release_thermal();
                 eprintln!("tspmod: gpu: {}", d.gpu_message);
             }
             zbus::block_on(emit_changed(&worker_conn, &worker_shared));
@@ -444,10 +532,19 @@ pub fn enforce(conn: &zbus::Connection, shared: &Shared) {
     match target {
         Some(t) => {
             let _ = begin(conn.clone(), shared.clone(), t, None, true);
+            // No switch started (an app holds the GPU, ...): Eco+'s held-back thermal write
+            // must not wait for the retry. A running switch releases it itself.
+            let mut d = lock(shared);
+            if d.gpu_switching.is_none() {
+                d.release_thermal();
+            }
         }
         None => {
             // Nothing to wait for any more (Eco+ ended, or the GPU is where it should be).
             let mut d = lock(shared);
+            if d.gpu_switching.is_none() {
+                d.release_thermal();
+            }
             if d.gpu_waiting || d.gpu_message.starts_with("Waiting to switch") {
                 d.gpu_message.clear();
             }
