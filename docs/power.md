@@ -471,3 +471,20 @@ void: the charger was plugged in during the run, psys and package are RAPL):
 
 `balance_performance` finishes the burst 1.8x faster and costs 1.4 W package / 2 W platform to do
 it: that is the Eco+ regression, since Balanced on battery runs `balance_power`.
+
+Levers on top of `balance_power`, burst load, AC with the charger plugged in and the battery at 19 %
+(charging cannot be held there: compared by RAPL psys and package; 3 rounds interleaved, p95 of
+every row 0.98-1.01x):
+
+| Condition | psys W | pkg W |
+|---|---|---|
+| `balance_power` | 17.18 | 4.01 |
+| `power` | 17.07 | 3.99 |
+| `power` + 60 Hz | 16.56 | 4.08 |
+| + uncore max 1.2 GHz | 15.23 | 3.78 |
+| + no turbo | 15.55 | 3.98 |
+| + P-core max 3.0 GHz | 15.55 | 4.04 |
+| + E-core 1.2 GHz + PL1 12 W / PL2 28 W | 17.15 | 3.96 |
+
+The Eco+ power limits and E-core cap do nothing on this load; uncore 1.2 GHz saves about 1.3 W
+platform, 60 Hz about 0.5 W.
