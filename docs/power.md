@@ -458,3 +458,16 @@ Component isolation on top of balanced + GPU eco (idle desktop, 2 interleaved ro
 | 60 Hz | 2.97, 2.57 / 7.36, 6.04 | 2.82, 2.53 / 6.85, 5.82 | saves 0.1-0.5 W |
 
 Backlight stays the same inside each pair (the first EPP base ran at a higher backlight and is not used).
+
+Burst load (`tspmo bench`, 4 rounds, 2 workers x 5.4 ms at 10 Hz, GPU off; the battery column is
+void: the charger was plugged in during the run, psys and package are RAPL):
+
+| Energy preference | psys W | pkg W | chunk median ms | p95 vs base |
+|---|---|---|---|---|
+| base (balanced on battery = `balance_power`) | 16.93 | 4.05 | 12.24 | 1.00x |
+| `balance_performance` (Eco+ as shipped) | 19.03 | 5.63 | 6.91 | 0.61x |
+| `balance_power` | 17.04 | 4.24 | 12.23 | 0.99x |
+| `power` | 17.04 | 3.99 | 12.21 | 0.99x |
+
+`balance_performance` finishes the burst 1.8x faster and costs 1.4 W package / 2 W platform to do
+it: that is the Eco+ regression, since Balanced on battery runs `balance_power`.
