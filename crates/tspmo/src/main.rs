@@ -280,7 +280,7 @@ fn gpu(arg: Option<&str>) -> ExitCode {
         Some(m) => match client::set_gpu(m) {
             Ok(msg) if msg.starts_with("Switching") => {
                 println!("{msg}");
-                match client::wait_gpu_switch(std::time::Duration::from_secs(45)) {
+                match client::wait_gpu_switch(std::time::Duration::from_secs(120)) {
                     Ok(done) if done.starts_with("Couldn't") => fail(done),
                     Ok(done) => {
                         println!("{done}");

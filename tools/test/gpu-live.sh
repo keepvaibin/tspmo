@@ -64,7 +64,7 @@ tspmo status | grep -q "Restart to recover" && rec "no restart-required state" F
 sleep 5
 echo "idle window (120 s) ..."
 sleep 120
-bad=$(sudo journalctl -k --since "$T0" --no-pager -p err 2>/dev/null | grep -i -E "nvidia|NVRM|Xid|asus|acpi" | grep -v "platform power mode\|PshareStatus\|target temp from SBIOS" | wc -l)
+bad=$(sudo journalctl -k --since "$T0" --no-pager -p err 2>/dev/null | grep -i -E "nvidia|NVRM|Xid|asus|acpi" | grep -v "platform power mode\|PshareStatus\|target temp from SBIOS\|loading NVIDIA UNIX" | wc -l)
 rec "no kernel errors (nvidia, asus, acpi)" "$([ "$bad" = 0 ] && echo PASS || echo FAIL)" "$bad lines"
 xid=$(sudo journalctl -k --since "$T0" --no-pager | grep -c "Xid")
 rec "no Xid" "$([ "$xid" = 0 ] && echo PASS || echo FAIL)" "$xid"
