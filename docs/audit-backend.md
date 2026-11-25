@@ -42,6 +42,23 @@ Severity: H = wrong state or exploitable, M = wrong in a rare path, L = hygiene.
 - Lock order: daemon mutex, then the event list; subscribers only enqueue or spawn.
 - `ProtectHome=no` and `ReadWritePaths=-/home -/run/user` stay: the commands the daemon runs as the user (kscreen-doctor, kwriteconfig6, tspmo-gui) need them. The daemon itself writes nothing under `/home`.
 
+## State at hand-over
+
+- Installed build: commit 5fec41d (all fixes except 12b). Commit 9b533e1 (12b) passes fmt, clippy and unit tests but was not packaged or installed.
+- e2e (full, `--idle 120`, installed 5fec41d): 0 failures; round trip p95 0.94 ms; 0 dGPU resumes from tspmod; RSS 8.7 MB; 0.17 wake-ups/s (user input in the window).
+- Live `systemctl stop tspmod` in Eco+: fans back to auto, PL1 90 W, efficiency cores uncapped, slice stopped, 240 Hz.
+- `makepkg` of 5fec41d: no warnings (the `$srcdir` reference is gone).
+- User settings left as found: balanced, refresh max, brightness 30, GPU hybrid, limit 100, keyboard 1.
+
+## Not done
+
+- Install and e2e of 9b533e1 (`makepkg`, `pacman -U`, restart tspmod).
+- Idle measurement on battery and in Eco+ after the touchpad change; `perf trace`.
+- D-Bus latency while a fan curve is written to the active mode (handlers share one zbus executor thread; profile switching measured fine, p95 2 ms).
+- `tools/test/gpu-live.sh` and anything that changes dGPU power.
+- CI: no check that the package lists every referenced file.
+- GUI API changes: none needed.
+
 ## Not fixed (needs a decision)
 
 - `tspmo-hid-asus-dkms` downloads `hid-asus.c` over HTTPS at build time with no checksum.
