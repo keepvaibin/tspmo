@@ -125,7 +125,11 @@ fn run() -> zbus::Result<()> {
                     let (c, s) = (c.clone(), Arc::clone(&s));
                     let _ = std::thread::Builder::new()
                         .name("eco-plus-gpu".into())
-                        .spawn(move || gpu::enforce(&c, &s));
+                        .spawn(move || {
+                            // A new mode change: the apps in its way are named again.
+                            s.lock().unwrap_or_else(|p| p.into_inner()).gpu_blockers.clear();
+                            gpu::enforce(&c, &s);
+                        });
                 }
             }
         });

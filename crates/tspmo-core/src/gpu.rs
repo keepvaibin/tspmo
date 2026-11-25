@@ -283,6 +283,38 @@ pub fn users(root: &SysRoot, dgpu_addr: Option<&str>) -> Vec<User> {
     out
 }
 
+/// The name of the app behind a user: helper processes are listed as `firefox (RDD Process)`,
+/// the app is `firefox`.
+pub fn app_name(u: &User) -> &str {
+    u.name.split(" (").next().unwrap_or(&u.name)
+}
+
+/// The apps among `users` that render on the dGPU, once each, first letter capitalised
+/// (`Firefox`), in the order found.
+pub fn render_apps(users: &[User]) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for u in users.iter().filter(|u| u.kind == UseKind::Render) {
+        let mut chars = app_name(u).chars();
+        let Some(first) = chars.next() else { continue };
+        let name: String = first.to_uppercase().chain(chars).collect();
+        if !out.contains(&name) {
+            out.push(name);
+        }
+    }
+    out
+}
+
+/// "Firefox is using the NVIDIA GPU", "Firefox and Steam are using ...", at most three named.
+pub fn using_text(apps: &[String]) -> String {
+    match apps {
+        [] => String::new(),
+        [a] => format!("{a} is using the NVIDIA GPU"),
+        [a, b] => format!("{a} and {b} are using the NVIDIA GPU"),
+        [a, b, c] => format!("{a}, {b} and {c} are using the NVIDIA GPU"),
+        [a, b, rest @ ..] => format!("{a}, {b} and {} more are using the NVIDIA GPU", rest.len()),
+    }
+}
+
 /// NVIDIA helper daemons that hold the GPU but can be stopped safely for a switch.
 pub const NVIDIA_SERVICES: &[(&str, &str)] = &[
     ("nvidia-powerd", "nvidia-powerd.service"),
@@ -292,6 +324,31 @@ pub const NVIDIA_SERVICES: &[(&str, &str)] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn user(name: &str, kind: UseKind) -> User {
+        User {
+            pid: 1,
+            name: name.into(),
+            kind,
+            driver_handles: true,
+        }
+    }
+
+    #[test]
+    fn apps_are_named_once_and_by_their_executable() {
+        let users = [
+            user("firefox (RDD Process)", UseKind::Render),
+            user("firefox (GPU Process)", UseKind::Render),
+            user("kwin_wayland", UseKind::Display),
+            user("steam", UseKind::Render),
+        ];
+        let apps = render_apps(&users);
+        assert_eq!(apps, ["Firefox", "Steam"]);
+        assert_eq!(using_text(&apps[..1]), "Firefox is using the NVIDIA GPU");
+        assert_eq!(using_text(&apps), "Firefox and Steam are using the NVIDIA GPU");
+        let many: Vec<String> = ["A", "B", "C", "D", "E"].map(String::from).to_vec();
+        assert_eq!(using_text(&many), "A, B and 3 more are using the NVIDIA GPU");
+    }
 
     #[test]
     fn policies() {

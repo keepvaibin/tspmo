@@ -506,6 +506,7 @@ impl Tspmo {
             emit_changed(conn, &self.0).await;
             return Ok(msg);
         }
+        lock(&self.0).gpu_blockers.clear();
         gpu::begin(conn.clone(), self.0.clone(), target, Some(policy), false)
             .map_err(zbus::fdo::Error::Failed)?;
         Ok(format!("Switching to {target}…"))

@@ -219,38 +219,54 @@ impl Drop for MuteDisplaySwitchKey {
     }
 }
 
+/// Why a switch can't start: the message, and the apps behind it when apps are the reason.
+pub struct Refusal {
+    pub text: String,
+    /// Apps using the dGPU (`Firefox`, ...), empty for any other reason.
+    pub apps: Vec<String>,
+}
+
+impl From<String> for Refusal {
+    fn from(text: String) -> Self {
+        Self {
+            text,
+            apps: Vec::new(),
+        }
+    }
+}
+
 /// Fast checks for problems the user can act on, before any slow work starts.
 pub fn precheck(root: &SysRoot, st: &Status, target: Mode) -> Result<(), String> {
+    check(root, st, target).map_err(|r| r.text)
+}
+
+pub fn check(root: &SysRoot, st: &Status, target: Mode) -> Result<(), Refusal> {
     if restart_required(root) {
-        return Err(gpu::RESTART_REQUIRED.into());
+        return Err(String::from(gpu::RESTART_REQUIRED).into());
     }
     if !crate::boot::allowed() {
-        return Err(STILL_STARTING.into());
+        return Err(String::from(STILL_STARTING).into());
     }
     match st.switcher {
         Switcher::None if target != Mode::Hybrid => {
-            return Err("this laptop has no firmware GPU switch".into());
+            return Err(String::from("this laptop has no firmware GPU switch").into());
         }
         Switcher::Asus { has_mux: false, .. } if target == Mode::Ultimate => {
-            return Err("no MUX switch: no Ultimate mode".into());
+            return Err(String::from("no MUX switch: no Ultimate mode").into());
         }
         _ => {}
     }
     if target == Mode::Eco && st.mode == Mode::Hybrid && st.dgpu.is_some() {
         let users = blocking_users(root);
-        let apps: Vec<String> = users
-            .iter()
-            .filter(|u| u.kind == gpu::UseKind::Render)
-            .map(|u| format!("{} ({})", u.name, u.pid))
-            .collect();
+        let apps = gpu::render_apps(&users);
         if !apps.is_empty() {
-            return Err(format!(
-                "the NVIDIA GPU is in use by {}; close them and try again",
-                apps.join(", ")
-            ));
+            return Err(Refusal {
+                text: gpu::using_text(&apps),
+                apps,
+            });
         }
         if users.iter().any(|u| u.driver_handles) {
-            return Err(NEEDS_FRESH_SESSION.into());
+            return Err(String::from(NEEDS_FRESH_SESSION).into());
         }
     }
     Ok(())
@@ -498,28 +514,38 @@ pub fn begin(
         }
         (d.root.clone(), d.gpu_status())
     };
-    let checked = precheck(&root, &st, target);
+    let checked = check(&root, &st, target);
     {
         let mut d = lock(&shared);
         if let Some(t) = d.gpu_switching {
             return Err(format!("already switching to {t}; one moment"));
         }
-        if let Err(e) = checked {
+        if let Err(r) = checked {
+            let e = r.text;
             if e == gpu::RESTART_REQUIRED {
                 // Sticky: nothing to wait for, no retry.
                 d.gpu_waiting = false;
                 d.gpu_message = e.clone();
+            } else if !r.apps.is_empty() {
+                // Apps hold the dGPU: say which ones. The retry thread keeps trying
+                // (policy-driven attempts); the user hears of each app once.
+                d.gpu_waiting = automatic;
+                d.gpu_message = e.clone();
+                if !automatic || d.effective().is_eco_plus() {
+                    let fresh = d.note_blockers(&r.apps);
+                    if !fresh.is_empty() {
+                        crate::session::osd("video-card", &gpu::using_text(&fresh), None);
+                    }
+                }
             } else if automatic {
                 d.gpu_waiting = e != NEEDS_FRESH_SESSION;
-                let msg = format!("Waiting to switch to {target}: {e}");
-                // Eco+ promises the dGPU off: say what is holding it (once, not on every retry).
-                if d.effective().is_eco_plus() && d.gpu_message != msg {
-                    crate::session::osd("video-card", &e, None);
-                }
-                d.gpu_message = msg;
+                d.gpu_message = format!("Waiting to switch to {target}: {e}");
+            } else {
+                d.gpu_message = e.clone();
             }
             return Err(e);
         }
+        d.gpu_blockers.clear();
         d.gpu_switching = Some(target);
         d.gpu_switch_auto = automatic;
         d.gpu_message = format!("Switching to {target}…");
@@ -622,6 +648,7 @@ pub fn enforce(conn: &zbus::Connection, shared: &Shared) {
                 d.gpu_message.clear();
             }
             d.gpu_waiting = false;
+            d.gpu_blockers.clear();
         }
     }
 }

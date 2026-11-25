@@ -45,6 +45,9 @@ pub struct Daemon {
     pub gpu_waiting: bool,
     /// Last message from a GPU switch attempt, shown in the UI.
     pub gpu_message: String,
+    /// Apps already named on screen for the mode change that is waiting on them: each is
+    /// announced once, not on every retry.
+    pub gpu_blockers: Vec<String>,
     /// Settings the kernel refused with EPERM/EACCES (firmware-owned); never retried.
     refused: std::collections::HashSet<String>,
     /// The RAPL/uncore values from before Eco+ was applied (empty when Eco+ is not active).
@@ -93,6 +96,7 @@ impl Daemon {
             gpu_switch_auto: false,
             gpu_waiting: false,
             gpu_message: String::new(),
+            gpu_blockers: Vec::new(),
             refused: std::collections::HashSet::new(),
             eco_saved: Vec::new(),
             thermal_held: false,
@@ -386,6 +390,17 @@ impl Daemon {
             self.apply(false);
         }
         gone
+    }
+
+    /// Remember apps that block a GPU switch; returns the ones not announced yet.
+    pub fn note_blockers(&mut self, apps: &[String]) -> Vec<String> {
+        let fresh: Vec<String> = apps
+            .iter()
+            .filter(|a| !self.gpu_blockers.contains(a))
+            .cloned()
+            .collect();
+        self.gpu_blockers.extend(fresh.iter().cloned());
+        fresh
     }
 
     /// Environment for the compositor (read by tspmo's systemd drop-in for KWin at session
