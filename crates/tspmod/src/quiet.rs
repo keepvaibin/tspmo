@@ -33,6 +33,12 @@ pub const RMMOD_LIMIT: Duration = Duration::from_secs(8);
 /// GpuMessage when the dGPU never went quiet.
 pub const BUSY: &str = "NVIDIA GPU busy; try again";
 
+/// Not a failure: the policy stopped wanting the switch while it waited. Never shown.
+pub const CANCELLED: &str = "switch cancelled";
+
+/// Longest sleep between looks at the cancel flag while waiting out the thermal window.
+const THERMAL_STEP: Duration = Duration::from_millis(250);
+
 /// Monotonic time and sleeping, replaceable in tests.
 pub trait Clock {
     /// Time since an arbitrary fixed point.
@@ -82,28 +88,42 @@ pub fn may_unload(runtime_status: Option<&str>) -> bool {
 }
 
 /// Wait out the thermal-mode write only (no GPU involved): used before the switch starts
-/// touching the desktop.
-pub fn wait_thermal(clock: &dyn Clock, last_write: &dyn Fn() -> Option<Duration>) {
-    while let Some(rem) = thermal_remaining(clock.now(), last_write()) {
-        clock.sleep(rem.min(Duration::from_secs(1)));
+/// touching the desktop. `Err(CANCELLED)` the moment `cancelled` says so (checked at every step).
+pub fn wait_thermal(
+    clock: &dyn Clock,
+    last_write: &dyn Fn() -> Option<Duration>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<(), String> {
+    loop {
+        if cancelled() {
+            return Err(CANCELLED.into());
+        }
+        let Some(rem) = thermal_remaining(clock.now(), last_write()) else {
+            return Ok(());
+        };
+        clock.sleep(rem.min(THERMAL_STEP));
     }
 }
 
 /// Block until it is safe to unload the driver: [`THERMAL_SETTLE`] after the last thermal
 /// write, then the dGPU `suspended`. While it is awake only its `power/runtime_status` is read,
 /// every [`POLL`], and the unload follows at once. `Err(BUSY)` when it stays awake for
-/// [`SUSPEND_BOUND`].
+/// [`SUSPEND_BOUND`]; `Err(CANCELLED)` as soon as `cancelled` says so (checked at every step).
 pub fn wait_quiet(
     root: &SysRoot,
     addr: &str,
     clock: &dyn Clock,
     last_write: &dyn Fn() -> Option<Duration>,
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<(), String> {
     let status = format!("{}/{addr}/power/runtime_status", tspmo_sys::pci::DEVICES);
     let mut waited = Duration::ZERO;
     loop {
+        if cancelled() {
+            return Err(CANCELLED.into());
+        }
         if let Some(rem) = thermal_remaining(clock.now(), last_write()) {
-            clock.sleep(rem.min(Duration::from_secs(1)));
+            clock.sleep(rem.min(THERMAL_STEP));
             continue; // a write during the wait starts the window again
         }
         if may_unload(root.read_opt(&status).as_deref()) {
@@ -251,7 +271,7 @@ mod tests {
     #[test]
     fn a_suspended_gpu_is_unloaded_at_once() {
         let f = Fake::new("susp", vec![(S(0), "suspended")]);
-        wait_quiet(&f.root(), ADDR, &f, &|| None).unwrap();
+        wait_quiet(&f.root(), ADDR, &f, &|| None, &|| false).unwrap();
         assert_eq!(f.now(), Duration::ZERO);
     }
 
@@ -261,7 +281,7 @@ mod tests {
             "wake",
             vec![(S(0), "active"), (Duration::from_millis(2_100), "suspended")],
         );
-        wait_quiet(&f.root(), ADDR, &f, &|| None).unwrap();
+        wait_quiet(&f.root(), ADDR, &f, &|| None, &|| false).unwrap();
         // The first poll at or after 2.1 s; not a poll later.
         assert_eq!(f.now(), Duration::from_millis(2_100));
         assert_eq!(f.reads.get(), 14); // 14 x 150 ms
@@ -270,7 +290,7 @@ mod tests {
     #[test]
     fn a_gpu_that_never_suspends_is_busy_after_45_seconds() {
         let f = Fake::new("busy", vec![(S(0), "active")]);
-        let err = wait_quiet(&f.root(), ADDR, &f, &|| None).unwrap_err();
+        let err = wait_quiet(&f.root(), ADDR, &f, &|| None, &|| false).unwrap_err();
         assert_eq!(err, BUSY);
         assert_eq!(err, "NVIDIA GPU busy; try again");
         assert_eq!(f.now(), SUSPEND_BOUND);
@@ -281,12 +301,12 @@ mod tests {
         // Written 10 s ago: 20 s to go. The GPU is suspended meanwhile.
         let f = Fake::new("thermal", vec![(S(0), "suspended")]);
         f.now.set(S(110));
-        wait_quiet(&f.root(), ADDR, &f, &|| Some(S(100))).unwrap();
+        wait_quiet(&f.root(), ADDR, &f, &|| Some(S(100)), &|| false).unwrap();
         assert_eq!(f.now(), S(130));
         // Awake until 60 s: 40 s after the 30 s window, within the 45 s poll bound.
         let f = Fake::new("thermal2", vec![(S(0), "active"), (S(60), "suspended")]);
         f.now.set(S(10));
-        wait_quiet(&f.root(), ADDR, &f, &|| Some(S(10))).unwrap();
+        wait_quiet(&f.root(), ADDR, &f, &|| Some(S(10)), &|| false).unwrap();
         assert!(f.now() >= S(60) && f.now() < S(61), "{:?}", f.now());
     }
 
@@ -301,7 +321,7 @@ mod tests {
             }
             Some(if second.get() { S(20) } else { S(0) })
         };
-        wait_quiet(&f.root(), ADDR, &f, &last).unwrap();
+        wait_quiet(&f.root(), ADDR, &f, &last, &|| false).unwrap();
         assert!(f.now() >= S(50), "window restarted at 20 s: {:?}", f.now());
     }
 
@@ -309,8 +329,43 @@ mod tests {
     fn wait_thermal_ignores_the_gpu() {
         let f = Fake::new("wt", vec![(S(0), "active")]);
         f.now.set(S(5));
-        wait_thermal(&f, &|| Some(S(0)));
+        wait_thermal(&f, &|| Some(S(0)), &|| false).unwrap();
         assert_eq!(f.now(), S(30));
+    }
+
+    #[test]
+    fn a_cancelled_wait_stops_at_the_next_step_in_either_wait() {
+        // Before any wait.
+        let f = Fake::new("c0", vec![(S(0), "active")]);
+        assert_eq!(
+            wait_quiet(&f.root(), ADDR, &f, &|| None, &|| true),
+            Err(CANCELLED.to_owned())
+        );
+        assert_eq!(f.now(), Duration::ZERO);
+        // During the 30 s thermal window: cancelled 5 s in.
+        let f = Fake::new("c1", vec![(S(0), "suspended")]);
+        let cancel = || f.now() >= S(5);
+        assert_eq!(
+            wait_quiet(&f.root(), ADDR, &f, &|| Some(S(0)), &cancel),
+            Err(CANCELLED.to_owned())
+        );
+        assert!(f.now() >= S(5) && f.now() < S(6), "{:?}", f.now());
+        // While the GPU stays awake.
+        let f = Fake::new("c2", vec![(S(0), "active")]);
+        let cancel = || f.now() >= S(10);
+        assert_eq!(
+            wait_quiet(&f.root(), ADDR, &f, &|| None, &cancel),
+            Err(CANCELLED.to_owned())
+        );
+        assert!(f.now() >= S(10) && f.now() < S(11), "{:?}", f.now());
+        // The thermal-only wait.
+        let f = Fake::new("c3", vec![(S(0), "active")]);
+        let cancel = || f.now() >= S(7);
+        assert_eq!(
+            wait_thermal(&f, &|| Some(S(0)), &cancel),
+            Err(CANCELLED.to_owned())
+        );
+        assert!(f.now() >= S(7) && f.now() < S(8), "{:?}", f.now());
     }
 
     #[test]

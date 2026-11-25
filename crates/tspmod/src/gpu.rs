@@ -39,6 +39,45 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_cancelled_eco_switch_touches_nothing() {
+        let dir = std::env::temp_dir().join(format!("tspmod-gpu-cancel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let dev = dir.join("sys/bus/pci/devices/0000:01:00.0");
+        std::fs::create_dir_all(dev.join("drm/card1")).unwrap();
+        std::fs::create_dir_all(dev.join("power")).unwrap();
+        for (f, c) in [
+            ("class", "0x030200\n"),
+            ("vendor", "0x10de\n"),
+            ("power/runtime_status", "active\n"),
+            ("drm/card1/uevent", "untouched\n"),
+        ] {
+            std::fs::write(dev.join(f), c).unwrap();
+        }
+        crate::boot::TEST_ALLOWED.with(|c| c.set(true));
+        let root = SysRoot::new(&dir);
+        let st = Status {
+            switcher: Switcher::Asus {
+                fw_attrs: true,
+                has_mux: false,
+            },
+            mode: Mode::Hybrid,
+            pending: None,
+            dgpu: Some("0000:01:00.0".into()),
+            dgpu_asleep: false,
+        };
+        // Cancelled from the first look: no wait, no desktop announcement, no unload.
+        let t = Instant::now();
+        let r = switch(&root, &st, Mode::Eco, &|| true);
+        assert_eq!(r.unwrap_err(), quiet::CANCELLED);
+        assert!(t.elapsed() < Duration::from_secs(2));
+        assert_eq!(
+            std::fs::read_to_string(dev.join("drm/card1/uevent")).unwrap(),
+            "untouched\n"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn eco_plus_forces_eco_and_leaving_it_restores_the_policy() {
         for policy in [
             Policy::Optimized,
@@ -227,15 +266,17 @@ pub fn restart_required(root: &SysRoot) -> bool {
     root.exists(gpu::RESTART_MARKER)
 }
 
-/// Power the dGPU off, live. Any failure rolls back to Hybrid exactly as it was.
-fn power_off(root: &SysRoot, fw_attrs: bool) -> Result<(), String> {
+/// Power the dGPU off, live. Any failure rolls back to Hybrid exactly as it was. `cancelled` is
+/// asked at every wait step and right before the first unload: once it says yes, nothing more is
+/// touched (what was already moved is put back) and `Err(quiet::CANCELLED)` comes back.
+fn power_off(root: &SysRoot, fw_attrs: bool, cancelled: &dyn Fn() -> bool) -> Result<(), String> {
     let Some(addr) = gpu::dgpu(root).map(|g| g.address) else {
         return Ok(()); // already off the bus
     };
 
     // The EC notifies the driver after every thermal-mode write: let that settle before the
     // switch touches anything (normally no wait: Eco+ switches the GPU first, see `apply`).
-    quiet::wait_thermal(&quiet::Real, &quiet::last_profile_write);
+    quiet::wait_thermal(&quiet::Real, &quiet::last_profile_write, cancelled)?;
 
     // 1. The desktop lets go of the GPU's display devices.
     announce(root, &addr, "remove");
@@ -272,9 +313,15 @@ fn power_off(root: &SysRoot, fw_attrs: bool) -> Result<(), String> {
             continue;
         }
         if first || *m == "nvidia" {
-            if let Err(e) = quiet::wait_quiet(root, &addr, &quiet::Real, &quiet::last_profile_write) {
+            if let Err(e) =
+                quiet::wait_quiet(root, &addr, &quiet::Real, &quiet::last_profile_write, cancelled)
+            {
                 return rollback(e);
             }
+        }
+        // The last look before the point of no return.
+        if first && cancelled() {
+            return rollback(quiet::CANCELLED.into());
         }
         first = false;
         match quiet::run_watchdog("rmmod", &[m], quiet::RMMOD_LIMIT) {
@@ -323,7 +370,12 @@ fn power_on(root: &SysRoot, fw_attrs: bool) -> Result<(), String> {
 }
 
 /// Perform a switch. Blocking: call from a worker thread (or at start-up, before D-Bus).
-pub fn switch(root: &SysRoot, st: &Status, target: Mode) -> Result<Outcome, String> {
+pub fn switch(
+    root: &SysRoot,
+    st: &Status,
+    target: Mode,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Outcome, String> {
     precheck(root, st, target)?;
     let Switcher::Asus { fw_attrs, .. } = st.switcher else {
         return Ok(Outcome::Done("Hybrid is the only mode".into()));
@@ -341,7 +393,7 @@ pub fn switch(root: &SysRoot, st: &Status, target: Mode) -> Result<Outcome, Stri
     match (st.mode, target) {
         (a, b) if a == b && st.pending.is_none() => Ok(Outcome::Done(format!("Already in {b} mode"))),
         (Mode::Hybrid, Mode::Eco) => {
-            power_off(root, fw_attrs)?;
+            power_off(root, fw_attrs, cancelled)?;
             Ok(Outcome::Done("Eco: the NVIDIA GPU is off".into()))
         }
         (Mode::Eco, Mode::Hybrid) => {
@@ -391,6 +443,13 @@ pub fn policy_target(d: &crate::state::Daemon) -> Option<Mode> {
     let st = d.gpu_status();
     let live = st.mode != Mode::Ultimate && target != Mode::Ultimate && st.pending.is_none();
     (live && st.mode != target).then_some(target)
+}
+
+/// Does a policy-driven switch to `target` still have a purpose? A user's own request is never
+/// withdrawn behind their back; a policy switch is, the moment the policy wants something else
+/// (Eco+ left, the charger plugged in, a new policy chosen).
+pub fn switch_still_wanted(d: &crate::state::Daemon, target: Mode) -> bool {
+    !d.gpu_switch_auto || wanted_mode(d.gpu_policy, d.on_battery, d.effective().is_eco_plus()) == target
 }
 
 /// Clears `GpuSwitching` when the worker thread ends, normally or by a panic.
@@ -462,6 +521,7 @@ pub fn begin(
             return Err(e);
         }
         d.gpu_switching = Some(target);
+        d.gpu_switch_auto = automatic;
         d.gpu_message = format!("Switching to {target}…");
     }
     let worker_conn = conn.clone();
@@ -474,7 +534,9 @@ pub fn begin(
             let mut clear = ClearSwitching(worker_shared.clone(), true);
             zbus::block_on(emit_changed(&worker_conn, &worker_shared));
             let mute = MuteDisplaySwitchKey::new(&root);
-            let result = switch(&root, &st, target);
+            let cancelled = || !switch_still_wanted(&lock(&worker_shared), target);
+            let result = switch(&root, &st, target, &cancelled);
+            let was_cancelled = result.as_ref().is_err_and(|e| e == quiet::CANCELLED);
             let boot_mux = lock(&worker_shared).boot_mux;
             let fresh = crate::state::Daemon::read_gpu_status(&root, boot_mux);
             {
@@ -483,6 +545,11 @@ pub fn begin(
                 d.gpu_switching = None;
                 clear.1 = false;
                 match &result {
+                    // Not a failure and not worth a message: the policy moved on.
+                    Err(_) if was_cancelled => {
+                        d.gpu_waiting = false;
+                        d.gpu_message.clear();
+                    }
                     Ok(o) => {
                         if let Some(p) = policy {
                             d.gpu_policy = p;
@@ -508,7 +575,11 @@ pub fn begin(
                 // Eco+ held its thermal-mode write back until the GPU had been switched: now
                 // (switched, or not) it may go.
                 d.release_thermal();
-                eprintln!("tspmod: gpu: {}", d.gpu_message);
+                if was_cancelled {
+                    eprintln!("tspmod: gpu: switch to {target} cancelled: no longer wanted");
+                } else {
+                    eprintln!("tspmod: gpu: {}", d.gpu_message);
+                }
             }
             zbus::block_on(emit_changed(&worker_conn, &worker_shared));
             drop(mute); // restores after a settle time, off the critical path
@@ -518,7 +589,9 @@ pub fn begin(
             // The policy may have changed while this switch ran (Eco+ ended, a plug event): that
             // request found a switch in progress and was dropped. Look again; after a failure the
             // retry thread owns the next attempt.
-            if result.is_ok() && policy_target(&lock(&worker_shared)).is_some_and(|t| t != target) {
+            if (result.is_ok() || was_cancelled)
+                && policy_target(&lock(&worker_shared)).is_some_and(|t| t != target)
+            {
                 enforce(&worker_conn, &worker_shared);
             }
         })

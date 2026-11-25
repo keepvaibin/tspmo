@@ -38,6 +38,9 @@ pub struct Daemon {
     pub gpu_cache: gpu::Status,
     /// A GPU switch in progress (the firmware takes seconds to power the dGPU on).
     pub gpu_switching: Option<gpu::Mode>,
+    /// The switch in progress was started by the policy (not asked for by the user): it is
+    /// withdrawn when the policy stops wanting it (see [`crate::gpu::switch_still_wanted`]).
+    pub gpu_switch_auto: bool,
     /// The policy wants a different GPU mode but an app is using the dGPU; retrying.
     pub gpu_waiting: bool,
     /// Last message from a GPU switch attempt, shown in the UI.
@@ -46,9 +49,10 @@ pub struct Daemon {
     refused: std::collections::HashSet<String>,
     /// The RAPL/uncore values from before Eco+ was applied (empty when Eco+ is not active).
     eco_saved: Vec<power::Write>,
-    /// Eco+'s `platform_profile` write, held back until the GPU switch to Eco is over (see
-    /// [`crate::gpu::eco_switch_ahead`]).
-    thermal_deferred: Option<power::Write>,
+    /// Eco+'s `platform_profile` write is held back until the GPU switch to Eco is over (see
+    /// [`crate::gpu::eco_switch_ahead`]). Only a flag: what is written then is worked out from
+    /// the mode in force at that time, so a stale write is impossible.
+    thermal_held: bool,
     /// The last `platform_profile` value seen by the watcher (a change is a thermal write).
     last_platform: Option<String>,
     /// What was last applied, to avoid redundant firmware writes.
@@ -86,11 +90,12 @@ impl Daemon {
                 dgpu_asleep: false,
             },
             gpu_switching: None,
+            gpu_switch_auto: false,
             gpu_waiting: false,
             gpu_message: String::new(),
             refused: std::collections::HashSet::new(),
             eco_saved: Vec::new(),
-            thermal_deferred: None,
+            thermal_held: false,
             last_platform: None,
             applied: None,
             state_file: state_dir.join("state"),
@@ -159,13 +164,14 @@ impl Daemon {
         // Entering Eco+ with the dGPU on: the switch to Eco comes before the thermal-mode
         // write, whose EC notification would otherwise meet the driver unload.
         let entering = self.applied.is_some_and(|(p, _)| !p.is_eco_plus());
-        let defer = key.0.is_eco_plus()
-            && (entering || self.thermal_deferred.is_some())
-            && crate::gpu::eco_switch_ahead(self);
-        self.thermal_deferred = None;
+        let defer =
+            key.0.is_eco_plus() && (entering || self.thermal_held) && crate::gpu::eco_switch_ahead(self);
+        // Everything but the thermal mode goes in now, on entering and on leaving alike.
+        self.thermal_held = false;
         if defer {
             if let Some(i) = plan.iter().position(|w| w.path == power::PLATFORM_PROFILE) {
-                self.thermal_deferred = Some(plan.remove(i));
+                plan.remove(i);
+                self.thermal_held = true;
             }
         }
         let r = power::apply(&self.root, &plan);
@@ -207,8 +213,14 @@ impl Daemon {
     }
 
     /// Write the thermal mode Eco+ held back while the GPU switched (no-op when none is held).
+    /// It is the thermal mode of the mode in force NOW: when Eco+ has been left, leaving already
+    /// wrote the new mode and nothing is written here.
     pub fn release_thermal(&mut self) {
-        let Some(w) = self.thermal_deferred.take() else {
+        if !std::mem::take(&mut self.thermal_held) || !self.effective().is_eco_plus() {
+            return;
+        }
+        let plan = power::plan(&self.root, self.effective(), self.on_battery, &self.tunables, &[]);
+        let Some(w) = plan.into_iter().find(|w| w.path == power::PLATFORM_PROFILE) else {
             return;
         };
         let r = power::apply(&self.root, std::slice::from_ref(&w));
@@ -223,7 +235,7 @@ impl Daemon {
     /// Whether Eco+'s thermal-mode write is still held back.
     #[cfg(test)]
     pub fn thermal_held(&self) -> bool {
-        self.thermal_deferred.is_some()
+        self.thermal_held
     }
 
     /// The user picked a profile (from KDE/GNOME, the GUI, the CLI or a hotkey).
@@ -257,7 +269,7 @@ impl Daemon {
         }
         self.last_platform = Some(value.to_owned());
         // Eco+'s own write is still held back: what the firmware shows is not a choice.
-        if self.thermal_deferred.is_some() {
+        if self.thermal_held {
             return false;
         }
         match Profile::from_platform(value) {
@@ -713,6 +725,84 @@ mod tests {
         assert_eq!(env.read(power::PLATFORM_PROFILE), "performance");
         d.release_thermal(); // nothing left to write
         assert_eq!(env.read(power::PLATFORM_PROFILE), "performance");
+    }
+
+    #[test]
+    fn a_stale_release_never_writes_an_eco_plus_thermal_mode() {
+        let env = Env::new("stale");
+        let mut d = hybrid_with_dgpu(&env);
+        d.choose(Profile::Balanced);
+        d.choose(Profile::EcoPlus);
+        assert!(d.thermal_held());
+        d.choose(Profile::Balanced);
+        assert_eq!(env.read(power::PLATFORM_PROFILE), "balanced");
+        // A late release from the switch that was started for Eco+ (whatever state it finds).
+        d.thermal_held = true;
+        d.release_thermal();
+        assert_eq!(env.read(power::PLATFORM_PROFILE), "balanced");
+        assert!(!d.thermal_held());
+        // Likewise after Eco+ -> Performance via a hold.
+        d.choose(Profile::EcoPlus);
+        hold(&mut d, Profile::Performance);
+        d.release_thermal();
+        assert_eq!(env.read(power::PLATFORM_PROFILE), "performance");
+    }
+
+    #[test]
+    fn a_release_writes_the_mode_in_force_now() {
+        let env = Env::new("current");
+        let mut d = hybrid_with_dgpu(&env);
+        d.choose(Profile::Balanced);
+        d.choose(Profile::EcoPlus);
+        assert_eq!(env.read(power::PLATFORM_PROFILE), "balanced");
+        d.release_thermal();
+        assert_eq!(env.read(power::PLATFORM_PROFILE), "quiet");
+        // Released once: a second call writes nothing.
+        std::fs::write(
+            env.0.join(power::PLATFORM_PROFILE.trim_start_matches('/')),
+            "balanced\n",
+        )
+        .unwrap();
+        d.release_thermal();
+        assert_eq!(env.read(power::PLATFORM_PROFILE), "balanced");
+    }
+
+    #[test]
+    fn eco_plus_takes_all_but_the_thermal_mode_at_once_and_leaving_restores_it_all_during_a_switch() {
+        let env = Env::new("inflight");
+        let mut d = hybrid_with_dgpu(&env);
+        d.choose(Profile::Balanced);
+        d.choose(Profile::EcoPlus);
+        // The switch to Eco is running (waiting for the GPU to settle).
+        d.gpu_switching = Some(gpu::Mode::Eco);
+        d.gpu_switch_auto = true;
+        assert_eq!(env.read(PKG), "12000000");
+        assert!(d.thermal_held());
+        assert_eq!(env.read(power::PLATFORM_PROFILE), "balanced");
+        assert!(crate::gpu::switch_still_wanted(&d, gpu::Mode::Eco));
+        // Leaving Eco+ now: the limits and the thermal mode come back at once, the switch
+        // is told it is no longer wanted, and nothing is left to release.
+        d.choose(Profile::Performance);
+        assert_eq!(env.read(PKG), "90000000");
+        assert_eq!(env.read(power::PLATFORM_PROFILE), "performance");
+        assert!(!d.thermal_held());
+        assert!(!crate::gpu::switch_still_wanted(&d, gpu::Mode::Eco));
+        assert!(!env.0.join(ECO_SAVED.trim_start_matches('/')).exists());
+        d.release_thermal();
+        assert_eq!(env.read(power::PLATFORM_PROFILE), "performance");
+    }
+
+    #[test]
+    fn a_users_own_gpu_switch_is_never_withdrawn() {
+        let env = Env::new("manual");
+        let mut d = hybrid_with_dgpu(&env);
+        d.gpu_switching = Some(gpu::Mode::Eco);
+        d.gpu_switch_auto = false;
+        assert!(crate::gpu::switch_still_wanted(&d, gpu::Mode::Eco));
+        d.gpu_policy = Policy::Fixed(gpu::Mode::Hybrid);
+        assert!(crate::gpu::switch_still_wanted(&d, gpu::Mode::Eco));
+        d.gpu_switch_auto = true;
+        assert!(!crate::gpu::switch_still_wanted(&d, gpu::Mode::Eco));
     }
 
     #[test]
