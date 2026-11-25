@@ -28,7 +28,7 @@ eco-plus there, `quiet` of silent. Default on both sources: balanced. A stored `
 | | Eco+ | Silent | Balanced | Turbo |
 |---|---|---|---|---|
 | Firmware thermal mode | quiet | quiet | balanced | performance |
-| CPU energy preference / bias | balance_performance / 8 | as Balanced | balance_power or balance_performance / 8 or 6 | performance / 0 |
+| CPU energy preference / bias | balance_power on battery, balance_performance on AC / 8 | as Balanced | balance_power or balance_performance / 8 or 6 | performance / 0 |
 | Turbo | on | on | on | on |
 | Package power limit (RAPL) | PL1 12 W over 10 s, PL2 28 W | firmware | firmware | firmware |
 | Efficiency-core maximum clock | 1.2 GHz | firmware | firmware | firmware |
@@ -92,7 +92,7 @@ the first design (package 5/7 W flat, turbo off, uncore 1.6 GHz) made the laptop
 while a build ran. A power limit slows every core alike, so a build on all cores starved the
 foreground of both budget and clock. Eco+ now separates the two:
 
-1. **Latency for the foreground.** Turbo stays, the energy hint is `balance_performance`
+1. **Latency for the foreground.** Turbo stays, the energy hint is `balance_performance` on AC and `balance_power` on battery (see "Eco+ final": the eager hint cost power on battery)
    (a raw number, even 128, measured 1.65x slower: use the kernel's names). Bursts finish at
    full clock and the cores idle again.
 2. **Background work is confined.** The *guard* (`crates/tspmod/src/guard.rs`) moves heavy jobs
@@ -224,16 +224,16 @@ What this says:
 ## Tunables
 
 `/var/lib/tspmo/state` (`profile_ac` and `profile_battery` hold a mode name; edit while `tspmod` is stopped; Eco+ values are read only with
-`eco_version=2`, which `tspmod` writes):
+`eco_version=3`, which `tspmod` writes):
 
 ```
-eco_version=2
+eco_version=3
 eco_pkg_w=12,28          # PL1, PL2 watts, or "off"
 eco_pkg_window_ms=10000  # PL1 averaging window
 eco_psys_w=off
 eco_uncore_mhz=off       # or a clock
 eco_ecap_mhz=1200        # efficiency cores' maximum clock, or "off"
-eco_epp=balance_performance
+eco_epp=balance_power    # battery; on AC Eco+ uses balance_performance like Balanced
 ```
 
 ## Topology
@@ -429,7 +429,44 @@ The cause is the dGPU: each `platform_profile` write makes the EC notify the NVI
 wakes the GPU for about 25 s, longer than the 8-12 s settle. Compare conditions only with a
 settle of 35 s or more, or with the GPU off (Eco): with the GPU off there is no driver to wake.
 
-## Eco+ regression hunt (battery, 2026-11-24, WIP)
+## Eco+ final (battery regression fixed, 2026-11-25)
+
+Report: Eco+ drew 5.7 W package / 18.5 W platform against Balanced's 3.1-3.4 W / 8-10 W on the
+battery. Root cause: Eco+ asked the CPUs for `balance_performance`, Balanced on battery for
+`balance_power`. The eager hint makes every small burst finish 1.8x sooner at a higher clock
+(+1.4 W package, +2 W platform on a 10 Hz burst load, more with real desktop activity) and the race
+to idle does not pay back. Eco+ now uses `balance_power` on battery (and Balanced's
+`balance_performance` on AC, so it is never slower than Balanced there). `eco_version` is 3: an
+older state file's `eco_epp=balance_performance` is not read back.
+
+Ruled out by isolation (each on top of Balanced, interleaved):
+
+| Suspect | Result |
+|---|---|
+| dGPU still powered after `dgpu_disable=1` | refuted: root port 0000:00:01.0 is D3cold with the GPU off (same as a suspended dGPU in Hybrid); switch order unchanged |
+| PL1 12 W / PL2 28 W / 10 s window | no effect |
+| E-core 1.2 GHz cap | no effect (idle and burst) |
+| guard slice, caps | idle desktop: nothing is moved, no effect; under 20 background threads Eco+ as a whole draws a third of Balanced's package power |
+| fan stop | firmware's own quiet curve is at 1 % below 54-62 C and the fans read 0 rpm either way at idle: no difference to measure |
+| platform_profile quiet | Silent equals Balanced (user's measurement), no effect |
+| 60 Hz, dGPU off | 0.5 W platform at the same GPU state; with the dGPU off and 60 Hz together Eco+ is 5 W platform below Balanced at idle |
+| uncore 1.2 GHz | -0.2 W package, within noise of the platform reading: not enabled |
+
+Acceptance, real daemon, GPU Hybrid for Balanced and Eco for Eco+, energy hint pinned to
+`balance_power` for both so the AC run stands for the battery (the charger was plugged in and
+the battery at 19 %, charging cannot be held: RAPL psys / package are compared, not the battery
+column). Screen: Balanced at 240 Hz (user's policy `max`), Eco+ 60 Hz.
+
+| Condition | Balanced pkg / psys W | Eco+ pkg / psys W | p95 vs Balanced |
+|---|---|---|---|
+| idle, 3 rounds, turbostat 30 s | 3.45, 3.48, 3.48 / 13.1, 13.2, 13.4 | 2.91, 2.95 / 8.1, 8.4 | n/a |
+| burst load (`tspmo bench`, 3 rounds) | 4.34 / 17.54 | 4.16 / 13.73 | 0.97x |
+| burst + 20 background threads (2 rounds) | 21.38 / 40.13 | 6.93 / 18.74 | 0.88x |
+| Eco+ as it was (`balance_performance`), burst load | | 5.63 / 19.03 | 0.61x |
+
+Eco+ is below Balanced in every row, with the interactive p95 within the 1.3x bound.
+
+## Eco+ regression hunt (battery, 2026-11-24)
 
 User report: Eco+ 5.7 W package / 18.5 W platform against balanced 3.1-3.4 W / 8-10 W.
 Method: turbostat `PkgWatt`/`SysWatt` over 30 s, battery current x voltage, retried until the
